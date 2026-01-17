@@ -49,3 +49,10 @@ out/
 .env
 .env.local
 .env.production
+
+# Build artifacts
+.gradle/
+build/
+
+# Setup scripts
+setup.sh
