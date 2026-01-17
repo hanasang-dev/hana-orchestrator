@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  hana-orchestrator:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - ENV=production
+    networks:
+      - hana-network
+
+networks:
+  hana-network:
+    driver: bridge
