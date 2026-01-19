@@ -2,10 +2,12 @@ package com.hana.orchestrator.orchestrator
 
 import com.hana.orchestrator.layer.LayerFactory
 import com.hana.orchestrator.layer.CommonLayerInterface
+import com.hana.orchestrator.llm.OllamaLLMClient
 
 class Orchestrator {
     
     private val layers = mutableListOf<CommonLayerInterface>()
+     private val llmClient = OllamaLLMClient() // 임시로 비활성화
     
     init {
         initializeDefaultLayers()
@@ -52,5 +54,29 @@ class Orchestrator {
                 "[${description.name}] Error: ${e.message}"
             }
         }
+    }
+    
+    /**
+     * LLM을 통해 최적의 레이어를 선택하고 실행
+     */
+    suspend fun intelligentExecute(userQuery: String): List<String> {
+        val layerDescriptions = getAllLayerDescriptions()
+        val selectionResult = llmClient.selectOptimalLayers(userQuery, layerDescriptions)
+        
+        val results = mutableListOf<String>()
+        results.add("LLM 선택 결과: ${selectionResult.reasoning}")
+        results.add("실행 계획: ${selectionResult.executionPlan}")
+        results.add("")
+        
+        for (layerName in selectionResult.selectedLayers) {
+            try {
+                val result = executeOnLayer(layerName, "echo", mapOf("message" to userQuery))
+                results.add("[$layerName] 실행 결과: $result")
+            } catch (e: Exception) {
+                results.add("[$layerName] 실행 오류: ${e.message}")
+            }
+        }
+        
+        return results
     }
 }

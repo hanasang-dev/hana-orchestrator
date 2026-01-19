@@ -1,22 +1,22 @@
 package com.hana.orchestrator
 
 import com.hana.orchestrator.orchestrator.Orchestrator
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
-import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import io.ktor.serialization.kotlinx.json.*
 
 @Serializable
-data class EchoRequest(val message: String)
+data class ChatRequest(val message: String)
 
 @Serializable
-data class EchoResponse(val echo: String)
+data class ChatResponse(val response: List<String>)
 
 fun main() {
     val orchestrator = Orchestrator()
@@ -28,16 +28,17 @@ fun main() {
                 isLenient = true
             })
         }
+        
         routing {
             get("/health") {
                 call.respondText("Hana Orchestrator is running")
             }
             
-            post("/echo") {
+            post("/chat") {
                 try {
-                    val request = call.receive<EchoRequest>()
-                    val result = orchestrator.executeOnLayer("echo-layer", "echo", mapOf("message" to request.message))
-                    call.respond(EchoResponse(result))
+                    val request = call.receive<ChatRequest>()
+                    val results = orchestrator.intelligentExecute(request.message)
+                    call.respond(ChatResponse(results))
                 } catch (e: Exception) {
                     call.respond(mapOf("error" to e.message))
                 }
@@ -57,7 +58,7 @@ fun main() {
                     val layerName = call.parameters["layerName"] ?: return@post call.respond(
                         mapOf("error" to "Layer name is required")
                     )
-                    val request = call.receive<EchoRequest>()
+                    val request = call.receive<ChatRequest>()
                     val result = orchestrator.executeOnLayer(layerName, "echo", mapOf("message" to request.message))
                     call.respond(mapOf("result" to result))
                 } catch (e: Exception) {
