@@ -33,10 +33,10 @@ object LayerFactory {
     }
     
     /**
-     * 파일 처리 레이어 생성
+     * Echo 레이어 생성
      */
-    fun createFileProcessorLayer(): FileProcessorLayer {
-        return FileProcessorLayer()
+    fun createEchoLayer(): EchoLayer {
+        return EchoLayer()
     }
     
     /**
@@ -44,7 +44,7 @@ object LayerFactory {
      */
     fun createDefaultLayers(): List<CommonLayerInterface> {
         return listOf(
-            createFileProcessorLayer()
+            createEchoLayer()
         )
     }
 }

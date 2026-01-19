@@ -24,6 +24,9 @@ dependencies {
     implementation("io.ktor:ktor-client-cio-jvm:$ktorVersion")
     implementation("io.ktor:ktor-client-content-negotiation-jvm:$ktorVersion")
     
+    // Ktor Content Negotiation for request/response
+    implementation("io.ktor:ktor-server-status-pages:$ktorVersion")
+    
     // Kotlinx serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
     
