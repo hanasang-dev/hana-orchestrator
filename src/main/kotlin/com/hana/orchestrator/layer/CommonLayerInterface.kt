@@ -33,7 +33,6 @@ interface CommonLayerInterface {
 data class LayerDescription(
     val name: String,                    // 레이어 고유 이름
     val description: String,             // 레이어 목적 설명
-    val layerDepth: Int,                  // 파이프라인 실행 순서 (0→1→2...)
     val functions: List<String>          // 사용 가능한 함수명 목록
 )
 

@@ -114,12 +114,38 @@ val result = remoteLayer.execute("read_file", mapOf("path" to "config.json"))
 ```
 
 ### API 테스트
+
+#### 서버 시작
 ```bash
-# 서버 실행 후
+# 서버 실행 (자동으로 기존 서비스 정리)
+./gradlew run
+
+# 기존 서비스 정리 없이 실행 (개발용)
+./gradlew run --args="--skip-cleanup"
+```
+
+**참고**: 프로그램 시작 시 자동으로 `PortAllocator.cleanupHanaPorts()`를 호출하여 기존 실행 중인 Hana 서비스를 그레이스풀하게 종료합니다. 직접 `kill` 명령어를 사용할 필요가 없습니다.
+
+#### 기본 테스트
+```bash
+# Health check
 curl http://localhost:8080/health
 
-# 응답: "Hana Orchestrator is running"
+# Chat API 테스트
+curl -X POST http://localhost:8080/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"안녕하세요"}'
 ```
+
+#### 서버 종료
+```bash
+# 그레이스풀 셧다운 (서비스 관리 기능 활용)
+curl -X POST http://localhost:8080/shutdown \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "테스트 완료"}'
+```
+
+**중요**: 서버 종료 시 직접 `kill` 명령어를 사용하지 마세요. `/shutdown` API를 통해 그레이스풀하게 종료하면 서비스 레지스트리도 자동으로 정리됩니다.
 
 ### Docker로 실행
 ```bash

@@ -9,7 +9,6 @@ class EchoLayer : CommonLayerInterface {
         return LayerDescription(
             name = "echo-layer",
             description = "사용자 입력을 그대로 반환하는 echo 기능",
-            layerDepth = 0,
             functions = listOf("echo", "repeat")
         )
     }
@@ -17,12 +16,14 @@ class EchoLayer : CommonLayerInterface {
     override suspend fun execute(function: String, args: Map<String, Any>): String {
         return when (function) {
             "echo" -> {
-                val message = args["message"] as? String ?: ""
+                // "message" 또는 "query" 둘 다 지원
+                val message = (args["message"] as? String) ?: (args["query"] as? String) ?: ""
                 "Echo: $message"
             }
             "repeat" -> {
-                val message = args["message"] as? String ?: ""
-                val times = (args["times"] as? String)?.toIntOrNull() ?: 1
+                // "message" 또는 "query" 둘 다 지원
+                val message = (args["message"] as? String) ?: (args["query"] as? String) ?: ""
+                val times = (args["times"] as? String)?.toIntOrNull() ?: (args["times"] as? Int) ?: 1
                 val repeated = message.repeat(times)
                 "Repeated: $repeated"
             }
