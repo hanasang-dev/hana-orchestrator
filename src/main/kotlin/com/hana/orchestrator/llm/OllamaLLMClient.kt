@@ -8,7 +8,6 @@ import ai.koog.prompt.llm.LLModel
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionNode
 import com.hana.orchestrator.data.model.response.ExecutionTreeResponse
-import com.hana.orchestrator.data.model.response.LayerSelectionResponse
 import com.hana.orchestrator.data.mapper.ExecutionTreeMapper
 import io.ktor.client.*
 import kotlinx.serialization.json.Json
@@ -153,30 +152,6 @@ class OllamaLLMClient(
         }
     }
     
-    /**
-     * 레거시 호환성을 위한 메서드 (deprecated)
-     */
-    @Deprecated("Use createExecutionTree instead")
-    suspend fun selectOptimalLayers(
-        userQuery: String,
-        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
-    ): LayerSelectionResponse {
-        val tree = createExecutionTree(userQuery, layerDescriptions)
-        val selectedLayers = collectLayerNames(tree.rootNode)
-        return LayerSelectionResponse(
-            selectedLayers = selectedLayers,
-            reasoning = "트리 구조에서 추출",
-            executionPlan = "트리 구조대로 실행"
-        )
-    }
-    
-    private fun collectLayerNames(node: ExecutionNode): List<String> {
-        val result = mutableListOf(node.layerName)
-        node.children.forEach { child ->
-            result.addAll(collectLayerNames(child))
-        }
-        return result.distinct()
-    }
     
     /**
      * LLM 응답에서 JSON 부분만 추출

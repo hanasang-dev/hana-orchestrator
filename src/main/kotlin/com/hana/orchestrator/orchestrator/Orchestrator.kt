@@ -55,22 +55,6 @@ class Orchestrator : CommonLayerInterface {
         return targetLayer.execute(function, args)
     }
     
-    suspend fun executeOnAllLayers(function: String, args: Map<String, Any> = emptyMap()): List<String> {
-        val layerDescriptions = layers.map { it.describe() }
-        val sortedLayers = layerDescriptions.map { description ->
-            val layer = layers.find { it.describe().name == description.name }!!
-            description to layer
-        }
-        
-        return sortedLayers.map { (description, layer) ->
-            try {
-                val result = layer.execute(function, args)
-                "[${description.name}] $result"
-            } catch (e: Exception) {
-                "[${description.name}] Error: ${e.message}"
-            }
-        }
-    }
     
     override suspend fun describe(): com.hana.orchestrator.layer.LayerDescription {
         val allDescriptions = getAllLayerDescriptions()
