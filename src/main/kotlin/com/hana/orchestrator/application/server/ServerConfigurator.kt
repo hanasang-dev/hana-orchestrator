@@ -25,8 +25,7 @@ class ServerConfigurator(
     private val orchestrator: Orchestrator,
     private val serviceInfo: ServiceInfo,
     private val lifecycleManager: ApplicationLifecycleManager,
-    private val applicationScope: CoroutineScope,
-    private val shutdownCallback: suspend () -> Unit
+    private val applicationScope: CoroutineScope
 ) {
     
     fun createServer(): EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration> {
@@ -35,13 +34,16 @@ class ServerConfigurator(
                 json(Json {
                     ignoreUnknownKeys = true
                     isLenient = true
+                    encodeDefaults = false
+                    prettyPrint = false
+                    // 한글 등 비ASCII 문자를 그대로 출력하도록 설정
                 })
             }
             
             routing {
                 // 컨트롤러들 설정
                 HealthController(lifecycleManager).configureRoutes(this)
-                ServiceController(serviceInfo, lifecycleManager, applicationScope, shutdownCallback, orchestrator).configureRoutes(this)
+                ServiceController(serviceInfo, lifecycleManager).configureRoutes(this)
                 ChatController(orchestrator, lifecycleManager).configureRoutes(this)
                 LayerController(orchestrator, lifecycleManager).configureRoutes(this)
             }

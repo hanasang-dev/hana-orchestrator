@@ -31,12 +31,16 @@ class Orchestrator : CommonLayerInterface {
     
     fun registerLayer(layer: CommonLayerInterface) {
         layers.add(layer)
+        // 레이어 등록 시 캐시 무효화
+        cachedDescriptions.clear()
     }
     
     private val cachedDescriptions = mutableSetOf<com.hana.orchestrator.layer.LayerDescription>()
     
     suspend fun getAllLayerDescriptions(): List<com.hana.orchestrator.layer.LayerDescription> {
-        if (cachedDescriptions.isEmpty()) {
+        // 캐시가 비어있거나 레이어 수가 변경되었으면 갱신
+        if (cachedDescriptions.isEmpty() || cachedDescriptions.size != layers.size) {
+            cachedDescriptions.clear()
             cachedDescriptions.addAll(layers.map { it.describe() })
         }
         return cachedDescriptions.toList()

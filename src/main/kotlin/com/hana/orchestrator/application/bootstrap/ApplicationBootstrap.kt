@@ -59,18 +59,7 @@ class ApplicationBootstrap {
         val heartbeatJob = lifecycleManager.startHeartbeat(applicationScope, serviceInfo.id)
         
         // 서버 생성 및 시작
-        lateinit var server: EmbeddedServer<*, *>
-        val shutdownCallback: suspend () -> Unit = {
-            lifecycleManager.gracefulShutdownAsync(
-                server = server,
-                serviceId = serviceInfo.id,
-                heartbeatJob = heartbeatJob,
-                applicationScope = applicationScope,
-                orchestrator = orchestrator
-            )
-        }
-        
-        server = createAndStartServer(port, orchestrator, serviceInfo, applicationScope, shutdownCallback)
+        val server = createAndStartServer(port, orchestrator, serviceInfo, applicationScope)
         
         // Shutdown hook 설정
         lifecycleManager.setupShutdownHooks(server, serviceInfo.id, heartbeatJob, applicationScope, orchestrator)
@@ -86,16 +75,14 @@ class ApplicationBootstrap {
         port: Int,
         orchestrator: Orchestrator,
         serviceInfo: com.hana.orchestrator.service.ServiceInfo,
-        applicationScope: CoroutineScope,
-        shutdownCallback: suspend () -> Unit
+        applicationScope: CoroutineScope
     ): EmbeddedServer<*, *> {
         val serverConfigurator = ServerConfigurator(
             port = port,
             orchestrator = orchestrator,
             serviceInfo = serviceInfo,
             lifecycleManager = lifecycleManager,
-            applicationScope = applicationScope,
-            shutdownCallback = shutdownCallback
+            applicationScope = applicationScope
         )
         
         val server = serverConfigurator.createServer()

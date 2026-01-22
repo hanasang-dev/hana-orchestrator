@@ -45,6 +45,9 @@ class ApplicationLifecycleManager {
     /**
      * Graceful shutdown 실행 (suspend 버전)
      */
+    @Volatile
+    private var isShuttingDown = false
+    
     suspend fun gracefulShutdownAsync(
         server: EmbeddedServer<*, *>,
         serviceId: String,
@@ -52,20 +55,31 @@ class ApplicationLifecycleManager {
         applicationScope: CoroutineScope,
         orchestrator: Orchestrator
     ) {
-        if (shutdownRequested) return
+        // 이미 shutdown이 진행 중이면 중복 실행 방지
+        if (isShuttingDown) {
+            println("⚠️  Shutdown already in progress, skipping...")
+            return
+        }
         
+        isShuttingDown = true
         shutdownRequested = true
         println("\n🛑 Starting graceful shutdown...")
         
         try {
+            // 1. Heartbeat 중지
             heartbeatJob.cancel()
             println("✅ Heartbeat stopped")
             
-            // Application scope 취소
-            applicationScope.cancel()
-            println("✅ Application scope cancelled")
+            // 2. 서버 중지 (먼저 실행하여 새로운 요청 차단)
+            try {
+                server.stop(1000, 5000)
+                println("✅ Server stopped")
+            } catch (e: Exception) {
+                println("⚠️  Server stop error: ${e.message}")
+                // 에러가 발생해도 계속 진행
+            }
             
-            // Orchestrator 리소스 정리
+            // 3. Orchestrator 리소스 정리
             try {
                 orchestrator.close()
                 println("✅ Orchestrator closed")
@@ -73,19 +87,35 @@ class ApplicationLifecycleManager {
                 println("⚠️  Orchestrator close error: ${e.message}")
             }
             
-            server.stop(1000, 5000)
-            println("✅ Server stopped")
+            // 4. Service 등록 해제
+            try {
+                ServiceRegistry.unregisterService(serviceId)
+                println("✅ Service unregistered")
+            } catch (e: Exception) {
+                println("⚠️  Service unregister error: ${e.message}")
+            }
             
-            ServiceRegistry.unregisterService(serviceId)
-            println("✅ Service unregistered")
+            // 5. Service Discovery 종료
+            try {
+                ServiceDiscovery.closeAsync()
+                println("✅ Service discovery closed")
+            } catch (e: Exception) {
+                println("⚠️  Service discovery close error: ${e.message}")
+            }
             
-            ServiceDiscovery.closeAsync()
-            println("✅ Service discovery closed")
+            // 6. Application scope 취소 (마지막에 실행)
+            try {
+                applicationScope.cancel()
+                println("✅ Application scope cancelled")
+            } catch (e: Exception) {
+                println("⚠️  Application scope cancel error: ${e.message}")
+            }
 
             println("🎉 Graceful shutdown completed")
             
         } catch (e: Exception) {
             println("⚠️  Shutdown error: ${e.message}")
+            e.printStackTrace()
         }
     }
     
@@ -119,7 +149,10 @@ class ApplicationLifecycleManager {
         orchestrator: Orchestrator
     ) {
         Runtime.getRuntime().addShutdownHook(Thread {
-            gracefulShutdown(server, serviceId, heartbeatJob, applicationScope, orchestrator)
+            // shutdown hook은 이미 진행 중이면 실행하지 않음
+            if (!isShuttingDown) {
+                gracefulShutdown(server, serviceId, heartbeatJob, applicationScope, orchestrator)
+            }
         })
     }
 }

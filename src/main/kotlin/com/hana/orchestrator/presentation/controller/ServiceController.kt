@@ -7,7 +7,6 @@ import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.coroutines.*
 
 /**
  * Service 관련 엔드포인트 컨트롤러
@@ -15,10 +14,7 @@ import kotlinx.coroutines.*
  */
 class ServiceController(
     private val serviceInfo: ServiceInfo,
-    private val lifecycleManager: ApplicationLifecycleManager,
-    private val applicationScope: CoroutineScope,
-    private val shutdownCallback: suspend () -> Unit,
-    private val orchestrator: com.hana.orchestrator.orchestrator.Orchestrator
+    private val lifecycleManager: ApplicationLifecycleManager
 ) {
     
     fun configureRoutes(route: Route) {
@@ -49,10 +45,8 @@ class ServiceController(
                 println("🛑 Shutdown requested via API: $reason")
                 lifecycleManager.requestShutdown()
                 
-                applicationScope.launch {
-                    delay(1000)
-                    shutdownCallback()
-                }
+                // runServer의 루프가 종료되면 자동으로 gracefulShutdownAsync가 호출됨
+                // 여기서는 shutdown 요청만 하고 응답을 반환
                 
                 call.respond(mapOf(
                     "message" to "Shutdown initiated",
