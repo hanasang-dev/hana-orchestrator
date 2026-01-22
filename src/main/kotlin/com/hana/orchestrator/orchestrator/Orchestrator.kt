@@ -3,87 +3,15 @@ package com.hana.orchestrator.orchestrator
 import com.hana.orchestrator.layer.LayerFactory
 import com.hana.orchestrator.layer.CommonLayerInterface
 import com.hana.orchestrator.llm.OllamaLLMClient
+import com.hana.orchestrator.domain.entity.ExecutionTree
+import com.hana.orchestrator.domain.entity.ExecutionNode
+import com.hana.orchestrator.domain.entity.NodeExecutionResult
+import com.hana.orchestrator.domain.entity.NodeStatus
+import com.hana.orchestrator.domain.entity.ExecutionContext
+import com.hana.orchestrator.domain.entity.ExecutionResult
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-
-data class ExecutionTree(
-    val rootNode: ExecutionNode,
-    val name: String = "execution_plan"
-)
-
-data class ExecutionNode(
-    val layerName: String,
-    val function: String,
-    val args: Map<String, Any>,
-    val children: List<ExecutionNode> = emptyList(),
-    val parallel: Boolean = false,
-    val id: String  // 트리에서 고유 식별자 (트리 생성 시점에 부여)
-)
-
-/**
- * 노드 실행 결과 추적
- */
-data class NodeExecutionResult(
-    val nodeId: String,
-    val node: ExecutionNode,
-    val status: NodeStatus,
-    val result: String? = null,
-    val error: String? = null,
-    val timestamp: Long = System.currentTimeMillis(),
-    val retryCount: Int = 0,
-    val depth: Int = 0,
-    val parentNodeId: String? = null
-)
-
-enum class NodeStatus {
-    PENDING,      // 대기 중
-    RUNNING,      // 실행 중
-    SUCCESS,      // 성공
-    FAILED,       // 실패
-    RETRYING,     // 재시도 중
-    SKIPPED       // 건너뜀 (의존성 실패로)
-}
-
-/**
- * 실행 컨텍스트 - 전체 실행 상태 추적
- */
-class ExecutionContext {
-    val nodeResults = mutableMapOf<String, NodeExecutionResult>()
-    
-    // 완료된 노드 (성공)
-    val completedNodes: List<NodeExecutionResult>
-        get() = nodeResults.values.filter { it.status == NodeStatus.SUCCESS }
-    
-    // 실패한 노드
-    val failedNodes: List<NodeExecutionResult>
-        get() = nodeResults.values.filter { it.status == NodeStatus.FAILED }
-    
-    // 실행 중인 노드
-    val runningNodes: List<NodeExecutionResult>
-        get() = nodeResults.values.filter { it.status == NodeStatus.RUNNING }
-    
-    // 노드 결과 기록
-    fun recordResult(result: NodeExecutionResult) {
-        nodeResults[result.nodeId] = result
-    }
-    
-    // 특정 노드의 결과 조회
-    fun getResult(nodeId: String): NodeExecutionResult? = nodeResults[nodeId]
-    
-    // 노드의 의존성 체크 (부모 노드가 성공했는지)
-    fun canExecute(parentNodeId: String?): Boolean {
-        if (parentNodeId == null) return true
-        val parentResult = nodeResults[parentNodeId]
-        return parentResult?.status == NodeStatus.SUCCESS
-    }
-    
-    // 실패한 노드의 재시도 시작점 찾기
-    fun findRetryStartPoint(failedNodeId: String): String? {
-        val failedNode = nodeResults[failedNodeId] ?: return null
-        return failedNode.parentNodeId
-    }
-}
 
 
 
@@ -154,13 +82,31 @@ class Orchestrator : CommonLayerInterface {
     }
     
     override suspend fun execute(function: String, args: Map<String, Any>): String {
+        // 레거시 호환성을 위해 String 반환 유지
+        val query = args["query"] as? String
+        if (query != null) {
+            val result = executeOrchestration(query)
+            return result.result
+        }
+        
+        // query가 없으면 자식 레이어의 함수명으로 위임
+        val allDescriptions = getAllLayerDescriptions()
+        val targetLayer = layers.find { it.describe().name == function }
+        return if (targetLayer != null) {
+            executeOnLayer(function, "process", args)
+        } else {
+            val allFunctions = allDescriptions.flatMap { it.functions }
+            "Unknown function: $function. Available: ${allFunctions.joinToString(", ")}"
+        }
+    }
+    
+    /**
+     * 오케스트레이션 실행 (도메인 모델 반환)
+     */
+    suspend fun executeOrchestration(query: String): ExecutionResult {
         val allDescriptions = getAllLayerDescriptions()
         
-        // Orchestrator는 사용자 요청(query)을 받아 LLM으로 트리 생성 후 실행
-        // function 파라미터는 자식 레이어의 함수명으로 위임할 때 사용
-        val query = args["query"] as? String
-        
-        return if (query != null) {
+        return if (query.isNotEmpty()) {
             // 사용자 요청이 있으면 LLM으로 트리 생성 후 검증 및 실행
             println("🔍 [Orchestrator] 사용자 쿼리 수신: $query")
             val rawTree = llmClient.createExecutionTree(query, allDescriptions)
@@ -193,21 +139,15 @@ class Orchestrator : CommonLayerInterface {
             println("✅ [Orchestrator] 트리 실행 완료")
             result
         } else {
-            // query가 없으면 자식 레이어의 함수명으로 위임
-            val targetLayer = layers.find { it.describe().name == function }
-            if (targetLayer != null) {
-                executeOnLayer(function, "process", args)
-            } else {
-                val allFunctions = allDescriptions.flatMap { it.functions }
-                "Unknown function: $function. Available: ${allFunctions.joinToString(", ")}"
-            }
+            // 빈 쿼리인 경우 기본 결과 반환
+            ExecutionResult(result = "Empty query")
         }
     }
     
     /**
      * ExecutionTree를 재귀적으로 실행
      */
-    private suspend fun executeTree(tree: ExecutionTree): String {
+    private suspend fun executeTree(tree: ExecutionTree): ExecutionResult {
         val context = ExecutionContext()
         println("🌳 [executeTree] 실행 트리 시작: ${tree.name}")
         
@@ -234,7 +174,11 @@ class Orchestrator : CommonLayerInterface {
         println("📊 전체 노드 수: ${context.nodeResults.size}개")
         println("==========================================\n")
         
-        return result.result ?: result.error ?: "Unknown error"
+        return ExecutionResult(
+            result = result.result ?: result.error ?: "Unknown error",
+            executionTree = tree,
+            context = context
+        )
     }
     
     /**

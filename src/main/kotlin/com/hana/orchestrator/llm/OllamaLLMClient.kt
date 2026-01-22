@@ -5,10 +5,12 @@ import ai.koog.prompt.executor.llms.all.simpleOllamaAIExecutor
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
-import com.hana.orchestrator.orchestrator.ExecutionTree
-import com.hana.orchestrator.orchestrator.ExecutionNode
+import com.hana.orchestrator.domain.entity.ExecutionTree
+import com.hana.orchestrator.domain.entity.ExecutionNode
+import com.hana.orchestrator.data.model.response.ExecutionTreeResponse
+import com.hana.orchestrator.data.model.response.LayerSelectionResponse
+import com.hana.orchestrator.data.mapper.ExecutionTreeMapper
 import io.ktor.client.*
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
@@ -114,7 +116,7 @@ class OllamaLLMClient(
             
             try {
                 val treeResponse = jsonConfig.decodeFromString<ExecutionTreeResponse>(jsonText)
-                return treeResponse.toExecutionTree()
+                return ExecutionTreeMapper.toExecutionTree(treeResponse)
             } catch (parseError: Exception) {
                 // JSON 파싱 실패 시 재시도 (응답에서 JSON 부분만 추출)
                 println("⚠️ JSON 파싱 실패, 재시도 중... 원본 응답: ${response.take(200)}")
@@ -158,10 +160,10 @@ class OllamaLLMClient(
     suspend fun selectOptimalLayers(
         userQuery: String,
         layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
-    ): LayerSelectionResult {
+    ): LayerSelectionResponse {
         val tree = createExecutionTree(userQuery, layerDescriptions)
         val selectedLayers = collectLayerNames(tree.rootNode)
-        return LayerSelectionResult(
+        return LayerSelectionResponse(
             selectedLayers = selectedLayers,
             reasoning = "트리 구조에서 추출",
             executionPlan = "트리 구조대로 실행"
@@ -202,60 +204,3 @@ class OllamaLLMClient(
         httpClient.close()
     }
 }
-
-@Serializable
-data class ExecutionTreeResponse(
-    val rootNode: ExecutionNodeResponse
-) {
-    fun toExecutionTree(): ExecutionTree {
-        return ExecutionTree(
-            rootNode = rootNode.toExecutionNode(parentPath = "")
-        )
-    }
-}
-
-@Serializable
-data class ExecutionNodeResponse(
-    val layerName: String,
-    val function: String,
-    val args: Map<String, String> = emptyMap(),
-    val children: List<ExecutionNodeResponse> = emptyList(),
-    val parallel: Boolean = false
-) {
-    fun toExecutionNode(parentPath: String = ""): ExecutionNode {
-        val currentPath = if (parentPath.isEmpty()) layerName else "$parentPath/$layerName"
-        val nodeId = "node_${currentPath.replace("/", "_")}_${function}"
-        
-        return ExecutionNode(
-            layerName = layerName,
-            function = function,
-            args = args.mapValues { it.value as Any },
-            children = children.mapIndexed { index, child -> 
-                child.toExecutionNode("$currentPath[$index]")
-            },
-            parallel = parallel,
-            id = nodeId
-        )
-    }
-}
-
-@Serializable
-data class LayerSelectionResponse(
-    val selectedLayers: List<String>,
-    val reasoning: String,
-    val executionPlan: String
-) {
-    fun toResult(): LayerSelectionResult {
-        return LayerSelectionResult(
-            selectedLayers = selectedLayers,
-            reasoning = reasoning,
-            executionPlan = executionPlan
-        )
-    }
-}
-
-data class LayerSelectionResult(
-    val selectedLayers: List<String>,
-    val reasoning: String,
-    val executionPlan: String
-)

@@ -1,6 +1,8 @@
 package com.hana.orchestrator.orchestrator
 
 import com.hana.orchestrator.layer.LayerDescription
+import com.hana.orchestrator.domain.entity.ExecutionTree
+import com.hana.orchestrator.domain.entity.ExecutionNode
 
 /**
  * ExecutionTree의 유효성을 검증하고 자동으로 수정하는 클래스

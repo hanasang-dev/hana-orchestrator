@@ -13,24 +13,13 @@ import io.ktor.server.netty.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import com.hana.orchestrator.presentation.model.chat.ChatRequest
+import com.hana.orchestrator.presentation.model.chat.ChatResponse
+import com.hana.orchestrator.presentation.model.service.ServiceStatusResponse
+import com.hana.orchestrator.presentation.mapper.ChatRequestMapper
+import com.hana.orchestrator.presentation.mapper.ExecutionResultMapper
 import kotlinx.coroutines.*
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-
-@Serializable
-data class ChatRequest(val message: String)
-
-@Serializable
-data class ChatResponse(val response: List<String>)
-
-@Serializable
-data class ServiceStatusResponse(
-    val id: String,
-    val name: String,
-    val port: Int,
-    val uptime: Long,
-    val status: String
-)
 
 var shutdownRequested = false
 lateinit var currentServiceInfo: com.hana.orchestrator.service.ServiceInfo
@@ -165,9 +154,15 @@ private suspend fun startApplication(cliPort: Int?) {
                     }
                     
                     val request = call.receive<ChatRequest>()
-                    // Orchestrator.execute()는 query가 있으면 자동으로 LLM 호출하여 트리 생성 후 실행
-                    val results = listOf(orchestrator.execute("", mapOf("query" to request.message)))
-                    call.respond(ChatResponse(results))
+                    // Presentation → Domain 변환
+                    val chatDto = ChatRequestMapper.toDto(request)
+                    
+                    // Orchestrator 실행 (도메인 모델 반환)
+                    val executionResult = orchestrator.executeOrchestration(chatDto.message)
+                    
+                    // Domain → Presentation 변환
+                    val response = ExecutionResultMapper.toChatResponse(executionResult)
+                    call.respond(response)
                 } catch (e: Exception) {
                     call.respond(mapOf("error" to e.message))
                 }
