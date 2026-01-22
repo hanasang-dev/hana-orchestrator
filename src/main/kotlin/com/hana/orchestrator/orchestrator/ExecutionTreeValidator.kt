@@ -169,7 +169,8 @@ class ExecutionTreeValidator(
             function = node.function,
             args = fixedArgs,
             children = fixedChildren,
-            parallel = node.parallel
+            parallel = node.parallel,
+            id = node.id
         )
     }
     
@@ -207,7 +208,8 @@ class ExecutionTreeValidator(
                     function = firstLayer.functions.firstOrNull() ?: "execute",
                     args = mapOf("query" to userQuery),
                     children = emptyList(),
-                    parallel = false
+                    parallel = false,
+                    id = "validator_fallback_${firstLayer.name}"
                 )
             )
         } else {
@@ -217,7 +219,8 @@ class ExecutionTreeValidator(
                     function = "execute",
                     args = mapOf("query" to userQuery),
                     children = emptyList(),
-                    parallel = false
+                    parallel = false,
+                    id = "validator_fallback_unknown"
                 )
             )
         }

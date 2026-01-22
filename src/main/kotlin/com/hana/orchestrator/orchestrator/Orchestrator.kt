@@ -17,8 +17,73 @@ data class ExecutionNode(
     val function: String,
     val args: Map<String, Any>,
     val children: List<ExecutionNode> = emptyList(),
-    val parallel: Boolean = false
+    val parallel: Boolean = false,
+    val id: String  // 트리에서 고유 식별자 (트리 생성 시점에 부여)
 )
+
+/**
+ * 노드 실행 결과 추적
+ */
+data class NodeExecutionResult(
+    val nodeId: String,
+    val node: ExecutionNode,
+    val status: NodeStatus,
+    val result: String? = null,
+    val error: String? = null,
+    val timestamp: Long = System.currentTimeMillis(),
+    val retryCount: Int = 0,
+    val depth: Int = 0,
+    val parentNodeId: String? = null
+)
+
+enum class NodeStatus {
+    PENDING,      // 대기 중
+    RUNNING,      // 실행 중
+    SUCCESS,      // 성공
+    FAILED,       // 실패
+    RETRYING,     // 재시도 중
+    SKIPPED       // 건너뜀 (의존성 실패로)
+}
+
+/**
+ * 실행 컨텍스트 - 전체 실행 상태 추적
+ */
+class ExecutionContext {
+    val nodeResults = mutableMapOf<String, NodeExecutionResult>()
+    
+    // 완료된 노드 (성공)
+    val completedNodes: List<NodeExecutionResult>
+        get() = nodeResults.values.filter { it.status == NodeStatus.SUCCESS }
+    
+    // 실패한 노드
+    val failedNodes: List<NodeExecutionResult>
+        get() = nodeResults.values.filter { it.status == NodeStatus.FAILED }
+    
+    // 실행 중인 노드
+    val runningNodes: List<NodeExecutionResult>
+        get() = nodeResults.values.filter { it.status == NodeStatus.RUNNING }
+    
+    // 노드 결과 기록
+    fun recordResult(result: NodeExecutionResult) {
+        nodeResults[result.nodeId] = result
+    }
+    
+    // 특정 노드의 결과 조회
+    fun getResult(nodeId: String): NodeExecutionResult? = nodeResults[nodeId]
+    
+    // 노드의 의존성 체크 (부모 노드가 성공했는지)
+    fun canExecute(parentNodeId: String?): Boolean {
+        if (parentNodeId == null) return true
+        val parentResult = nodeResults[parentNodeId]
+        return parentResult?.status == NodeStatus.SUCCESS
+    }
+    
+    // 실패한 노드의 재시도 시작점 찾기
+    fun findRetryStartPoint(failedNodeId: String): String? {
+        val failedNode = nodeResults[failedNodeId] ?: return null
+        return failedNode.parentNodeId
+    }
+}
 
 
 
@@ -143,37 +208,131 @@ class Orchestrator : CommonLayerInterface {
      * ExecutionTree를 재귀적으로 실행
      */
     private suspend fun executeTree(tree: ExecutionTree): String {
-        return executeNode(tree.rootNode)
+        val context = ExecutionContext()
+        println("🌳 [executeTree] 실행 트리 시작: ${tree.name}")
+        
+        val result = executeNode(tree.rootNode, context, parentNodeId = null, depth = 0)
+        
+        // 실행 완료 후 전체 상태 로그 출력
+        println("\n📊 [executeTree] ========== 실행 결과 요약 ==========")
+        println("✅ 성공한 노드: ${context.completedNodes.size}개")
+        context.completedNodes.forEach { nodeResult ->
+            println("   - ${nodeResult.nodeId}: ${nodeResult.node.layerName}.${nodeResult.node.function} (depth=${nodeResult.depth})")
+        }
+        
+        println("❌ 실패한 노드: ${context.failedNodes.size}개")
+        context.failedNodes.forEach { nodeResult ->
+            println("   - ${nodeResult.nodeId}: ${nodeResult.node.layerName}.${nodeResult.node.function} (depth=${nodeResult.depth})")
+            println("     에러: ${nodeResult.error}")
+        }
+        
+        println("⏭️ 건너뛴 노드: ${context.nodeResults.values.filter { it.status == NodeStatus.SKIPPED }.size}개")
+        context.nodeResults.values.filter { it.status == NodeStatus.SKIPPED }.forEach { nodeResult ->
+            println("   - ${nodeResult.nodeId}: ${nodeResult.node.layerName}.${nodeResult.node.function} (부모 실패로 인해 건너뜀)")
+        }
+        
+        println("📊 전체 노드 수: ${context.nodeResults.size}개")
+        println("==========================================\n")
+        
+        return result.result ?: result.error ?: "Unknown error"
     }
     
     /**
-     * ExecutionNode를 재귀적으로 실행
+     * ExecutionNode를 재귀적으로 실행 (상태 추적 포함)
      */
-    private suspend fun executeNode(node: ExecutionNode, depth: Int = 0): String {
+    private suspend fun executeNode(
+        node: ExecutionNode,
+        context: ExecutionContext,
+        parentNodeId: String? = null,
+        depth: Int = 0
+    ): NodeExecutionResult {
         val indent = "  ".repeat(depth)
-        println("${indent}🎯 [executeNode] 실행: ${node.layerName}.${node.function} (children=${node.children.size}, parallel=${node.parallel})")
+        val nodeId = node.id
+        
+        // 의존성 체크
+        if (!context.canExecute(parentNodeId)) {
+            val skippedResult = NodeExecutionResult(
+                nodeId = nodeId,
+                node = node,
+                status = NodeStatus.SKIPPED,
+                error = "Parent node failed",
+                depth = depth,
+                parentNodeId = parentNodeId
+            )
+            context.recordResult(skippedResult)
+            println("${indent}⏭️ [executeNode] 건너뜀: ${node.layerName}.${node.function} (부모 실패)")
+            return skippedResult
+        }
+        
+        // 실행 시작
+        val runningResult = NodeExecutionResult(
+            nodeId = nodeId,
+            node = node,
+            status = NodeStatus.RUNNING,
+            depth = depth,
+            parentNodeId = parentNodeId
+        )
+        context.recordResult(runningResult)
+        println("${indent}🎯 [executeNode] 실행 시작: ${node.layerName}.${node.function} (id=$nodeId, depth=$depth, parent=$parentNodeId, children=${node.children.size}, parallel=${node.parallel})")
         
         val layer = layers.find { it.describe().name == node.layerName }
         
         if (layer == null) {
+            val failedResult = NodeExecutionResult(
+                nodeId = nodeId,
+                node = node,
+                status = NodeStatus.FAILED,
+                error = "Layer '${node.layerName}' not found",
+                depth = depth,
+                parentNodeId = parentNodeId
+            )
+            context.recordResult(failedResult)
             println("${indent}❌ [executeNode] 레이어를 찾을 수 없음: ${node.layerName}")
-            return "Layer '${node.layerName}' not found"
+            return failedResult
         }
         
         // 현재 노드 실행
-        val result = try {
+        val executionResult = try {
             println("${indent}▶️ [executeNode] ${node.layerName}.${node.function} 실행 중...")
             val execResult = layer.execute(node.function, node.args)
             println("${indent}✅ [executeNode] ${node.layerName}.${node.function} 완료: ${execResult.take(50)}...")
-            execResult
+            
+            NodeExecutionResult(
+                nodeId = nodeId,
+                node = node,
+                status = NodeStatus.SUCCESS,
+                result = execResult,
+                depth = depth,
+                parentNodeId = parentNodeId
+            )
         } catch (e: Exception) {
             println("${indent}❌ [executeNode] ${node.layerName}.${node.function} 에러: ${e.message}")
-            "Error executing ${node.layerName}.${node.function}: ${e.message}"
+            
+            NodeExecutionResult(
+                nodeId = nodeId,
+                node = node,
+                status = NodeStatus.FAILED,
+                error = "Error executing ${node.layerName}.${node.function}: ${e.message}",
+                depth = depth,
+                parentNodeId = parentNodeId
+            )
+        }
+        
+        context.recordResult(executionResult)
+        
+        // 실패 시 여기서 재시도 로직 추가 가능 (나중에)
+        if (executionResult.status == NodeStatus.FAILED) {
+            println("${indent}⚠️ [executeNode] 노드 실패: ${node.layerName}.${node.function} (id=$nodeId, depth=$depth)")
+            println("${indent}   재시도 시작점: ${context.findRetryStartPoint(nodeId)}")
+            // 재시도 로직은 다음 단계에서 추가
+        } else if (executionResult.status == NodeStatus.SUCCESS) {
+            println("${indent}✅ [executeNode] 노드 성공: ${node.layerName}.${node.function} (id=$nodeId)")
+            println("${indent}   결과 미리보기: ${executionResult.result?.take(100) ?: "null"}")
         }
         
         // 자식 노드 실행
         if (node.children.isEmpty()) {
-            return result
+            return executionResult
         }
         
         println("${indent}📦 [executeNode] 자식 노드 ${node.children.size}개 실행 (parallel=${node.parallel})")
@@ -182,20 +341,33 @@ class Orchestrator : CommonLayerInterface {
             coroutineScope {
                 node.children.map { child ->
                     async {
-                        executeNode(child, depth + 1)
+                        executeNode(child, context, nodeId, depth + 1)
                     }
                 }.awaitAll()
             }
         } else {
             // 순차 실행
-            node.children.map { executeNode(it, depth + 1) }
+            node.children.map { executeNode(it, context, nodeId, depth + 1) }
         }
         
-        // 결과 결합
-        val finalResult = (listOf(result) + childResults)
+        // 자식 노드 실패 체크
+        val failedChildren = childResults.filter { it.status == NodeStatus.FAILED }
+        if (failedChildren.isNotEmpty() && executionResult.status == NodeStatus.SUCCESS) {
+            // 부모는 성공했지만 자식이 실패한 경우
+            println("${indent}⚠️ [executeNode] 자식 노드 실패: ${failedChildren.size}개")
+        }
+        
+        // 결과 결합 (성공한 자식들의 결과만)
+        val successfulResults = childResults.filter { it.status == NodeStatus.SUCCESS }
+        val finalResultText = (listOfNotNull(executionResult.result) + successfulResults.mapNotNull { it.result })
             .filter { it.isNotEmpty() }
             .joinToString("\n")
-        println("${indent}🏁 [executeNode] ${node.layerName} 최종 결과: ${finalResult.take(50)}...")
+        
+        println("${indent}🏁 [executeNode] ${node.layerName} 최종 결과: ${finalResultText.take(50)}...")
+        
+        // 최종 결과 업데이트 (자식 결과 포함)
+        val finalResult = executionResult.copy(result = finalResultText)
+        context.recordResult(finalResult)
         return finalResult
     }
     

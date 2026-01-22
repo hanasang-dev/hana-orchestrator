@@ -132,7 +132,8 @@ class OllamaLLMClient(
                         function = firstLayer.functions.firstOrNull() ?: "execute",
                         args = mapOf("query" to userQuery),
                         children = emptyList(),
-                        parallel = false
+                        parallel = false,
+                        id = "fallback_root"
                     )
                 )
             } else {
@@ -142,7 +143,8 @@ class OllamaLLMClient(
                         function = "execute",
                         args = mapOf("query" to userQuery),
                         children = emptyList(),
-                        parallel = false
+                        parallel = false,
+                        id = "fallback_unknown"
                     )
                 )
             }
@@ -207,7 +209,7 @@ data class ExecutionTreeResponse(
 ) {
     fun toExecutionTree(): ExecutionTree {
         return ExecutionTree(
-            rootNode = rootNode.toExecutionNode()
+            rootNode = rootNode.toExecutionNode(parentPath = "")
         )
     }
 }
@@ -220,13 +222,19 @@ data class ExecutionNodeResponse(
     val children: List<ExecutionNodeResponse> = emptyList(),
     val parallel: Boolean = false
 ) {
-    fun toExecutionNode(): ExecutionNode {
+    fun toExecutionNode(parentPath: String = ""): ExecutionNode {
+        val currentPath = if (parentPath.isEmpty()) layerName else "$parentPath/$layerName"
+        val nodeId = "node_${currentPath.replace("/", "_")}_${function}"
+        
         return ExecutionNode(
             layerName = layerName,
             function = function,
             args = args.mapValues { it.value as Any },
-            children = children.map { it.toExecutionNode() },
-            parallel = parallel
+            children = children.mapIndexed { index, child -> 
+                child.toExecutionNode("$currentPath[$index]")
+            },
+            parallel = parallel,
+            id = nodeId
         )
     }
 }
