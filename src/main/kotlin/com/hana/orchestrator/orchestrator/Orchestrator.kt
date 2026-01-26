@@ -147,6 +147,7 @@ class Orchestrator : CommonLayerInterface {
     
     /**
      * 오케스트레이션 실행 (도메인 모델 반환)
+     * LLM 기반 자동 재처리 루프 포함
      */
     suspend fun executeOrchestration(query: String): ExecutionResult {
         val allDescriptions = getAllLayerDescriptions()
@@ -160,53 +161,164 @@ class Orchestrator : CommonLayerInterface {
             currentExecution = runningHistory
             emitExecutionUpdate(runningHistory)
             
-            try {
-                // 사용자 요청이 있으면 LLM으로 트리 생성 후 검증 및 실행
-                println("🔍 [Orchestrator] 사용자 쿼리 수신: $query")
-                val rawTree = llmClient.createExecutionTree(query, allDescriptions)
-                println("🌳 [Orchestrator] LLM 트리 생성 완료: rootNode=${rawTree.rootNode.layerName}.${rawTree.rootNode.function}, children=${rawTree.rootNode.children.size}")
+            var previousHistory: ExecutionHistory? = null
+            var previousTree: ExecutionTree? = null
+            var attemptCount = 0
+            val maxAttempts = 5 // 최대 재시도 횟수 (안전장치)
+            
+            while (attemptCount < maxAttempts) {
+                attemptCount++
+                println("\n🔄 [Orchestrator] 실행 시도 #$attemptCount")
                 
-                // 트리 검증 및 자동 수정
-                val validator = ExecutionTreeValidator(allDescriptions)
-                val validationResult = validator.validateAndFix(rawTree, query)
-                
-                // 검증된 트리 실행 (에러가 있으면 수정된 트리 사용)
-                val treeToExecute = validationResult.fixedTree ?: rawTree
-                
-                // 경고가 있으면 로그 출력
-                if (validationResult.warnings.isNotEmpty()) {
-                    println("⚠️ [Orchestrator] 트리 검증 경고:")
-                    validationResult.warnings.forEach { println("  - $it") }
+                try {
+                    // LLM으로 트리 생성
+                    val rawTree = if (attemptCount == 1) {
+                        println("🔍 [Orchestrator] 사용자 쿼리 수신: $query")
+                        llmClient.createExecutionTree(query, allDescriptions)
+                    } else {
+                        // 재처리: LLM이 재처리 방안 제시
+                        println("🔧 [Orchestrator] 재처리 방안 요청 중...")
+                        val retryStrategy = llmClient.suggestRetryStrategy(query, previousHistory!!, allDescriptions)
+                        
+                        if (retryStrategy.shouldStop) {
+                            println("🛑 [Orchestrator] LLM 판단: 근본 해결 불가능 - ${retryStrategy.reason}")
+                            val finalHistory = ExecutionHistory.createFailed(
+                                executionId, query, 
+                                "재처리 중단: ${retryStrategy.reason}", 
+                                startTime
+                            )
+                            executionHistory.add(finalHistory)
+                            currentExecution = null
+                            emitExecutionUpdate(finalHistory)
+                            return ExecutionResult(result = "", error = retryStrategy.reason)
+                        }
+                        
+                        println("✅ [Orchestrator] 재처리 방안 수신: ${retryStrategy.reason}")
+                        retryStrategy.newTree ?: throw IllegalStateException("재처리 트리가 null입니다")
+                    }
+                    
+                    println("🌳 [Orchestrator] 실행 트리: rootNode=${rawTree.rootNode.layerName}.${rawTree.rootNode.function}, children=${rawTree.rootNode.children.size}")
+                    
+                    // 트리 검증 및 자동 수정
+                    val validator = ExecutionTreeValidator(allDescriptions)
+                    val validationResult = validator.validateAndFix(rawTree, query)
+                    
+                    val treeToExecute = validationResult.fixedTree ?: rawTree
+                    
+                    if (validationResult.warnings.isNotEmpty()) {
+                        println("⚠️ [Orchestrator] 트리 검증 경고:")
+                        validationResult.warnings.forEach { println("  - $it") }
+                    }
+                    
+                    if (validationResult.errors.isNotEmpty()) {
+                        println("❌ [Orchestrator] 트리 검증 에러:")
+                        validationResult.errors.forEach { println("  - $it") }
+                        println("📝 [Orchestrator] 수정된 트리로 실행합니다.")
+                    }
+                    
+                    // 트리 실행
+                    println("🚀 [Orchestrator] 트리 실행 시작...")
+                    val result = executeTree(treeToExecute)
+                    println("✅ [Orchestrator] 트리 실행 완료")
+                    
+                    // 실행 결과 평가 (LLM이 판단)
+                    println("🤔 [Orchestrator] 실행 결과 평가 중...")
+                    val evaluation = llmClient.evaluateResult(query, result.result, result.context)
+                    println("📊 [Orchestrator] 평가 결과: ${if (evaluation.isSatisfactory) "요구사항 부합" else "요구사항 미부합"} - ${evaluation.reason}")
+                    
+                    // 실행 완료 이력 저장
+                    val history = ExecutionHistory.createCompleted(executionId, query, result, startTime)
+                    executionHistory.add(history)
+                    emitExecutionUpdate(history)
+                    
+                    // 요구사항 부합 여부 확인
+                    if (evaluation.isSatisfactory && !evaluation.needsRetry) {
+                        // 성공: 요구사항 부합하고 재처리 불필요
+                        println("✅ [Orchestrator] 실행 성공: 요구사항 부합")
+                        currentExecution = null
+                        return result
+                    }
+                    
+                    // 재처리 필요 또는 요구사항 미부합
+                    if (evaluation.needsRetry) {
+                        println("🔄 [Orchestrator] 재처리 필요: ${evaluation.reason}")
+                        
+                        // 이전 실행과 비교하여 유의미한 차이 확인
+                        if (previousHistory != null && previousTree != null) {
+                            println("🔍 [Orchestrator] 이전 실행과 비교 중...")
+                            val comparison = llmClient.compareExecutions(
+                                query,
+                                previousTree,
+                                previousHistory.result.result,
+                                treeToExecute,
+                                result.result
+                            )
+                            
+                            if (!comparison.isSignificantlyDifferent) {
+                                println("⚠️ [Orchestrator] 유의미한 변경 없음: ${comparison.reason}")
+                                println("🛑 [Orchestrator] 무한 루프 방지: 재처리 중단")
+                                currentExecution = null
+                                return result // 현재 결과 반환
+                            }
+                            
+                            println("✅ [Orchestrator] 유의미한 차이 확인: ${comparison.reason}")
+                        }
+                        
+                        // 재처리 루프 계속
+                        previousHistory = history
+                        previousTree = treeToExecute
+                        currentExecution = ExecutionHistory.createRunning(executionId, query, System.currentTimeMillis())
+                        emitExecutionUpdate(currentExecution!!)
+                        continue
+                    }
+                    
+                    // 평가 실패 또는 기타 경우: 현재 결과 반환
+                    currentExecution = null
+                    return result
+                    
+                } catch (e: Exception) {
+                    println("❌ [Orchestrator] 실행 실패: ${e.message}")
+                    
+                    // 실패 이력 저장
+                    val failedHistory = ExecutionHistory.createFailed(executionId, query, e.message, startTime)
+                    executionHistory.add(failedHistory)
+                    emitExecutionUpdate(failedHistory)
+                    
+                    // 재처리 가능 여부 확인
+                    if (attemptCount >= maxAttempts) {
+                        println("🛑 [Orchestrator] 최대 재시도 횟수 도달: 중단")
+                        currentExecution = null
+                        throw e
+                    }
+                    
+                    // 재처리 방안 요청
+                    if (previousHistory == null) {
+                        previousHistory = failedHistory
+                    }
+                    
+                    println("🔧 [Orchestrator] 실패 분석 및 재처리 방안 요청 중...")
+                    val retryStrategy = llmClient.suggestRetryStrategy(query, previousHistory, allDescriptions)
+                    
+                    if (retryStrategy.shouldStop) {
+                        println("🛑 [Orchestrator] LLM 판단: 근본 해결 불가능 - ${retryStrategy.reason}")
+                        currentExecution = null
+                        throw Exception("재처리 중단: ${retryStrategy.reason}")
+                    }
+                    
+                    println("✅ [Orchestrator] 재처리 방안 수신: ${retryStrategy.reason}")
+                    previousHistory = failedHistory
+                    previousTree = failedHistory.result.executionTree
+                    currentExecution = ExecutionHistory.createRunning(executionId, query, System.currentTimeMillis())
+                    emitExecutionUpdate(currentExecution!!)
+                    continue
                 }
-                
-                // 에러가 있으면 로그 출력
-                if (validationResult.errors.isNotEmpty()) {
-                    println("❌ [Orchestrator] 트리 검증 에러:")
-                    validationResult.errors.forEach { println("  - $it") }
-                    println("📝 [Orchestrator] 수정된 트리로 실행합니다.")
-                } else {
-                    println("✅ [Orchestrator] 트리 검증 통과")
-                }
-                
-                println("🚀 [Orchestrator] 트리 실행 시작...")
-                val result = executeTree(treeToExecute)
-                println("✅ [Orchestrator] 트리 실행 완료")
-                
-                // 실행 완료 - 이력 저장 및 Flow에 emit
-                val history = ExecutionHistory.createCompleted(executionId, query, result, startTime)
-                executionHistory.add(history)
-                currentExecution = null
-                emitExecutionUpdate(history)
-                
-                result
-            } catch (e: Exception) {
-                // 실행 실패 - 이력 저장 및 Flow에 emit
-                val history = ExecutionHistory.createFailed(executionId, query, e.message, startTime)
-                executionHistory.add(history)
-                currentExecution = null
-                emitExecutionUpdate(history)
-                throw e
             }
+            
+            // 최대 재시도 횟수 도달
+            println("🛑 [Orchestrator] 최대 재시도 횟수 도달")
+            currentExecution = null
+            ExecutionResult(result = "", error = "최대 재시도 횟수 도달")
+            
         } else {
             // 빈 쿼리인 경우 기본 결과 반환
             ExecutionResult(result = "Empty query")
