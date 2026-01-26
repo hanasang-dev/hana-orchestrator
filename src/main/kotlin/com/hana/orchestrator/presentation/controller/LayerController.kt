@@ -5,8 +5,10 @@ import com.hana.orchestrator.layer.LayerRequest
 import com.hana.orchestrator.layer.LayerResponse
 import com.hana.orchestrator.orchestrator.Orchestrator
 import com.hana.orchestrator.presentation.model.chat.ChatRequest
+import com.hana.orchestrator.presentation.mapper.ExecutionHistoryMapper.toExecutionHistoryResponse
+import com.hana.orchestrator.presentation.model.execution.ExecutionHistoryListResponse
+import com.hana.orchestrator.presentation.model.execution.ExecutionHistoryResponse
 import com.hana.orchestrator.presentation.model.layer.RegisterRemoteLayerResponse
-import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
@@ -127,5 +129,25 @@ class LayerController(
                 call.respond(mapOf("error" to e.message))
             }
         }
+        
+        // 실행 이력 조회 엔드포인트
+        route.get("/executions") {
+            try {
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 50
+                val history = orchestrator.getExecutionHistory(limit)
+                val current = orchestrator.getCurrentExecution()
+                
+                val historyResponse = history.map { it.toExecutionHistoryResponse() }
+                val currentResponse = current?.toExecutionHistoryResponse()
+                
+                call.respond(ExecutionHistoryListResponse(
+                    history = historyResponse,
+                    current = currentResponse
+                ))
+            } catch (e: Exception) {
+                call.respond(mapOf("error" to e.message))
+            }
+        }
+        
     }
 }

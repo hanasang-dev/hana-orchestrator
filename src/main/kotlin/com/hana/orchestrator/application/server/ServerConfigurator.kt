@@ -6,13 +6,16 @@ import com.hana.orchestrator.presentation.controller.ChatController
 import com.hana.orchestrator.presentation.controller.HealthController
 import com.hana.orchestrator.presentation.controller.LayerController
 import com.hana.orchestrator.presentation.controller.ServiceController
+import com.hana.orchestrator.presentation.controller.ExecutionWebSocketController
 import com.hana.orchestrator.service.ServiceInfo
+import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
+import io.ktor.server.http.content.*
 import io.ktor.server.netty.*
-import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.serialization.kotlinx.json.*
+import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.routing.*
+import io.ktor.server.websocket.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.Json
 
@@ -40,12 +43,23 @@ class ServerConfigurator(
                 })
             }
             
+            install(WebSockets) {
+                pingPeriod = kotlin.time.Duration.parse("15s")
+                timeout = kotlin.time.Duration.parse("15s")
+                maxFrameSize = Long.MAX_VALUE
+                masking = false
+            }
+            
             routing {
+                // 정적 파일 서빙 (UI)
+                staticResources("/", "static", "index.html")
+                
                 // 컨트롤러들 설정
                 HealthController(lifecycleManager).configureRoutes(this)
                 ServiceController(serviceInfo, lifecycleManager).configureRoutes(this)
                 ChatController(orchestrator, lifecycleManager).configureRoutes(this)
                 LayerController(orchestrator, lifecycleManager).configureRoutes(this)
+                ExecutionWebSocketController(orchestrator).configureRoutes(this)
             }
         }
     }

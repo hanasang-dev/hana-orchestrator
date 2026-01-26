@@ -2,6 +2,7 @@ package com.hana.orchestrator.orchestrator
 
 import com.hana.orchestrator.layer.LayerFactory
 import com.hana.orchestrator.layer.CommonLayerInterface
+import com.hana.orchestrator.layer.RemoteLayer
 import com.hana.orchestrator.llm.OllamaLLMClient
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionNode
@@ -9,9 +10,13 @@ import com.hana.orchestrator.domain.entity.NodeExecutionResult
 import com.hana.orchestrator.domain.entity.NodeStatus
 import com.hana.orchestrator.domain.entity.ExecutionContext
 import com.hana.orchestrator.domain.entity.ExecutionResult
+import com.hana.orchestrator.domain.entity.ExecutionHistory
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 
 
@@ -19,9 +24,61 @@ class Orchestrator : CommonLayerInterface {
     
     private val layers = mutableListOf<CommonLayerInterface>()
     private val llmClient = OllamaLLMClient()
+    private val executionHistory = mutableListOf<ExecutionHistory>()
+    private var currentExecution: ExecutionHistory? = null
+    
+    // 실시간 업데이트를 위한 Flow
+    private val _executionUpdates = MutableSharedFlow<ExecutionHistory>(replay = 1, extraBufferCapacity = 10)
+    val executionUpdates: SharedFlow<ExecutionHistory> = _executionUpdates.asSharedFlow()
     
     init {
         initializeDefaultLayers()
+    }
+    
+    fun getExecutionHistory(limit: Int = 50): List<ExecutionHistory> {
+        return executionHistory.takeLast(limit).reversed()
+    }
+    
+    fun getCurrentExecution(): ExecutionHistory? {
+        return currentExecution
+    }
+    
+    /**
+     * 실행 상태 업데이트를 Flow에 emit
+     */
+    private suspend fun emitExecutionUpdate(history: ExecutionHistory) {
+        _executionUpdates.emit(history)
+    }
+    
+    /**
+     * 현재 실행 상태를 컨텍스트 정보로 업데이트
+     * SRP: 상태 업데이트 로직 분리
+     */
+    private suspend fun updateCurrentExecutionWithContext(
+        context: ExecutionContext,
+        tree: ExecutionTree,
+        nodeResult: NodeExecutionResult
+    ) {
+        val current = currentExecution ?: return
+        
+        val resultText = extractResultText(nodeResult)
+        val updatedHistory = current.copy(
+            result = ExecutionResult(
+                result = resultText,
+                executionTree = tree,
+                context = context
+            )
+        )
+        currentExecution = updatedHistory
+        emitExecutionUpdate(updatedHistory)
+    }
+    
+    /**
+     * 노드 결과에서 텍스트 추출
+     * SRP: 결과 추출 로직 분리 (NodeExecutionResult의 resultText 사용)
+     */
+    private fun extractResultText(nodeResult: NodeExecutionResult): String {
+        return nodeResult.resultText
     }
     
     private fun initializeDefaultLayers() {
@@ -95,37 +152,61 @@ class Orchestrator : CommonLayerInterface {
         val allDescriptions = getAllLayerDescriptions()
         
         return if (query.isNotEmpty()) {
-            // 사용자 요청이 있으면 LLM으로 트리 생성 후 검증 및 실행
-            println("🔍 [Orchestrator] 사용자 쿼리 수신: $query")
-            val rawTree = llmClient.createExecutionTree(query, allDescriptions)
-            println("🌳 [Orchestrator] LLM 트리 생성 완료: rootNode=${rawTree.rootNode.layerName}.${rawTree.rootNode.function}, children=${rawTree.rootNode.children.size}")
+            val executionId = java.util.UUID.randomUUID().toString()
+            val startTime = System.currentTimeMillis()
             
-            // 트리 검증 및 자동 수정
-            val validator = ExecutionTreeValidator(allDescriptions)
-            val validationResult = validator.validateAndFix(rawTree, query)
+            // 실행 이력 생성 및 Flow에 emit
+            val runningHistory = ExecutionHistory.createRunning(executionId, query, startTime)
+            currentExecution = runningHistory
+            emitExecutionUpdate(runningHistory)
             
-            // 검증된 트리 실행 (에러가 있으면 수정된 트리 사용)
-            val treeToExecute = validationResult.fixedTree ?: rawTree
-            
-            // 경고가 있으면 로그 출력
-            if (validationResult.warnings.isNotEmpty()) {
-                println("⚠️ [Orchestrator] 트리 검증 경고:")
-                validationResult.warnings.forEach { println("  - $it") }
+            try {
+                // 사용자 요청이 있으면 LLM으로 트리 생성 후 검증 및 실행
+                println("🔍 [Orchestrator] 사용자 쿼리 수신: $query")
+                val rawTree = llmClient.createExecutionTree(query, allDescriptions)
+                println("🌳 [Orchestrator] LLM 트리 생성 완료: rootNode=${rawTree.rootNode.layerName}.${rawTree.rootNode.function}, children=${rawTree.rootNode.children.size}")
+                
+                // 트리 검증 및 자동 수정
+                val validator = ExecutionTreeValidator(allDescriptions)
+                val validationResult = validator.validateAndFix(rawTree, query)
+                
+                // 검증된 트리 실행 (에러가 있으면 수정된 트리 사용)
+                val treeToExecute = validationResult.fixedTree ?: rawTree
+                
+                // 경고가 있으면 로그 출력
+                if (validationResult.warnings.isNotEmpty()) {
+                    println("⚠️ [Orchestrator] 트리 검증 경고:")
+                    validationResult.warnings.forEach { println("  - $it") }
+                }
+                
+                // 에러가 있으면 로그 출력
+                if (validationResult.errors.isNotEmpty()) {
+                    println("❌ [Orchestrator] 트리 검증 에러:")
+                    validationResult.errors.forEach { println("  - $it") }
+                    println("📝 [Orchestrator] 수정된 트리로 실행합니다.")
+                } else {
+                    println("✅ [Orchestrator] 트리 검증 통과")
+                }
+                
+                println("🚀 [Orchestrator] 트리 실행 시작...")
+                val result = executeTree(treeToExecute)
+                println("✅ [Orchestrator] 트리 실행 완료")
+                
+                // 실행 완료 - 이력 저장 및 Flow에 emit
+                val history = ExecutionHistory.createCompleted(executionId, query, result, startTime)
+                executionHistory.add(history)
+                currentExecution = null
+                emitExecutionUpdate(history)
+                
+                result
+            } catch (e: Exception) {
+                // 실행 실패 - 이력 저장 및 Flow에 emit
+                val history = ExecutionHistory.createFailed(executionId, query, e.message, startTime)
+                executionHistory.add(history)
+                currentExecution = null
+                emitExecutionUpdate(history)
+                throw e
             }
-            
-            // 에러가 있으면 로그 출력
-            if (validationResult.errors.isNotEmpty()) {
-                println("❌ [Orchestrator] 트리 검증 에러:")
-                validationResult.errors.forEach { println("  - $it") }
-                println("📝 [Orchestrator] 수정된 트리로 실행합니다.")
-            } else {
-                println("✅ [Orchestrator] 트리 검증 통과")
-            }
-            
-            println("🚀 [Orchestrator] 트리 실행 시작...")
-            val result = executeTree(treeToExecute)
-            println("✅ [Orchestrator] 트리 실행 완료")
-            result
         } else {
             // 빈 쿼리인 경우 기본 결과 반환
             ExecutionResult(result = "Empty query")
@@ -141,6 +222,9 @@ class Orchestrator : CommonLayerInterface {
         
         val result = executeNode(tree.rootNode, context, parentNodeId = null, depth = 0)
         
+        // 실행 중인 경우 현재 실행 상태 업데이트 (노드 레벨 정보 포함)
+        updateCurrentExecutionWithContext(context, tree, result)
+        
         // 실행 완료 후 전체 상태 로그 출력
         println("\n📊 [executeTree] ========== 실행 결과 요약 ==========")
         println("✅ 성공한 노드: ${context.completedNodes.size}개")
@@ -151,19 +235,22 @@ class Orchestrator : CommonLayerInterface {
         println("❌ 실패한 노드: ${context.failedNodes.size}개")
         context.failedNodes.forEach { nodeResult ->
             println("   - ${nodeResult.nodeId}: ${nodeResult.node.layerName}.${nodeResult.node.function} (depth=${nodeResult.depth})")
-            println("     에러: ${nodeResult.error}")
+            val errorText = nodeResult.error ?: "Unknown error"
+            println("     에러: $errorText")
         }
         
-        println("⏭️ 건너뛴 노드: ${context.nodeResults.values.filter { it.status == NodeStatus.SKIPPED }.size}개")
-        context.nodeResults.values.filter { it.status == NodeStatus.SKIPPED }.forEach { nodeResult ->
+        val skippedCount = context.countByStatus(NodeStatus.SKIPPED)
+        println("⏭️ 건너뛴 노드: ${skippedCount}개")
+        context.getAllResults().values.filter { it.isSkipped }.forEach { nodeResult ->
             println("   - ${nodeResult.nodeId}: ${nodeResult.node.layerName}.${nodeResult.node.function} (부모 실패로 인해 건너뜀)")
         }
         
-        println("📊 전체 노드 수: ${context.nodeResults.size}개")
+        println("📊 전체 노드 수: ${context.getAllResults().size}개")
         println("==========================================\n")
         
+        val resultText = extractResultText(result)
         return ExecutionResult(
-            result = result.result ?: result.error ?: "Unknown error",
+            result = resultText,
             executionTree = tree,
             context = context
         )
@@ -183,83 +270,56 @@ class Orchestrator : CommonLayerInterface {
         
         // 의존성 체크
         if (!context.canExecute(parentNodeId)) {
-            val skippedResult = NodeExecutionResult(
-                nodeId = nodeId,
-                node = node,
-                status = NodeStatus.SKIPPED,
-                error = "Parent node failed",
-                depth = depth,
-                parentNodeId = parentNodeId
+            val skippedResult = context.recordNode(
+                node, NodeStatus.SKIPPED, depth, parentNodeId,
+                error = "Parent node failed"
             )
-            context.recordResult(skippedResult)
             println("${indent}⏭️ [executeNode] 건너뜀: ${node.layerName}.${node.function} (부모 실패)")
             return skippedResult
         }
         
-        // 실행 시작
-        val runningResult = NodeExecutionResult(
-            nodeId = nodeId,
-            node = node,
-            status = NodeStatus.RUNNING,
-            depth = depth,
-            parentNodeId = parentNodeId
-        )
-        context.recordResult(runningResult)
+        val runningResult = context.recordNode(node, NodeStatus.RUNNING, depth, parentNodeId)
         println("${indent}🎯 [executeNode] 실행 시작: ${node.layerName}.${node.function} (id=$nodeId, depth=$depth, parent=$parentNodeId, children=${node.children.size}, parallel=${node.parallel})")
         
         val layer = layers.find { it.describe().name == node.layerName }
         
         if (layer == null) {
-            val failedResult = NodeExecutionResult(
-                nodeId = nodeId,
-                node = node,
-                status = NodeStatus.FAILED,
-                error = "Layer '${node.layerName}' not found",
-                depth = depth,
-                parentNodeId = parentNodeId
+            val failedResult = context.recordNode(
+                node, NodeStatus.FAILED, depth, parentNodeId,
+                error = "Layer '${node.layerName}' not found"
             )
-            context.recordResult(failedResult)
             println("${indent}❌ [executeNode] 레이어를 찾을 수 없음: ${node.layerName}")
             return failedResult
         }
         
         // 현재 노드 실행
-        val executionResult = try {
-            println("${indent}▶️ [executeNode] ${node.layerName}.${node.function} 실행 중...")
+        val executionResult: NodeExecutionResult = try {
+            // 원격 레이어인지 확인
+            val isRemote = layer is RemoteLayer
+            val remoteUrl = if (isRemote) layer.baseUrl else null
+            
+            println("${indent}▶️ [executeNode] ${node.layerName}.${node.function} 실행 중...${if (isRemote) " (원격: $remoteUrl)" else ""}")
             val execResult = layer.execute(node.function, node.args)
             println("${indent}✅ [executeNode] ${node.layerName}.${node.function} 완료: ${execResult.take(50)}...")
             
-            NodeExecutionResult(
-                nodeId = nodeId,
-                node = node,
-                status = NodeStatus.SUCCESS,
-                result = execResult,
-                depth = depth,
-                parentNodeId = parentNodeId
-            )
+            context.recordNode(node, NodeStatus.SUCCESS, depth, parentNodeId, result = execResult)
         } catch (e: Exception) {
             println("${indent}❌ [executeNode] ${node.layerName}.${node.function} 에러: ${e.message}")
             
-            NodeExecutionResult(
-                nodeId = nodeId,
-                node = node,
-                status = NodeStatus.FAILED,
-                error = "Error executing ${node.layerName}.${node.function}: ${e.message}",
-                depth = depth,
-                parentNodeId = parentNodeId
+            context.recordNode(
+                node, NodeStatus.FAILED, depth, parentNodeId,
+                error = "Error executing ${node.layerName}.${node.function}: ${e.message}"
             )
         }
         
-        context.recordResult(executionResult)
-        
         // 실패 시 여기서 재시도 로직 추가 가능 (나중에)
-        if (executionResult.status == NodeStatus.FAILED) {
+        if (executionResult.isFailure) {
             println("${indent}⚠️ [executeNode] 노드 실패: ${node.layerName}.${node.function} (id=$nodeId, depth=$depth)")
             println("${indent}   재시도 시작점: ${context.findRetryStartPoint(nodeId)}")
             // 재시도 로직은 다음 단계에서 추가
-        } else if (executionResult.status == NodeStatus.SUCCESS) {
+        } else if (executionResult.isSuccess) {
             println("${indent}✅ [executeNode] 노드 성공: ${node.layerName}.${node.function} (id=$nodeId)")
-            println("${indent}   결과 미리보기: ${executionResult.result?.take(100) ?: "null"}")
+            println("${indent}   결과 미리보기: ${executionResult.resultText.take(100)}")
         }
         
         // 자식 노드 실행
@@ -283,14 +343,14 @@ class Orchestrator : CommonLayerInterface {
         }
         
         // 자식 노드 실패 체크
-        val failedChildren = childResults.filter { it.status == NodeStatus.FAILED }
-        if (failedChildren.isNotEmpty() && executionResult.status == NodeStatus.SUCCESS) {
+        val failedChildren = childResults.filter { it.isFailure }
+        if (failedChildren.isNotEmpty() && executionResult.isSuccess) {
             // 부모는 성공했지만 자식이 실패한 경우
             println("${indent}⚠️ [executeNode] 자식 노드 실패: ${failedChildren.size}개")
         }
         
         // 결과 결합 (성공한 자식들의 결과만)
-        val successfulResults = childResults.filter { it.status == NodeStatus.SUCCESS }
+        val successfulResults = childResults.filter { it.isSuccess }
         val finalResultText = (listOfNotNull(executionResult.result) + successfulResults.mapNotNull { it.result })
             .filter { it.isNotEmpty() }
             .joinToString("\n")

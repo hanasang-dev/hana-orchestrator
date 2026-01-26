@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hana Orchestrator - Layer Management</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+        }
+        
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 20px;
+        }
+        
+        .card h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        input[type="text"], input[type="url"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="text"]:focus, input[type="url"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .layers-list {
+            display: grid;
+            gap: 15px;
+        }
+        
+        .layer-item {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .layer-item h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .layer-item p {
+            color: #666;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        
+        .functions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        
+        .function-badge {
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .message {
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-size: 14px;
+        }
+        
+        .message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .refresh-btn {
+            background: #28a745;
+            margin-left: 10px;
+        }
+        
+        .refresh-btn:hover {
+            box-shadow: 0 5px 15px rgba(40, 167, 69, 0.4);
+        }
+        
+        .execution-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border-left: 4px solid #667eea;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .execution-item:hover {
+            background: #e9ecef;
+        }
+        
+        .execution-item.running {
+            border-left-color: #ffc107;
+            animation: pulse 2s infinite;
+        }
+        
+        .execution-item.completed {
+            border-left-color: #28a745;
+        }
+        
+        .execution-item.failed {
+            border-left-color: #dc3545;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .execution-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .execution-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        
+        .execution-meta {
+            font-size: 12px;
+            color: #666;
+            display: flex;
+            gap: 15px;
+        }
+        
+        .execution-details {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+            margin-top: 10px;
+        }
+        
+        .execution-details.expanded {
+            max-height: 1000px;
+        }
+        
+        .execution-result {
+            background: white;
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .status-running {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .status-completed {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .node-stats {
+            display: flex;
+            gap: 10px;
+            margin-top: 8px;
+        }
+        
+        .node-stat {
+            font-size: 11px;
+            color: #666;
+        }
+        
+        .node-stat strong {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌟 Hana Orchestrator</h1>
+            <p>레이어 관리 대시보드</p>
+        </div>
+        
+        <div class="card">
+            <h2>🔗 원격 레이어 등록</h2>
+            <div id="registerMessage"></div>
+            <form id="registerForm">
+                <div class="form-group">
+                    <label for="baseUrl">원격 서버 URL:</label>
+                    <input type="url" id="baseUrl" placeholder="http://localhost:8081" required>
+                </div>
+                <button type="submit">등록</button>
+            </form>
+        </div>
+        
+        <div class="card">
+            <h2>
+                📋 등록된 레이어 목록
+                <button class="refresh-btn" onclick="loadLayers()">새로고침</button>
+            </h2>
+            <div id="layersList">
+                <p>로딩 중...</p>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>
+                🚀 실행 이력
+                <button class="refresh-btn" onclick="loadExecutions()">새로고침</button>
+                <label style="margin-left: 10px;">
+                    <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()">
+                    자동 새로고침
+                </label>
+            </h2>
+            <div id="executionsList" style="max-height: 300px; overflow-y: auto;">
+                <p>로딩 중...</p>
+            </div>
+        </div>
+        
+    </div>
+    
+    <script>
+        const API_BASE = window.location.origin;
+        
+        // 레이어 목록 로드
+        async function loadLayers() {
+            const layersList = document.getElementById('layersList');
+            layersList.innerHTML = '<p>로딩 중...</p>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/layers`);
+                const layers = await response.json();
+                
+                if (layers.error) {
+                    layersList.innerHTML = `<div class="message error">${layers.error}</div>`;
+                    return;
+                }
+                
+                if (layers.length === 0) {
+                    layersList.innerHTML = '<p>등록된 레이어가 없습니다.</p>';
+                    return;
+                }
+                
+                layersList.innerHTML = layers.map(layer => `
+                    <div class="layer-item">
+                        <h3>${layer.name}</h3>
+                        <p>${layer.description}</p>
+                        <div class="functions">
+                            ${layer.functions.map(func => `<span class="function-badge">${func}</span>`).join('')}
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                layersList.innerHTML = `<div class="message error">레이어 목록을 불러오는 중 오류가 발생했습니다: ${error.message}</div>`;
+            }
+        }
+        
+        // 원격 레이어 등록
+        document.getElementById('registerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const baseUrl = document.getElementById('baseUrl').value;
+            const messageDiv = document.getElementById('registerMessage');
+            const submitBtn = e.target.querySelector('button[type="submit"]');
+            
+            messageDiv.innerHTML = '';
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '등록 중... <span class="loading"></span>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/layers/register-remote`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ baseUrl })
+                });
+                
+                const result = await response.json();
+                
+                if (result.error) {
+                    messageDiv.innerHTML = `<div class="message error">${result.error}</div>`;
+                } else {
+                    messageDiv.innerHTML = `<div class="message success">✅ ${result.message}: ${result.layerName} (${result.baseUrl})</div>`;
+                    document.getElementById('baseUrl').value = '';
+                    loadLayers();
+                }
+            } catch (error) {
+                messageDiv.innerHTML = `<div class="message error">등록 중 오류가 발생했습니다: ${error.message}</div>`;
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '등록';
+            }
+        });
+        
+        let autoRefreshInterval = null;
+        let wsConnection = null;
+        
+        // WebSocket 연결 (실시간 업데이트)
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/executions`;
+            
+            wsConnection = new WebSocket(wsUrl);
+            
+            wsConnection.onopen = () => {
+                console.log('WebSocket 연결됨');
+            };
+            
+            wsConnection.onmessage = (event) => {
+                try {
+                    if (!event.data || event.data.trim() === '') {
+                        console.warn('빈 WebSocket 메시지 수신');
+                        return;
+                    }
+                    const data = JSON.parse(event.data);
+                    updateExecutionsUI(data);
+                } catch (error) {
+                    console.error('WebSocket 메시지 파싱 오류:', error, '데이터:', event.data);
+                }
+            };
+            
+            wsConnection.onerror = (error) => {
+                console.error('WebSocket 오류:', error);
+                // 폴링으로 폴백
+                setTimeout(connectWebSocket, 3000);
+            };
+            
+            wsConnection.onclose = () => {
+                console.log('WebSocket 연결 종료');
+                // 재연결 시도
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+        
+        // 실행 이력 UI 업데이트
+        function updateExecutionsUI(data) {
+            const executionsList = document.getElementById('executionsList');
+            
+            if (!data) {
+                executionsList.innerHTML = '<p>데이터를 받지 못했습니다.</p>';
+                return;
+            }
+            
+            let html = '';
+            
+            // 현재 실행 중인 작업
+            if (data.current) {
+                html += renderExecution(data.current, true);
+            }
+            
+            // 이력
+            if (data.history && data.history.length > 0) {
+                data.history.forEach(exec => {
+                    html += renderExecution(exec, false);
+                });
+            } else if (!data.current) {
+                html = '<p>실행 이력이 없습니다.</p>';
+            }
+            
+            executionsList.innerHTML = html;
+            
+            // 접기/펼치기 이벤트 추가
+            document.querySelectorAll('.execution-item').forEach(item => {
+                // 기존 이벤트 리스너 제거 후 새로 추가
+                const newItem = item.cloneNode(true);
+                item.parentNode.replaceChild(newItem, item);
+                newItem.addEventListener('click', function() {
+                    const details = this.querySelector('.execution-details');
+                    if (details) {
+                        details.classList.toggle('expanded');
+                    }
+                });
+            });
+            
+        }
+        
+        // 실행 이력 로드 (폴링 방식 - 폴백용)
+        async function loadExecutions() {
+            const executionsList = document.getElementById('executionsList');
+            
+            try {
+                const response = await fetch(`${API_BASE}/executions`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const text = await response.text();
+                if (!text || text.trim() === '') {
+                    executionsList.innerHTML = '<p>실행 이력이 없습니다.</p>';
+                    return;
+                }
+                
+                const data = JSON.parse(text);
+                
+                if (data.error) {
+                    executionsList.innerHTML = `<div class="message error">${data.error}</div>`;
+                    return;
+                }
+                
+                updateExecutionsUI(data);
+            } catch (error) {
+                console.error('실행 이력 로드 오류:', error);
+                executionsList.innerHTML = `<div class="message error">실행 이력을 불러오는 중 오류가 발생했습니다: ${error.message}</div>`;
+            }
+        }
+        
+        function renderExecution(exec, isCurrent) {
+            const statusClass = exec.status.toLowerCase();
+            const statusText = {
+                'running': '실행 중',
+                'completed': '완료',
+                'failed': '실패'
+            }[exec.status] || exec.status;
+            
+            const duration = exec.endTime 
+                ? `${((exec.endTime - exec.startTime) / 1000).toFixed(2)}초`
+                : isCurrent 
+                    ? `${((Date.now() - exec.startTime) / 1000).toFixed(1)}초 경과`
+                    : '';
+            
+            const timeStr = new Date(exec.startTime).toLocaleTimeString('ko-KR');
+            
+            return `
+                <div class="execution-item ${statusClass}" data-id="${exec.id}">
+                    <div class="execution-header">
+                        <div>
+                            <div class="execution-title">
+                                ${isCurrent ? '🔄 ' : ''}${exec.query || '(빈 쿼리)'}
+                            </div>
+                            <div class="execution-meta">
+                                <span>${timeStr}</span>
+                                ${duration ? `<span>⏱️ ${duration}</span>` : ''}
+                                <span class="status-badge status-${statusClass}">${statusText}</span>
+                            </div>
+                            <div class="node-stats">
+                                ${exec.nodeCount > 0 ? `<span class="node-stat">전체: <strong>${exec.nodeCount}</strong></span>` : ''}
+                                ${exec.completedNodes > 0 ? `<span class="node-stat">✅ 성공: <strong>${exec.completedNodes}</strong></span>` : ''}
+                                ${exec.failedNodes > 0 ? `<span class="node-stat">❌ 실패: <strong>${exec.failedNodes}</strong></span>` : ''}
+                                ${exec.runningNodes > 0 ? `<span class="node-stat">🔄 실행중: <strong>${exec.runningNodes}</strong></span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="execution-details">
+                        ${exec.result ? `
+                            <div class="execution-result">
+                                <strong>결과:</strong><br>
+                                ${exec.result}
+                            </div>
+                        ` : ''}
+                        ${exec.error ? `
+                            <div class="execution-result" style="background: #f8d7da; color: #721c24;">
+                                <strong>에러:</strong><br>
+                                ${exec.error}
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }
+        
+        function toggleAutoRefresh() {
+            const checkbox = document.getElementById('autoRefresh');
+            if (checkbox.checked) {
+                // WebSocket이 연결되어 있으면 폴링 불필요
+                if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
+                    autoRefreshInterval = setInterval(() => {
+                        loadLayers();
+                    }, 5000); // 레이어 목록만 5초마다 새로고침
+                }
+            } else {
+                if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+                }
+            }
+        }
+        
+        // 페이지 로드 시 레이어 목록 및 실행 이력 불러오기
+        loadLayers();
+        loadExecutions(); // 초기 로드
+        connectWebSocket(); // WebSocket 연결 시작
+    </script>
+</body>
+</html>

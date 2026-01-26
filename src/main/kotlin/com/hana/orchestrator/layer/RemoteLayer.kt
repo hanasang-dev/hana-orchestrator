@@ -11,7 +11,7 @@ import kotlinx.serialization.json.Json
  * 오케스트레이터가 다른 서버의 레이어와 통신할 때 사용
  */
 class RemoteLayer(
-    private val baseUrl: String,
+    val baseUrl: String,
     private val httpClient: HttpClient
 ) : CommonLayerInterface {
     
