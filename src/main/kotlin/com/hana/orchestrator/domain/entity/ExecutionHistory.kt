@@ -14,7 +14,8 @@ data class ExecutionHistory(
     val result: ExecutionResult,
     val startTime: Long,
     val endTime: Long? = null,
-    val status: ExecutionStatus
+    val status: ExecutionStatus,
+    val logs: MutableList<String> = mutableListOf()
 ) {
     companion object {
         /**
@@ -26,7 +27,8 @@ data class ExecutionHistory(
                 query = query,
                 result = ExecutionResult(result = ""),
                 startTime = startTime,
-                status = ExecutionStatus.RUNNING
+                status = ExecutionStatus.RUNNING,
+                logs = mutableListOf()
             )
         }
         
@@ -39,7 +41,8 @@ data class ExecutionHistory(
             query: String,
             result: ExecutionResult,
             startTime: Long,
-            endTime: Long = System.currentTimeMillis()
+            endTime: Long = System.currentTimeMillis(),
+            logs: MutableList<String> = mutableListOf()
         ): ExecutionHistory {
             val status = determineStatusFromResult(result)
             return ExecutionHistory(
@@ -48,7 +51,8 @@ data class ExecutionHistory(
                 result = result,
                 startTime = startTime,
                 endTime = endTime,
-                status = status
+                status = status,
+                logs = logs
             )
         }
         
@@ -60,7 +64,8 @@ data class ExecutionHistory(
             query: String,
             error: String?,
             startTime: Long,
-            endTime: Long = System.currentTimeMillis()
+            endTime: Long = System.currentTimeMillis(),
+            logs: MutableList<String> = mutableListOf()
         ): ExecutionHistory {
             return ExecutionHistory(
                 id = id,
@@ -68,7 +73,8 @@ data class ExecutionHistory(
                 result = ExecutionResult(result = "", error = error),
                 startTime = startTime,
                 endTime = endTime,
-                status = ExecutionStatus.FAILED
+                status = ExecutionStatus.FAILED,
+                logs = logs
             )
         }
         

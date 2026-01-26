@@ -50,9 +50,8 @@ class ApplicationBootstrap {
         val serviceInfo = ServiceRegistry.registerService(port)
         println("📝 Service registered: ${serviceInfo.id}")
         
-        // Orchestrator 초기화
+        // Orchestrator 초기화 (기본 레이어들은 init에서 자동 등록됨)
         val orchestrator = Orchestrator()
-        orchestrator.registerLayer(EchoLayer())
         
         // Application scope 생성
         val applicationScope = CoroutineScope(Dispatchers.IO + SupervisorJob())

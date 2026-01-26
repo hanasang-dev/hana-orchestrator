@@ -107,43 +107,42 @@ object PortAllocator {
     
     /**
      * 개발 환경용 포트 정리 (Hana 서비스가 사용 중인 포트만)
-     * ServiceRegistry를 통해 등록된 서비스만 정리 (성능 최적화)
-     * 하드코딩된 포트 범위 스캔 대신 파일 기반 레지스트리 사용
+     * 포트 범위를 스캔해서 실제로 실행 중인 모든 Hana 서비스를 찾아서 정리
+     * ServiceRegistry에 등록되지 않았어도 실행 중이면 정리
      */
     suspend fun cleanupHanaPorts(): PortCleanupResult {
-        // ServiceRegistry에서 등록된 서비스 목록 가져오기 (파일 기반, 빠름)
-        val registeredServices = ServiceRegistry.getAllServices()
+        println("🔍 Scanning for running Hana services...")
         
-        println("🔍 Found ${registeredServices.size} registered Hana services")
-        registeredServices.forEach { service ->
-            println("  📋 Registered: ${service.name} (포트: ${service.port}, ID: ${service.id})")
+        // 포트 범위를 스캔해서 실제로 실행 중인 모든 Hana 서비스 찾기
+        // ServiceRegistry에 의존하지 않고 실제 HTTP 응답으로 확인
+        val runningServices = ServiceDiscovery.findHanaServices(startPort = 8080, maxRange = 100)
+        
+        println("🔍 Found ${runningServices.size} running Hana services")
+        runningServices.forEach { service ->
+            println("  📋 Running: ${service.serviceInfo.name} (포트: ${service.port}, ID: ${service.serviceInfo.id})")
         }
         
-        // 실제로 실행 중인 서비스만 필터링 (HTTP 확인)
-        val runningServices = registeredServices.filter { serviceInfo ->
-            try {
-                val isRunning = ServiceDiscovery.isServiceRunning(serviceInfo.port)
-                println("  🔍 Port ${serviceInfo.port}: ${if (isRunning) "running" else "not running"}")
-                isRunning
-            } catch (e: Exception) {
-                println("  ⚠️ Port ${serviceInfo.port}: check failed - ${e.message}")
-                false
-            }
-        }
-        
-        println("  ✅ Found ${runningServices.size} running services to shutdown")
-        
-        // 실행 중인 서비스만 종료
-        val shutdownResults = runningServices.map { serviceInfo ->
-            val runningService = RunningService(
-                port = serviceInfo.port,
-                serviceInfo = serviceInfo
+        if (runningServices.isEmpty()) {
+            println("  ✅ No running services to shutdown")
+            return PortCleanupResult(
+                foundServices = 0,
+                successfulShutdowns = 0,
+                failedShutdowns = 0,
+                results = emptyList()
             )
-            ServiceDiscovery.gracefulShutdownService(runningService)
+        }
+        
+        println("  🛑 Shutting down ${runningServices.size} running services...")
+        
+        // 실행 중인 서비스 모두 종료
+        val shutdownResults = runningServices.map { service ->
+            ServiceDiscovery.gracefulShutdownService(service)
         }
         
         val successfulShutdowns = shutdownResults.count { it.success }
         val failedShutdowns = shutdownResults.count { !it.success }
+        
+        println("  ✅ Shutdown complete: $successfulShutdowns succeeded, $failedShutdowns failed")
         
         return PortCleanupResult(
             foundServices = runningServices.size,

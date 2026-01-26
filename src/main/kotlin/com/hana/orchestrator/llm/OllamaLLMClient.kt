@@ -10,6 +10,8 @@ import com.hana.orchestrator.domain.entity.ExecutionHistory
 import com.hana.orchestrator.data.model.response.ExecutionTreeResponse
 import com.hana.orchestrator.data.mapper.ExecutionTreeMapper
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 
 /**
  * Ollama 로컬 LLM 통신을 위한 모듈
@@ -34,9 +36,6 @@ class OllamaLLMClient(
     // 프롬프트 생성기 (SRP: 프롬프트 생성 책임 분리)
     private val promptBuilder = LLMPromptBuilder()
     
-    // 폴백 팩토리 (SRP: 폴백 트리 생성 책임 분리)
-    private val fallbackFactory = FallbackTreeFactory()
-    
     /**
      * 공통 LLM 모델 생성
      * DRY: 반복되는 모델 생성 로직 공통화
@@ -58,25 +57,38 @@ class OllamaLLMClient(
      * 공통 LLM 호출 로직
      * DRY: 반복되는 호출 패턴 공통화
      * Template Method 패턴 적용
+     * 타임아웃: 120초로 제한하여 무한 대기 방지
+     * 실패 시 예외를 throw하여 폴백 없이 실패 처리
      */
     private suspend fun <T> callLLM(
         prompt: String,
         responseParser: (String) -> T,
-        fallback: () -> T
+        timeoutMs: Long = 120_000L // 120초 타임아웃
     ): T {
-        return try {
-            val model = createLLMModel()
-            val agent = AIAgent(
-                promptExecutor = simpleOllamaAIExecutor(),
-                llmModel = model
-            )
-            
-            val response = agent.run(prompt)
-            val jsonText = JsonExtractor.extract(response)
-            responseParser(jsonText)
+        val model = createLLMModel()
+        val agent = AIAgent(
+            promptExecutor = simpleOllamaAIExecutor(),
+            llmModel = model
+        )
+        
+        val response = try {
+            withTimeout(timeoutMs) {
+                agent.run(prompt)
+            }
+        } catch (e: TimeoutCancellationException) {
+            println("⏱️ LLM 호출 타임아웃 (${timeoutMs}ms 초과)")
+            handleLLMError(e)
+            throw Exception("LLM 호출 타임아웃: ${timeoutMs}ms 초과", e)
         } catch (e: Exception) {
             handleLLMError(e)
-            fallback()
+            throw Exception("LLM 호출 실패: ${e.message}", e)
+        }
+        
+        val jsonText = JsonExtractor.extract(response)
+        return try {
+            responseParser(jsonText)
+        } catch (e: Exception) {
+            throw Exception("LLM 응답 파싱 실패: ${e.message}", e)
         }
     }
     
@@ -102,9 +114,6 @@ class OllamaLLMClient(
             responseParser = { jsonText ->
                 val treeResponse = jsonConfig.decodeFromString<ExecutionTreeResponse>(jsonText)
                 ExecutionTreeMapper.toExecutionTree(treeResponse)
-            },
-            fallback = {
-                fallbackFactory.createFallbackTree(userQuery, layerDescriptions)
             }
         )
     }
@@ -123,13 +132,6 @@ class OllamaLLMClient(
             prompt = prompt,
             responseParser = { jsonText ->
                 jsonConfig.decodeFromString<ResultEvaluation>(jsonText)
-            },
-            fallback = {
-                ResultEvaluation(
-                    isSatisfactory = false,
-                    reason = "LLM 평가 실패",
-                    needsRetry = true
-                )
             }
         )
     }
@@ -149,13 +151,6 @@ class OllamaLLMClient(
             responseParser = { jsonText ->
                 val retryResponse = jsonConfig.decodeFromString<RetryStrategyResponse>(jsonText)
                 parseRetryStrategy(retryResponse)
-            },
-            fallback = {
-                RetryStrategy(
-                    shouldStop = true,
-                    reason = "LLM 재처리 방안 생성 실패",
-                    newTree = null
-                )
             }
         )
     }
@@ -199,12 +194,44 @@ class OllamaLLMClient(
             prompt = prompt,
             responseParser = { jsonText ->
                 jsonConfig.decodeFromString<ComparisonResult>(jsonText)
-            },
-            fallback = {
-                ComparisonResult(
-                    isSignificantlyDifferent = true,
-                    reason = "LLM 비교 실패"
-                )
+            }
+        )
+    }
+    
+    /**
+     * 부모 레이어의 실행 결과를 받아서 자식 레이어 함수의 파라미터로 변환
+     * 예: 파일생성 레이어가 "file.txt" 반환 -> 인코딩 레이어의 "filePath" 파라미터로 변환
+     */
+    suspend fun extractParameters(
+        parentResult: String,
+        childLayerName: String,
+        childFunctionName: String,
+        childFunctionDetails: com.hana.orchestrator.layer.FunctionDescription,
+        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
+    ): Map<String, Any> {
+        val prompt = promptBuilder.buildParameterExtractionPrompt(
+            parentResult = parentResult,
+            childLayerName = childLayerName,
+            childFunctionName = childFunctionName,
+            childFunctionDetails = childFunctionDetails,
+            layerDescriptions = layerDescriptions
+        )
+        
+        return callLLM(
+            prompt = prompt,
+            responseParser = { jsonText ->
+                val paramsResponse = jsonConfig.decodeFromString<Map<String, String>>(jsonText)
+                // String을 적절한 타입으로 변환
+                paramsResponse.mapValues { (key, value) ->
+                    val paramInfo = childFunctionDetails.parameters[key]
+                    when (paramInfo?.type) {
+                        "Int", "kotlin.Int" -> value.toIntOrNull() ?: value
+                        "Long", "kotlin.Long" -> value.toLongOrNull() ?: value
+                        "Double", "kotlin.Double" -> value.toDoubleOrNull() ?: value
+                        "Boolean", "kotlin.Boolean" -> value.toBooleanStrictOrNull() ?: value
+                        else -> value // String 또는 기타
+                    }
+                }
             }
         )
     }

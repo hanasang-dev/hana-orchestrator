@@ -63,3 +63,20 @@ ksp {
 tasks.test {
     useJUnitPlatform()
 }
+
+// KSP가 컴파일 전에 실행되도록 의존성 보장
+// afterEvaluate를 사용하여 KSP 플러그인이 태스크를 생성한 후 설정
+afterEvaluate {
+    // compileKotlin이 kspKotlin에 의존하도록 설정
+    tasks.named("compileKotlin") {
+        dependsOn("kspKotlin")
+    }
+    
+    // KSP가 소스 변경 시 항상 실행되도록 보장 (증분 빌드 문제 방지)
+    tasks.named("kspKotlin") {
+        // 소스 파일 변경 감지를 위한 입력 선언
+        inputs.dir("src/main/kotlin")
+        // 출력 디렉토리 명시
+        outputs.dir("build/generated/ksp/main/kotlin")
+    }
+}

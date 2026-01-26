@@ -256,6 +256,34 @@
             word-break: break-word;
         }
         
+        .execution-logs {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .log-content {
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.5;
+        }
+        
+        .log-content .log-line {
+            margin-bottom: 2px;
+        }
+        
+        .log-content .log-info { color: #4ec9b0; }
+        .log-content .log-success { color: #4ec9b0; }
+        .log-content .log-error { color: #f48771; }
+        .log-content .log-warning { color: #dcdcaa; }
+        .log-content .log-perf { color: #ce9178; }
+        
         .status-badge {
             padding: 4px 10px;
             border-radius: 12px;
@@ -341,6 +369,17 @@
     </div>
     
     <script>
+        // 전역 유틸리티 함수들 (가장 먼저 정의)
+        function escapeHtml(text) {
+            if (!text) return '';
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+        
         const API_BASE = window.location.origin;
         
         // 레이어 목록 로드
@@ -481,18 +520,77 @@
             
             executionsList.innerHTML = html;
             
+            // 로그 업데이트 (펼쳐진 항목만, 또는 현재 실행 중인 항목)
+            setTimeout(() => {
+                if (data.current && data.current.logs && data.current.logs.length > 0) {
+                    const details = document.querySelector(`#details-${data.current.id}`);
+                    if (details && details.classList.contains('expanded')) {
+                        updateExecutionLogs(data.current.id, data.current.logs);
+                    }
+                }
+                if (data.history) {
+                    data.history.forEach(exec => {
+                        if (exec.logs && exec.logs.length > 0) {
+                            const details = document.querySelector(`#details-${exec.id}`);
+                            if (details && details.classList.contains('expanded')) {
+                                updateExecutionLogs(exec.id, exec.logs);
+                            }
+                        }
+                    });
+                }
+            }, 100);
+            
             // 접기/펼치기 이벤트 추가
             document.querySelectorAll('.execution-item').forEach(item => {
-                // 기존 이벤트 리스너 제거 후 새로 추가
-                const newItem = item.cloneNode(true);
-                item.parentNode.replaceChild(newItem, item);
-                newItem.addEventListener('click', function() {
-                    const details = this.querySelector('.execution-details');
+                const execId = item.getAttribute('data-id');
+                const details = item.querySelector('.execution-details');
+                const logsDiv = item.querySelector(`#logs-${execId}`);
+                const logContent = item.querySelector(`#log-content-${execId}`);
+                
+                // 헤더 클릭 시 상세 정보 토글
+                const header = item.querySelector('.execution-header');
+                header.style.cursor = 'pointer';
+                header.addEventListener('click', function(e) {
+                    e.stopPropagation();
                     if (details) {
+                        const isExpanded = details.classList.contains('expanded');
                         details.classList.toggle('expanded');
+                        
+                        // 펼칠 때 로그 표시
+                        if (!isExpanded) {
+                            if (logsDiv) {
+                                logsDiv.style.display = 'block';
+                            }
+                            // 실행 데이터에서 로그 가져오기
+                            const execData = findExecutionData(execId);
+                            if (execData && execData.logs && execData.logs.length > 0) {
+                                // 즉시 로그 표시
+                                updateExecutionLogs(execId, execData.logs);
+                            } else if (logContent) {
+                                // 캐시에 없으면 로드 시도
+                                loadExecutionLogs(execId, logContent);
+                            }
+                        }
                     }
                 });
             });
+            
+            // 실행 데이터 저장 (로그 업데이트용)
+            if (!window.executionDataCache) {
+                window.executionDataCache = new Map();
+            }
+            if (data.current) {
+                window.executionDataCache.set(data.current.id, data.current);
+                // 현재 실행 중인 경우 로그 실시간 업데이트
+                if (data.current.logs && data.current.logs.length > 0) {
+                    setTimeout(() => updateExecutionLogs(data.current.id, data.current.logs), 100);
+                }
+            }
+            if (data.history) {
+                data.history.forEach(exec => {
+                    window.executionDataCache.set(exec.id, exec);
+                });
+            }
             
         }
         
@@ -527,6 +625,72 @@
             }
         }
         
+        // 실행 중인 작업의 경과 시간을 실시간으로 업데이트하는 타이머
+        let elapsedTimeTimers = new Map();
+        
+        function updateElapsedTime(execId, startTime) {
+            const element = document.querySelector(`[data-id="${execId}"] .elapsed-time`);
+            if (element) {
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                element.textContent = `⏱️ ${elapsed}초 경과`;
+            }
+        }
+        
+        function startElapsedTimeTimer(execId, startTime) {
+            if (elapsedTimeTimers.has(execId)) {
+                clearInterval(elapsedTimeTimers.get(execId));
+            }
+            const timer = setInterval(() => {
+                updateElapsedTime(execId, startTime);
+            }, 100); // 0.1초마다 업데이트
+            elapsedTimeTimers.set(execId, timer);
+        }
+        
+        function stopElapsedTimeTimer(execId) {
+            if (elapsedTimeTimers.has(execId)) {
+                clearInterval(elapsedTimeTimers.get(execId));
+                elapsedTimeTimers.delete(execId);
+            }
+        }
+        
+        // 실행 로그 업데이트 함수
+        function updateExecutionLogs(execId, logs) {
+            const logContentElement = document.getElementById(`log-content-${execId}`);
+            if (!logContentElement || !logs || logs.length === 0) {
+                if (logContentElement) {
+                    logContentElement.innerHTML = '<div class="log-line log-info">로그가 없습니다.</div>';
+                }
+                return;
+            }
+            
+            try {
+                const html = logs.map(log => {
+                    if (!log) return '';
+                    let logClass = 'log-info';
+                    const logStr = String(log);
+                    if (logStr.includes('❌') || logStr.includes('실패') || logStr.includes('에러') || logStr.includes('ERROR') || logStr.includes('FAILED')) {
+                        logClass = 'log-error';
+                    } else if (logStr.includes('✅') || logStr.includes('성공') || logStr.includes('완료') || logStr.includes('SUCCESS') || logStr.includes('COMPLETED')) {
+                        logClass = 'log-success';
+                    } else if (logStr.includes('⚠️') || logStr.includes('경고') || logStr.includes('WARNING')) {
+                        logClass = 'log-warning';
+                    } else if (logStr.includes('⏱️') || logStr.includes('PERF') || logStr.includes('성능')) {
+                        logClass = 'log-perf';
+                    }
+                    const escapedLog = escapeHtml(logStr);
+                    return '<div class="log-line ' + logClass + '">' + escapedLog + '</div>';
+                }).join('');
+                
+                logContentElement.innerHTML = html;
+                
+                // 자동 스크롤
+                logContentElement.scrollTop = logContentElement.scrollHeight;
+            } catch (error) {
+                console.error('로그 업데이트 오류:', error);
+                logContentElement.innerHTML = '<div class="log-line log-error">로그 표시 오류: ' + String(error.message || error) + '</div>';
+            }
+        }
+        
         function renderExecution(exec, isCurrent) {
             const statusClass = exec.status.toLowerCase();
             const statusText = {
@@ -538,21 +702,28 @@
             const duration = exec.endTime 
                 ? `${((exec.endTime - exec.startTime) / 1000).toFixed(2)}초`
                 : isCurrent 
-                    ? `${((Date.now() - exec.startTime) / 1000).toFixed(1)}초 경과`
+                    ? `<span class="elapsed-time">⏱️ ${((Date.now() - exec.startTime) / 1000).toFixed(1)}초 경과</span>`
                     : '';
             
             const timeStr = new Date(exec.startTime).toLocaleTimeString('ko-KR');
             
+            // 실행 중이면 타이머 시작
+            if (isCurrent && exec.status === 'RUNNING') {
+                setTimeout(() => startElapsedTimeTimer(exec.id, exec.startTime), 0);
+            } else {
+                stopElapsedTimeTimer(exec.id);
+            }
+            
             return `
-                <div class="execution-item ${statusClass}" data-id="${exec.id}">
+                <div class="execution-item ${statusClass}" data-id="${exec.id}" data-start-time="${exec.startTime}">
                     <div class="execution-header">
-                        <div>
+                        <div style="flex: 1;">
                             <div class="execution-title">
                                 ${isCurrent ? '🔄 ' : ''}${exec.query || '(빈 쿼리)'}
                             </div>
                             <div class="execution-meta">
                                 <span>${timeStr}</span>
-                                ${duration ? `<span>⏱️ ${duration}</span>` : ''}
+                                ${duration ? `<span>${duration}</span>` : ''}
                                 <span class="status-badge status-${statusClass}">${statusText}</span>
                             </div>
                             <div class="node-stats">
@@ -563,7 +734,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="execution-details">
+                    <div class="execution-details" id="details-${exec.id}">
                         ${exec.result ? `
                             <div class="execution-result">
                                 <strong>결과:</strong><br>
@@ -576,6 +747,12 @@
                                 ${exec.error}
                             </div>
                         ` : ''}
+                        <div class="execution-logs" id="logs-${exec.id}" style="display: none;">
+                            <strong>📋 실행 로그:</strong>
+                            <div class="log-content" id="log-content-${exec.id}">
+                                로그를 불러오는 중...
+                            </div>
+                        </div>
                     </div>
                 </div>
             `;
@@ -598,10 +775,43 @@
             }
         }
         
+        // 실행 데이터 찾기 함수
+        function findExecutionData(execId) {
+            if (!window.executionDataCache) {
+                return null;
+            }
+            return window.executionDataCache.get(execId) || null;
+        }
+        
+        // 실행 로그 로드 함수
+        function loadExecutionLogs(execId, logContentElement) {
+            if (!logContentElement) return;
+            
+            // 캐시에서 로그 가져오기
+            const execData = findExecutionData(execId);
+            if (execData && execData.logs && execData.logs.length > 0) {
+                updateExecutionLogs(execId, execData.logs);
+            } else {
+                logContentElement.innerHTML = '<div class="log-line log-info">로그가 아직 없습니다.</div>';
+            }
+        }
+        
         // 페이지 로드 시 레이어 목록 및 실행 이력 불러오기
         loadLayers();
         loadExecutions(); // 초기 로드
         connectWebSocket(); // WebSocket 연결 시작
+        
+        // 실행 중인 작업의 경과 시간을 주기적으로 업데이트
+        setInterval(() => {
+            document.querySelectorAll('.execution-item.running').forEach(item => {
+                const execId = item.getAttribute('data-id');
+                const startTimeAttr = item.getAttribute('data-start-time');
+                if (startTimeAttr) {
+                    const startTime = parseInt(startTimeAttr);
+                    updateElapsedTime(execId, startTime);
+                }
+            });
+        }, 100); // 0.1초마다 업데이트
     </script>
 </body>
 </html>

@@ -33,7 +33,8 @@ object ExecutionHistoryMapper {
             nodeCount = state.nodeCount,
             completedNodes = state.completedNodes,
             failedNodes = state.failedNodes,
-            runningNodes = state.runningNodes
+            runningNodes = state.runningNodes,
+            logs = state.logs
         )
     }
     
@@ -54,7 +55,8 @@ object ExecutionHistoryMapper {
             nodeCount = context?.totalNodeCount ?: 0,
             completedNodes = context?.completedNodes?.size ?: 0,
             failedNodes = context?.failedNodes?.size ?: 0,
-            runningNodes = context?.runningNodes?.size ?: 0
+            runningNodes = context?.runningNodes?.size ?: 0,
+            logs = history.logs.toList()
         )
     }
 }

@@ -116,7 +116,8 @@ data class ExecutionState(
     val nodeCount: Int = 0,
     val completedNodes: Int = 0,
     val failedNodes: Int = 0,
-    val runningNodes: Int = 0
+    val runningNodes: Int = 0,
+    val logs: List<String> = emptyList()
 )
 
 @Serializable

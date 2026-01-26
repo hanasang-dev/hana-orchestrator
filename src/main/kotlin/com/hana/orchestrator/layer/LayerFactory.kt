@@ -40,11 +40,35 @@ object LayerFactory {
     }
     
     /**
+     * TextGenerator 레이어 생성
+     */
+    fun createTextGeneratorLayer(): TextGeneratorLayer {
+        return TextGeneratorLayer()
+    }
+    
+    /**
+     * TextTransformer 레이어 생성
+     */
+    fun createTextTransformerLayer(): TextTransformerLayer {
+        return TextTransformerLayer()
+    }
+    
+    /**
+     * TextValidator 레이어 생성
+     */
+    fun createTextValidatorLayer(): TextValidatorLayer {
+        return TextValidatorLayer()
+    }
+    
+    /**
      * 모든 기본 레이어 생성
      */
     fun createDefaultLayers(): List<CommonLayerInterface> {
         return listOf(
-            createEchoLayer()
+            createEchoLayer(),
+            createTextGeneratorLayer(),
+            createTextTransformerLayer(),
+            createTextValidatorLayer()
         )
     }
 }

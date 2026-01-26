@@ -51,12 +51,12 @@ class ExecutionTreeValidator(
                 fixedTree = ExecutionTree(rootNode = fixedRoot, name = tree.name)
             )
         } else {
-            // 에러가 있으면 기본 트리 생성
+            // 에러가 있으면 null 반환 (폴백 없이 실패 처리)
             ValidationResult(
                 isValid = false,
                 errors = errors,
                 warnings = warnings,
-                fixedTree = createFallbackTree(userQuery)
+                fixedTree = null
             )
         }
     }
@@ -198,33 +198,4 @@ class ExecutionTreeValidator(
         return null
     }
     
-    /**
-     * 폴백 트리 생성 (검증 실패 시)
-     */
-    private fun createFallbackTree(userQuery: String): ExecutionTree {
-        val firstLayer = availableLayers.firstOrNull()
-        return if (firstLayer != null) {
-            ExecutionTree(
-                rootNode = ExecutionNode(
-                    layerName = firstLayer.name,
-                    function = firstLayer.functions.firstOrNull() ?: "execute",
-                    args = mapOf("query" to userQuery),
-                    children = emptyList(),
-                    parallel = false,
-                    id = "validator_fallback_${firstLayer.name}"
-                )
-            )
-        } else {
-            ExecutionTree(
-                rootNode = ExecutionNode(
-                    layerName = "unknown",
-                    function = "execute",
-                    args = mapOf("query" to userQuery),
-                    children = emptyList(),
-                    parallel = false,
-                    id = "validator_fallback_unknown"
-                )
-            )
-        }
-    }
 }
