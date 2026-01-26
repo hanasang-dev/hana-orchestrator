@@ -3,6 +3,7 @@ plugins {
     kotlin("plugin.serialization") version "2.2.0"
     application
     id("io.ktor.plugin") version "3.3.3"
+    id("com.google.devtools.ksp") version "2.3.4"
 }
 
 group = "com.hana.orchestrator"
@@ -39,6 +40,9 @@ dependencies {
     implementation("io.ktor:ktor-client-content-negotiation-jvm:$ktorVersion")
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+    
+    // KSP 프로세서 (buildSrc에서 자동 포함)
+    ksp(project(":buildSrc"))
 }
 
 application {
@@ -47,6 +51,13 @@ application {
 
 kotlin {
     jvmToolchain(17)
+    sourceSets.main {
+        kotlin.srcDir("build/generated/ksp/main/kotlin")
+    }
+}
+
+ksp {
+    arg("layer.package", "com.hana.orchestrator.layer")
 }
 
 tasks.test {

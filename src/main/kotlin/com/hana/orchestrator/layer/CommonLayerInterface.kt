@@ -33,7 +33,31 @@ interface CommonLayerInterface {
 data class LayerDescription(
     val name: String,                    // 레이어 고유 이름
     val description: String,             // 레이어 목적 설명
-    val functions: List<String>          // 사용 가능한 함수명 목록
+    val functions: List<String>,          // 사용 가능한 함수명 목록 (기존 호환성)
+    val functionDetails: Map<String, FunctionDescription> = emptyMap()  // 함수 상세 정보 (KSP로 자동 생성)
+)
+
+/**
+ * 함수 상세 정보
+ * KSP 프로세서가 함수 시그니처를 분석하여 자동 생성
+ */
+@Serializable
+data class FunctionDescription(
+    val name: String,                    // 함수명
+    val description: String,             // 함수 설명
+    val parameters: Map<String, ParameterInfo>,  // 파라미터 정보
+    val returnType: String                // 반환 타입 힌트 ("string", "file_path", "json" 등)
+)
+
+/**
+ * 파라미터 정보
+ */
+@Serializable
+data class ParameterInfo(
+    val type: String,                    // 파라미터 타입 ("String", "Int", "Boolean" 등)
+    val description: String = "",         // 파라미터 설명 (KDoc에서 추출)
+    val required: Boolean = true,        // 필수 여부
+    val defaultValue: String? = null    // 기본값 (있는 경우)
 )
 
 /**
