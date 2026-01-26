@@ -6,6 +6,7 @@ import com.google.devtools.ksp.validate
 import com.squareup.kotlinpoet.*
 import java.io.OutputStream
 import java.io.OutputStreamWriter
+import com.google.devtools.ksp.symbol.Modifier
 
 /**
  * KSP 프로세서: @Layer 어노테이션이 붙은 클래스를 스캔하여
@@ -23,12 +24,14 @@ class LayerProcessor(
         logger.info("KSP LayerProcessor started, looking for @Layer in package: $layerPackage")
         
         // @Layer 어노테이션이 붙은 클래스 찾기
+        val layerAnnotationName = "com.hana.orchestrator.layer.Layer"
         val layerSymbols = resolver
-            .getSymbolsWithAnnotation("$layerPackage.Layer")
+            .getSymbolsWithAnnotation(layerAnnotationName)
             .filterIsInstance<KSClassDeclaration>()
             .filter { it.validate() }
+            .toList()
         
-        logger.info("Found ${layerSymbols.count()} @Layer classes")
+        logger.info("Found ${layerSymbols.size} @Layer classes")
         
         layerSymbols.forEach { classDecl ->
             processLayerClass(classDecl, layerPackage)
@@ -38,25 +41,50 @@ class LayerProcessor(
     }
     
     private fun processLayerClass(classDecl: KSClassDeclaration, packageName: String) {
-        val layerAnnotation = classDecl.annotations
-            .firstOrNull { it.shortName.asString() == "Layer" }
-            ?: return
+        // @Layer 어노테이션이 있는지 확인 (마커 역할)
+        val hasLayerAnnotation = classDecl.annotations.any { 
+            it.shortName.asString() == "Layer" 
+        }
+        if (!hasLayerAnnotation) return
         
-        val layerName = layerAnnotation.arguments
-            .firstOrNull { it.name?.asString() == "name" }
-            ?.value as? String ?: return
+        // 클래스명에서 레이어 이름 자동 생성 (예: EchoLayer -> "echo-layer")
+        val className = classDecl.simpleName.asString()
+        val layerName = className
+            .removeSuffix("Layer")
+            .replace(Regex("([A-Z])")) { "-${it.value.lowercase()}" }
+            .removePrefix("-")
+            .ifEmpty { className.lowercase() }
         
-        val layerDescription = layerAnnotation.arguments
-            .firstOrNull { it.name?.asString() == "description" }
-            ?.value as? String ?: ""
+        // 레이어 설명: 클래스명 기반 자동 생성
+        val layerDescription = "${className.removeSuffix("Layer")} 레이어"
         
-        // @LayerFunction이 붙은 함수들 찾기
-        val functions = classDecl.getAllFunctions()
+        // 클래스에 선언된 함수만 가져오기 (상속 제외)
+        // getAllFunctions()는 상속된 함수도 포함하므로, containingFile로 필터링
+        val classFile = classDecl.containingFile
+        val allFunctions = classDecl.getAllFunctions()
+            .filter { func -> 
+                val funcFile = func.containingFile
+                funcFile != null && funcFile == classFile
+            }
+        
+        logger.info("Found ${allFunctions.count()} functions in ${className} (excluding inherited)")
+        
+        // @LayerFunction 어노테이션이 붙은 함수만 레이어 API로 노출
+        val functions = allFunctions
             .filter { func ->
-                func.annotations.any { it.shortName.asString() == "LayerFunction" }
+                val name = func.simpleName.asString()
+                val hasLayerFunctionAnnotation = func.annotations.any { 
+                    it.shortName.asString() == "LayerFunction" 
+                }
+                
+                name != "execute" && 
+                name != "describe" &&
+                hasLayerFunctionAnnotation
             }
             .mapNotNull { func -> processFunction(func) }
             .toList()
+        
+        logger.info("Processed ${functions.count()} layer functions")
         
         // LayerDescription 객체 생성 코드 작성
         generateLayerDescription(
@@ -69,34 +97,50 @@ class LayerProcessor(
     }
     
     private fun processFunction(func: KSFunctionDeclaration): FunctionInfo? {
-        val annotation = func.annotations.firstOrNull { 
-            it.shortName.asString() == "LayerFunction" 
-        } ?: return null
+        // 함수명 자동 추출
+        val funcName = func.simpleName.asString()
         
-        val funcName = annotation.arguments
-            .firstOrNull { it.name?.asString() == "name" }
-            ?.value as? String ?: func.simpleName.asString()
+        // 함수 설명: 함수명과 파라미터 정보 기반 자동 생성
+        val paramNames = func.parameters.mapNotNull { it.name?.asString() }
+        val funcDescription = when {
+            paramNames.isEmpty() -> funcName
+            paramNames.size == 1 -> "${funcName}(${paramNames.first()})"
+            else -> "${funcName}(${paramNames.joinToString(", ")})"
+        }
         
-        val funcDescription = annotation.arguments
-            .firstOrNull { it.name?.asString() == "description" }
-            ?.value as? String ?: ""
+        // 반환 타입 자동 추출
+        val returnTypeResolved = func.returnType?.resolve()
+        val returnTypeName = returnTypeResolved?.declaration?.qualifiedName?.asString() ?: "Any"
+        val returnType = when {
+            returnTypeName == "kotlin.String" -> "string"
+            returnTypeName == "kotlin.Int" || returnTypeName == "kotlin.Long" || returnTypeName == "kotlin.Double" -> "number"
+            returnTypeName == "kotlin.Boolean" -> "boolean"
+            returnTypeName.contains("List") || returnTypeName.contains("Array") -> "array"
+            returnTypeName.contains("Map") -> "object"
+            else -> "string" // 기본값
+        }
         
-        val returnType = annotation.arguments
-            .firstOrNull { it.name?.asString() == "returnType" }
-            ?.value as? String ?: "string"
-        
-        // 파라미터 정보 추출
+        // 파라미터 정보 자동 추출
         val parameters = func.parameters.map { param ->
-            val paramType = param.type.resolve().declaration.qualifiedName?.asString() ?: "Any"
-            val hasDefault = param.hasDefault
-            // 기본값은 KDoc이나 어노테이션에서 추출 불가능하므로 null로 설정
-            // 실제 기본값은 런타임에 함수 시그니처에서 확인 가능
-            val defaultValue: String? = null
+            val paramName = param.name?.asString() ?: ""
+            val paramTypeResolved = param.type.resolve()
+            val paramTypeName = paramTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
+            
+            // 기본값 추출 시도
+            val defaultValue: String? = if (param.hasDefault) {
+                // KSP에서 기본값을 직접 추출하기 어려우므로, 파라미터 타입에 따라 추론
+                when {
+                    paramTypeName == "kotlin.Int" -> "0"
+                    paramTypeName == "kotlin.String" -> "\"\""
+                    paramTypeName == "kotlin.Boolean" -> "false"
+                    else -> null
+                }
+            } else null
             
             ParameterInfo(
-                name = param.name?.asString() ?: "",
-                type = paramType,
-                required = !hasDefault,
+                name = paramName,
+                type = paramTypeName.replace("kotlin.", ""),
+                required = !param.hasDefault,
                 defaultValue = defaultValue
             )
         }
@@ -108,6 +152,7 @@ class LayerProcessor(
             parameters = parameters
         )
     }
+    
     
     private fun generateLayerDescription(
         classDecl: KSClassDeclaration,

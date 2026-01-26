@@ -184,15 +184,32 @@ internal class LLMPromptBuilder {
     /**
      * 레이어 설명 포맷팅
      * DRY: 공통 포맷팅 로직
+     * KSP로 생성된 functionDetails 활용하여 상세한 파라미터 정보 제공
      */
     private fun formatLayerDescriptions(
         layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
     ): String {
-        return layerDescriptions.joinToString("\n") { layer ->
+        return layerDescriptions.joinToString("\n\n") { layer ->
+            val functionsInfo = if (layer.functionDetails.isNotEmpty()) {
+                // functionDetails가 있으면 상세 정보 포함
+                layer.functionDetails.values.joinToString("\n    ") { func ->
+                    val paramsInfo = func.parameters.entries.joinToString(", ") { (name, param) ->
+                        val required = if (param.required) "필수" else "선택"
+                        val defaultValue = param.defaultValue?.let { " (기본값: $it)" } ?: ""
+                        "$name: ${param.type} ($required$defaultValue)"
+                    }
+                    "- ${func.name}: ${func.description}\n      파라미터: ($paramsInfo)\n      반환 타입: ${func.returnType}"
+                }
+            } else {
+                // functionDetails가 없으면 함수명만 나열 (하위 호환성)
+                layer.functions.joinToString(", ")
+            }
+            
             """
             레이어: ${layer.name}
             설명: ${layer.description}
-            사용 가능한 함수: ${layer.functions.joinToString(", ")}
+            함수:
+            $functionsInfo
             """.trimIndent()
         }
     }

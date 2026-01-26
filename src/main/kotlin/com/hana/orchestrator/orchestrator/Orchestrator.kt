@@ -119,10 +119,16 @@ class Orchestrator : CommonLayerInterface {
     
     override suspend fun describe(): com.hana.orchestrator.layer.LayerDescription {
         val allDescriptions = getAllLayerDescriptions()
+        // 모든 레이어의 functionDetails를 병합
+        val mergedFunctionDetails = allDescriptions
+            .flatMap { it.functionDetails.entries }
+            .associate { it.key to it.value }
+        
         return com.hana.orchestrator.layer.LayerDescription(
             name = "orchestrator",
             description = "등록된 레이어들을 관리하고 실행: ${allDescriptions.map { it.name }}",
-            functions = allDescriptions.flatMap { it.functions }
+            functions = allDescriptions.flatMap { it.functions },
+            functionDetails = mergedFunctionDetails
         )
     }
     
