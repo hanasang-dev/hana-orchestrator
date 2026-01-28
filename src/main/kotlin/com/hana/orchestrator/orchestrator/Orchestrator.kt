@@ -12,6 +12,7 @@ import com.hana.orchestrator.domain.entity.NodeStatus
 import com.hana.orchestrator.domain.entity.ExecutionContext
 import com.hana.orchestrator.domain.entity.ExecutionResult
 import com.hana.orchestrator.domain.entity.ExecutionHistory
+import com.hana.orchestrator.llm.config.LLMConfig
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -24,10 +25,18 @@ import kotlinx.coroutines.Dispatchers
 
 
 
-class Orchestrator : CommonLayerInterface {
+class Orchestrator(
+    private val llmConfig: LLMConfig? = null
+) : CommonLayerInterface {
     
     private val layers = mutableListOf<CommonLayerInterface>()
-    private val llmClient = OllamaLLMClient()
+    // LLM 설정이 있으면 사용, 없으면 기본값 (하위 호환성)
+    private val llmClient = if (llmConfig != null) {
+        // 일단 기본 모델 사용 (나중에 전략 패턴으로 변경)
+        OllamaLLMClient(llmConfig.complexModelId, llmConfig.complexModelContextLength, llmConfig.timeoutMs)
+    } else {
+        OllamaLLMClient()
+    }
     private val executionHistory = mutableListOf<ExecutionHistory>()
     private var currentExecution: ExecutionHistory? = null
     

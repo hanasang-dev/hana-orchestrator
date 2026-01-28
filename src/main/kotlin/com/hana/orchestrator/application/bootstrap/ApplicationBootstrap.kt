@@ -5,7 +5,9 @@ import com.hana.orchestrator.application.port.PortManager
 import com.hana.orchestrator.application.server.ServerConfigurator
 import com.hana.orchestrator.layer.EchoLayer
 import com.hana.orchestrator.orchestrator.Orchestrator
+import com.hana.orchestrator.llm.config.LLMConfig
 import com.hana.orchestrator.service.PortAllocator
+import com.hana.orchestrator.service.ServiceInfo
 import com.hana.orchestrator.service.ServiceRegistry
 import io.ktor.server.engine.EmbeddedServer
 import kotlinx.coroutines.*
@@ -21,8 +23,19 @@ class ApplicationBootstrap {
     
     /**
      * 애플리케이션 시작
+     * 현재는 환경변수만 사용 (application.conf는 향후 추가)
      */
     suspend fun start(args: Array<String>) {
+        // LLM 설정 로드 (환경변수에서)
+        val llmConfig = LLMConfig.fromEnvironment()
+        
+        startWithLLMConfig(llmConfig, args)
+    }
+    
+    /**
+     * LLMConfig를 직접 받는 시작 메서드 (내부 공통 로직)
+     */
+    private suspend fun startWithLLMConfig(llmConfig: LLMConfig, args: Array<String>) {
         println("🚀 Starting Hana Orchestrator...")
         
         // 명령줄 인자 파싱
@@ -50,8 +63,8 @@ class ApplicationBootstrap {
         val serviceInfo = ServiceRegistry.registerService(port)
         println("📝 Service registered: ${serviceInfo.id}")
         
-        // Orchestrator 초기화 (기본 레이어들은 init에서 자동 등록됨)
-        val orchestrator = Orchestrator()
+        // Orchestrator 초기화 (LLM 설정 전달)
+        val orchestrator = Orchestrator(llmConfig)
         
         // Application scope 생성
         val applicationScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -73,7 +86,7 @@ class ApplicationBootstrap {
     private fun createAndStartServer(
         port: Int,
         orchestrator: Orchestrator,
-        serviceInfo: com.hana.orchestrator.service.ServiceInfo,
+        serviceInfo: ServiceInfo,
         applicationScope: CoroutineScope
     ): EmbeddedServer<*, *> {
         val serverConfigurator = ServerConfigurator(
@@ -89,7 +102,7 @@ class ApplicationBootstrap {
         return server
     }
     
-    private fun printStartupInfo(port: Int, serviceInfo: com.hana.orchestrator.service.ServiceInfo) {
+    private fun printStartupInfo(port: Int, serviceInfo: ServiceInfo) {
         val startTime = System.currentTimeMillis()
         println("\n" + "=".repeat(60))
         println("🌟 Hana Orchestrator Started Successfully!")

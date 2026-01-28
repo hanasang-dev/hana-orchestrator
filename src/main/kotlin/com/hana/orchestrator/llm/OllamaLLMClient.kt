@@ -9,6 +9,7 @@ import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionHistory
 import com.hana.orchestrator.data.model.response.ExecutionTreeResponse
 import com.hana.orchestrator.data.mapper.ExecutionTreeMapper
+import com.hana.orchestrator.llm.config.LLMConfig
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.TimeoutCancellationException
@@ -24,8 +25,17 @@ import kotlinx.coroutines.TimeoutCancellationException
  */
 class OllamaLLMClient(
     private val modelId: String = "qwen3:8b",
-    private val contextLength: Long = 40_960L
+    private val contextLength: Long = 40_960L,
+    private val timeoutMs: Long = 120_000L
 ) {
+    /**
+     * 설정 기반 생성자
+     */
+    constructor(config: LLMConfig, modelId: String, contextLength: Long) : this(
+        modelId = modelId,
+        contextLength = contextLength,
+        timeoutMs = config.timeoutMs
+    )
     // 공통 JSON 설정 (캡슐화)
     private val jsonConfig = Json { 
         ignoreUnknownKeys = true
@@ -63,7 +73,7 @@ class OllamaLLMClient(
     private suspend fun <T> callLLM(
         prompt: String,
         responseParser: (String) -> T,
-        timeoutMs: Long = 120_000L // 120초 타임아웃
+        timeoutMs: Long = this.timeoutMs
     ): T {
         val model = createLLMModel()
         val agent = AIAgent(

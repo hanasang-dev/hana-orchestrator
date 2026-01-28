@@ -50,6 +50,11 @@ out/
 .env.local
 .env.production
 
+# Local configuration files (민감한 정보 포함 가능)
+application.local.conf
+application.dev.conf
+application.prod.conf
+
 # Build artifacts
 .gradle/
 build/
