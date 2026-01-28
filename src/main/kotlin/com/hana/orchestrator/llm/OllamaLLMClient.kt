@@ -7,9 +7,11 @@ import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionHistory
+import com.hana.orchestrator.domain.entity.ExecutionContext
 import com.hana.orchestrator.data.model.response.ExecutionTreeResponse
 import com.hana.orchestrator.data.mapper.ExecutionTreeMapper
 import com.hana.orchestrator.llm.config.LLMConfig
+import com.hana.orchestrator.layer.LayerDescription
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.TimeoutCancellationException
@@ -22,12 +24,13 @@ import kotlinx.coroutines.TimeoutCancellationException
  * - SRP: LLM 통신 책임만 담당, 프롬프트 생성/폴백 처리는 별도 클래스로 분리
  * - DRY: 공통 LLM 호출 로직 추출
  * - 캡슐화: 내부 구현 세부사항 숨김
+ * - DIP: LLMClient 인터페이스 구현
  */
 class OllamaLLMClient(
     private val modelId: String = "qwen3:8b",
     private val contextLength: Long = 40_960L,
     private val timeoutMs: Long = 120_000L
-) {
+) : LLMClient {
     /**
      * 설정 기반 생성자
      */
@@ -113,9 +116,9 @@ class OllamaLLMClient(
     /**
      * 요구사항이 레이어 기능으로 수행 가능한지 사전 검증
      */
-    suspend fun validateQueryFeasibility(
+    override suspend fun validateQueryFeasibility(
         userQuery: String,
-        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
+        layerDescriptions: List<LayerDescription>
     ): QueryFeasibility {
         val prompt = promptBuilder.buildFeasibilityCheckPrompt(userQuery, layerDescriptions)
         
@@ -130,9 +133,9 @@ class OllamaLLMClient(
     /**
      * 사용자 질문과 레이어 정보를 바탕으로 ExecutionTree 구조의 실행 계획을 생성
      */
-    suspend fun createExecutionTree(
+    override suspend fun createExecutionTree(
         userQuery: String,
-        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
+        layerDescriptions: List<LayerDescription>
     ): ExecutionTree {
         val prompt = promptBuilder.buildExecutionTreePrompt(userQuery, layerDescriptions)
         
@@ -148,10 +151,10 @@ class OllamaLLMClient(
     /**
      * 실행 결과가 사용자 요구사항에 부합하는지 LLM이 판단
      */
-    suspend fun evaluateResult(
+    override suspend fun evaluateResult(
         userQuery: String,
         executionResult: String,
-        executionContext: com.hana.orchestrator.domain.entity.ExecutionContext?
+        executionContext: ExecutionContext?
     ): ResultEvaluation {
         val prompt = promptBuilder.buildEvaluationPrompt(userQuery, executionResult, executionContext)
         
@@ -166,10 +169,10 @@ class OllamaLLMClient(
     /**
      * 실패한 실행에 대한 재처리 방안을 LLM이 제시
      */
-    suspend fun suggestRetryStrategy(
+    override suspend fun suggestRetryStrategy(
         userQuery: String,
         previousHistory: ExecutionHistory,
-        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
+        layerDescriptions: List<LayerDescription>
     ): RetryStrategy {
         val prompt = promptBuilder.buildRetryStrategyPrompt(userQuery, previousHistory, layerDescriptions)
         
@@ -206,7 +209,7 @@ class OllamaLLMClient(
     /**
      * 이전 실행과 현재 실행을 비교하여 유의미한 변경이 있는지 LLM이 판단
      */
-    suspend fun compareExecutions(
+    override suspend fun compareExecutions(
         userQuery: String,
         previousTree: ExecutionTree?,
         previousResult: String,
@@ -229,12 +232,12 @@ class OllamaLLMClient(
      * 부모 레이어의 실행 결과를 받아서 자식 레이어 함수의 파라미터로 변환
      * 예: 파일생성 레이어가 "file.txt" 반환 -> 인코딩 레이어의 "filePath" 파라미터로 변환
      */
-    suspend fun extractParameters(
+    override suspend fun extractParameters(
         parentResult: String,
         childLayerName: String,
         childFunctionName: String,
         childFunctionDetails: com.hana.orchestrator.layer.FunctionDescription,
-        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
+        layerDescriptions: List<LayerDescription>
     ): Map<String, Any> {
         val prompt = promptBuilder.buildParameterExtractionPrompt(
             parentResult = parentResult,
@@ -263,7 +266,7 @@ class OllamaLLMClient(
         )
     }
     
-    suspend fun close() {
+    override suspend fun close() {
         // 리소스 정리 (현재는 사용하지 않지만 확장성을 위해 유지)
     }
 }

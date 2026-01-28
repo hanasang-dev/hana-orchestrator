@@ -3,6 +3,7 @@ package com.hana.orchestrator.orchestrator
 import com.hana.orchestrator.layer.LayerFactory
 import com.hana.orchestrator.layer.CommonLayerInterface
 import com.hana.orchestrator.layer.RemoteLayer
+import com.hana.orchestrator.llm.LLMClient
 import com.hana.orchestrator.llm.OllamaLLMClient
 import com.hana.orchestrator.llm.QueryFeasibility
 import com.hana.orchestrator.domain.entity.ExecutionTree
@@ -31,7 +32,8 @@ class Orchestrator(
     
     private val layers = mutableListOf<CommonLayerInterface>()
     // LLM 설정이 있으면 사용, 없으면 기본값 (하위 호환성)
-    private val llmClient = if (llmConfig != null) {
+    // 인터페이스 타입으로 선언하여 추후 다른 구현체로 교체 가능
+    private val llmClient: LLMClient = if (llmConfig != null) {
         // 일단 기본 모델 사용 (나중에 전략 패턴으로 변경)
         OllamaLLMClient(llmConfig.complexModelId, llmConfig.complexModelContextLength, llmConfig.timeoutMs)
     } else {
