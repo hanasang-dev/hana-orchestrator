@@ -29,7 +29,7 @@ dependencies {
     // Kotlinx serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
     
-    // Logging
+    // Logging (SLF4J + Logback)
     implementation("ch.qos.logback:logback-classic:1.5.13")
     
     // Koog AI Framework - Latest stable version

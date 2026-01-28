@@ -13,6 +13,7 @@ class LayerManager {
     private val cachedDescriptions = mutableSetOf<LayerDescription>()
     private val layerNameMap = mutableMapOf<String, CommonLayerInterface>() // 이름 -> 레이어 매핑
     private var isInitialized = false
+    private val logger = createOrchestratorLogger(LayerManager::class.java, null)
     
     /**
      * 기본 레이어 초기화 (lazy initialization)
@@ -20,15 +21,15 @@ class LayerManager {
     private suspend fun ensureInitialized() {
         if (!isInitialized) {
             val defaultLayers = LayerFactory.createDefaultLayers()
-            println("🔧 [LayerManager] 기본 레이어 초기화: ${defaultLayers.size}개 레이어 등록")
+            logger.info("🔧 [LayerManager] 기본 레이어 초기화: ${defaultLayers.size}개 레이어 등록")
             defaultLayers.forEach { layer ->
-                println("  - 레이어 인스턴스 생성됨: ${layer::class.simpleName}")
+                logger.debug("  - 레이어 인스턴스 생성됨: ${layer::class.simpleName}")
                 val desc = layer.describe()
                 layerNameMap[desc.name] = layer
             }
             layers.addAll(defaultLayers)
             isInitialized = true
-            println("✅ [LayerManager] 총 ${layers.size}개 레이어 등록 완료")
+            logger.info("✅ [LayerManager] 총 ${layers.size}개 레이어 등록 완료")
         }
     }
     

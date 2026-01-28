@@ -22,6 +22,7 @@ class TreeExecutor(
     private val statePublisher: ExecutionStatePublisher,
     private val historyManager: ExecutionHistoryManager
 ) {
+    private val logger = createOrchestratorLogger(TreeExecutor::class.java, historyManager)
     /**
      * ExecutionTree를 재귀적으로 실행
      */
@@ -31,16 +32,12 @@ class TreeExecutor(
     ): ExecutionResult {
         val context = ExecutionContext()
         val treeStartTime = System.currentTimeMillis()
-        val treeStartMsg = "🌳 [TreeExecutor] 실행 트리 시작: ${tree.name}"
-        println(treeStartMsg)
-        historyManager.addLogToCurrent(treeStartMsg)
+        logger.info("🌳 [TreeExecutor] 실행 트리 시작: ${tree.name}")
         
         val result = executeNode(tree.rootNode, context, parentNodeId = null, depth = 0)
         
         val treeDuration = System.currentTimeMillis() - treeStartTime
-        val treePerfMsg = "⏱️ [PERF] executeTree 총 소요 시간: ${treeDuration}ms"
-        println(treePerfMsg)
-        historyManager.addLogToCurrent(treePerfMsg)
+        logger.perf("⏱️ [PERF] executeTree 총 소요 시간: ${treeDuration}ms")
         
         // 실행 중인 경우 현재 실행 상태 업데이트 (노드 레벨 정보 포함)
         val updatedHistory = statePublisher.updateCurrentExecutionWithContext(
@@ -49,27 +46,27 @@ class TreeExecutor(
         historyManager.setCurrentExecution(updatedHistory)
         
         // 실행 완료 후 전체 상태 로그 출력
-        println("\n📊 [TreeExecutor] ========== 실행 결과 요약 ==========")
-        println("✅ 성공한 노드: ${context.completedNodes.size}개")
+        logger.debug("\n📊 [TreeExecutor] ========== 실행 결과 요약 ==========")
+        logger.debug("✅ 성공한 노드: ${context.completedNodes.size}개")
         context.completedNodes.forEach { nodeResult ->
-            println("   - ${nodeResult.nodeId}: ${nodeResult.node.layerName}.${nodeResult.node.function} (depth=${nodeResult.depth})")
+            logger.debug("   - ${nodeResult.nodeId}: ${nodeResult.node.layerName}.${nodeResult.node.function} (depth=${nodeResult.depth})")
         }
         
-        println("❌ 실패한 노드: ${context.failedNodes.size}개")
+        logger.debug("❌ 실패한 노드: ${context.failedNodes.size}개")
         context.failedNodes.forEach { nodeResult ->
-            println("   - ${nodeResult.nodeId}: ${nodeResult.node.layerName}.${nodeResult.node.function} (depth=${nodeResult.depth})")
+            logger.debug("   - ${nodeResult.nodeId}: ${nodeResult.node.layerName}.${nodeResult.node.function} (depth=${nodeResult.depth})")
             val errorText = nodeResult.error ?: "Unknown error"
-            println("     에러: $errorText")
+            logger.debug("     에러: $errorText")
         }
         
         val skippedCount = context.countByStatus(NodeStatus.SKIPPED)
-        println("⏭️ 건너뛴 노드: ${skippedCount}개")
+        logger.debug("⏭️ 건너뛴 노드: ${skippedCount}개")
         context.getAllResults().values.filter { it.isSkipped }.forEach { nodeResult ->
-            println("   - ${nodeResult.nodeId}: ${nodeResult.node.layerName}.${nodeResult.node.function} (부모 실패로 인해 건너뜀)")
+            logger.debug("   - ${nodeResult.nodeId}: ${nodeResult.node.layerName}.${nodeResult.node.function} (부모 실패로 인해 건너뜀)")
         }
         
-        println("📊 전체 노드 수: ${context.getAllResults().size}개")
-        println("==========================================\n")
+        logger.debug("📊 전체 노드 수: ${context.getAllResults().size}개")
+        logger.debug("==========================================\n")
         
         // 최종 결과: 루트 노드의 최종 결과를 사용
         val resultText = if (result.isSuccess && result.result != null && result.result.isNotEmpty()) {
@@ -111,12 +108,12 @@ class TreeExecutor(
                 node, NodeStatus.SKIPPED, depth, parentNodeId,
                 error = "Parent node failed"
             )
-            println("${indent}⏭️ [TreeExecutor] 건너뜀: ${node.layerName}.${node.function} (부모 실패)")
+            logger.debug("${indent}⏭️ [TreeExecutor] 건너뜀: ${node.layerName}.${node.function} (부모 실패)")
             return skippedResult
         }
         
         val runningResult = context.recordNode(node, NodeStatus.RUNNING, depth, parentNodeId)
-        println("${indent}🎯 [TreeExecutor] 실행 시작: ${node.layerName}.${node.function} (id=$nodeId, depth=$depth, parent=$parentNodeId, children=${node.children.size}, parallel=${node.parallel})")
+        logger.debug("${indent}🎯 [TreeExecutor] 실행 시작: ${node.layerName}.${node.function} (id=$nodeId, depth=$depth, parent=$parentNodeId, children=${node.children.size}, parallel=${node.parallel})")
         
         val layer = layerManager.findLayerByName(node.layerName)
         
@@ -125,7 +122,7 @@ class TreeExecutor(
                 node, NodeStatus.FAILED, depth, parentNodeId,
                 error = "Layer '${node.layerName}' not found"
             )
-            println("${indent}❌ [TreeExecutor] 레이어를 찾을 수 없음: ${node.layerName}")
+            logger.error("${indent}❌ [TreeExecutor] 레이어를 찾을 수 없음: ${node.layerName}")
             return failedResult
         }
         
@@ -136,20 +133,16 @@ class TreeExecutor(
             val remoteUrl = if (isRemote) layer.baseUrl else null
             
             val execStartMsg = "${indent}▶️ [TreeExecutor] ${node.layerName}.${node.function} 실행 중...${if (isRemote) " (원격: $remoteUrl)" else ""}"
-            println(execStartMsg)
-            historyManager.addLogToCurrent(execStartMsg)
+            logger.info(execStartMsg)
             val nodeStartTime = System.currentTimeMillis()
             val execResult = layer.execute(node.function, node.args)
             val nodeDuration = System.currentTimeMillis() - nodeStartTime
             val execCompleteMsg = "${indent}✅ [TreeExecutor] ${node.layerName}.${node.function} 완료: ${execResult.take(50)}... (${nodeDuration}ms)"
-            println(execCompleteMsg)
-            historyManager.addLogToCurrent(execCompleteMsg)
+            logger.info(execCompleteMsg)
             
             context.recordNode(node, NodeStatus.SUCCESS, depth, parentNodeId, result = execResult)
         } catch (e: Exception) {
-            val execErrorMsg = "${indent}❌ [TreeExecutor] ${node.layerName}.${node.function} 에러: ${e.message}"
-            println(execErrorMsg)
-            historyManager.addLogToCurrent(execErrorMsg)
+            logger.error("${indent}❌ [TreeExecutor] ${node.layerName}.${node.function} 에러: ${e.message}", e)
             
             context.recordNode(
                 node, NodeStatus.FAILED, depth, parentNodeId,
@@ -161,18 +154,14 @@ class TreeExecutor(
         if (executionResult.isFailure) {
             val failMsg = "${indent}⚠️ [TreeExecutor] 노드 실패: ${node.layerName}.${node.function} (id=$nodeId, depth=$depth)"
             val retryPointMsg = "${indent}   재시도 시작점: ${context.findRetryStartPoint(nodeId)}"
-            println(failMsg)
-            println(retryPointMsg)
-            historyManager.addLogToCurrent(failMsg)
-            historyManager.addLogToCurrent(retryPointMsg)
+            logger.warn(failMsg)
+            logger.debug(retryPointMsg)
             // 재시도 로직은 다음 단계에서 추가
         } else if (executionResult.isSuccess) {
             val successMsg = "${indent}✅ [TreeExecutor] 노드 성공: ${node.layerName}.${node.function} (id=$nodeId)"
             val previewMsg = "${indent}   결과 미리보기: ${executionResult.resultText.take(100)}"
-            println(successMsg)
-            println(previewMsg)
-            historyManager.addLogToCurrent(successMsg)
-            historyManager.addLogToCurrent(previewMsg)
+            logger.debug(successMsg)
+            logger.debug(previewMsg)
         }
         
         // 자식 노드 실행

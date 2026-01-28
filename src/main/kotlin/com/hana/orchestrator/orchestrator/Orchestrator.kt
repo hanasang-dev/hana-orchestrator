@@ -30,6 +30,9 @@ class Orchestrator(
     private val clientFactory: LLMClientFactory
     private val modelSelectionStrategy: ModelSelectionStrategy
     
+    // Logger
+    private val logger = createOrchestratorLogger(Orchestrator::class.java, null)
+    
     init {
         // LLM 설정 초기화
         val config = llmConfig ?: LLMConfig.fromEnvironment()
@@ -51,8 +54,8 @@ class Orchestrator(
         
         // 기본 레이어 초기화는 suspend 함수이므로 init 블록에서는 할 수 없음
         // 대신 첫 실행 시 초기화하도록 변경 필요하지만, 일단은 나중에 처리
-        println("🚀 [Orchestrator] 초기화 시작...")
-        println("⚠️ [Orchestrator] 레이어 초기화는 첫 실행 시 수행됩니다")
+        logger.info("🚀 [Orchestrator] 초기화 시작...")
+        logger.info("⚠️ [Orchestrator] 레이어 초기화는 첫 실행 시 수행됩니다")
     }
     
     // Public API (Facade)
