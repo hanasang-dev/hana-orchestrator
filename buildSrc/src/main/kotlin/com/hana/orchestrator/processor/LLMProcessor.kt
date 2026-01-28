@@ -1,0 +1,210 @@
+package com.hana.orchestrator.processor
+
+import com.google.devtools.ksp.processing.*
+import com.google.devtools.ksp.symbol.*
+import com.google.devtools.ksp.validate
+import com.squareup.kotlinpoet.*
+import java.io.OutputStreamWriter
+
+/**
+ * KSP 프로세서: LLMClient 인터페이스의 @LLMTask 어노테이션을 읽어서
+ * ModelSelectionStrategy 구현체를 자동 생성
+ */
+class LLMProcessor(
+    private val codeGenerator: CodeGenerator,
+    private val logger: KSPLogger,
+    private val options: Map<String, String>
+) : SymbolProcessor {
+    
+    override fun process(resolver: Resolver): List<KSAnnotated> {
+        logger.info("KSP LLMProcessor started, looking for @LLMTask annotations")
+        
+        // @LLMTask 어노테이션이 붙은 심볼 찾기
+        val llmTaskAnnotationName = "com.hana.orchestrator.llm.LLMTask"
+        val annotatedSymbols = resolver
+            .getSymbolsWithAnnotation(llmTaskAnnotationName)
+            .filterIsInstance<KSFunctionDeclaration>()
+            .filter { it.validate() }
+            .toList()
+        
+        logger.info("Found ${annotatedSymbols.size} methods with @LLMTask annotation")
+        
+        if (annotatedSymbols.isEmpty()) {
+            logger.warn("No methods with @LLMTask annotation found")
+            return emptyList()
+        }
+        
+        // 각 메서드의 복잡도 추출
+        val methodComplexities = annotatedSymbols.mapNotNull { func ->
+            val annotation = func.annotations.firstOrNull { 
+                it.shortName.asString() == "LLMTask" 
+            } ?: return@mapNotNull null
+            
+            // complexity 인자 추출
+            val complexityArg = annotation.arguments.firstOrNull { 
+                it.name?.asString() == "complexity" 
+            }
+            
+            // enum 값 추출
+            val complexityValue = complexityArg?.value
+            val complexityName = when {
+                complexityValue is KSClassDeclaration -> complexityValue.simpleName.asString()
+                complexityValue is String -> complexityValue
+                complexityValue?.toString()?.contains("SIMPLE") == true -> "SIMPLE"
+                complexityValue?.toString()?.contains("MEDIUM") == true -> "MEDIUM"
+                complexityValue?.toString()?.contains("COMPLEX") == true -> "COMPLEX"
+                else -> {
+                    logger.warn("Could not extract complexity for ${func.simpleName.asString()}")
+                    null
+                }
+            } ?: return@mapNotNull null
+            
+            val methodName = func.simpleName.asString()
+            
+            MethodComplexity(methodName, complexityName)
+        }
+        
+        logger.info("Extracted complexities: ${methodComplexities.joinToString { "${it.methodName}=${it.complexity}" }}")
+        
+        // 전략 클래스 생성
+        generateModelSelectionStrategy(methodComplexities)
+        
+        return emptyList()
+    }
+    
+    private fun generateModelSelectionStrategy(methodComplexities: List<MethodComplexity>) {
+        val packageName = "com.hana.orchestrator.llm.strategy"
+        val className = "GeneratedModelSelectionStrategy"
+        
+        logger.info("Generating $className with ${methodComplexities.size} method mappings")
+        
+        // 전략 클래스 생성
+        val strategyClass = TypeSpec.classBuilder(className)
+            .addModifiers(KModifier.INTERNAL)
+            .addSuperinterface(
+                ClassName("com.hana.orchestrator.llm.strategy", "ModelSelectionStrategy")
+            )
+            .primaryConstructor(
+                FunSpec.constructorBuilder()
+                    .addParameter("simpleModelClient", ClassName("com.hana.orchestrator.llm", "LLMClient"))
+                    .addParameter("mediumModelClient", ClassName("com.hana.orchestrator.llm", "LLMClient"))
+                    .addParameter("complexModelClient", ClassName("com.hana.orchestrator.llm", "LLMClient"))
+                    .build()
+            )
+            .addProperty(
+                PropertySpec.builder("simpleModelClient", ClassName("com.hana.orchestrator.llm", "LLMClient"))
+                    .initializer("simpleModelClient")
+                    .addModifiers(KModifier.PRIVATE)
+                    .build()
+            )
+            .addProperty(
+                PropertySpec.builder("mediumModelClient", ClassName("com.hana.orchestrator.llm", "LLMClient"))
+                    .initializer("mediumModelClient")
+                    .addModifiers(KModifier.PRIVATE)
+                    .build()
+            )
+            .addProperty(
+                PropertySpec.builder("complexModelClient", ClassName("com.hana.orchestrator.llm", "LLMClient"))
+                    .initializer("complexModelClient")
+                    .addModifiers(KModifier.PRIVATE)
+                    .build()
+            )
+            .addFunctions(generateStrategyMethods(methodComplexities))
+            .build()
+        
+        val fileSpec = FileSpec.builder(packageName, className)
+            .addFileComment("Auto-generated by KSP LLM Processor\nDo not edit manually")
+            .addType(strategyClass)
+            .build()
+        
+        // 기존 파일이 있으면 덮어쓰기
+        val file = try {
+            codeGenerator.createNewFile(
+                Dependencies(false),
+                packageName,
+                className
+            )
+        } catch (e: Exception) {
+            // 파일이 이미 존재하면 덮어쓰기
+            logger.warn("File already exists, will overwrite: ${e.message}")
+            codeGenerator.createNewFile(
+                Dependencies(false),
+                packageName,
+                className
+            )
+        }
+        
+        OutputStreamWriter(file).use { writer ->
+            fileSpec.writeTo(writer)
+            writer.flush()
+        }
+        
+        logger.info("Generated $className successfully")
+    }
+    
+    private fun generateStrategyMethods(methodComplexities: List<MethodComplexity>): List<FunSpec> {
+        val methods = mutableListOf<FunSpec>()
+        
+        // 메서드명 -> 복잡도 매핑
+        val methodToComplexity = methodComplexities.associate { 
+            it.methodName to it.complexity 
+        }
+        
+        // 각 메서드에 대한 전략 메서드 생성
+        methodComplexities.forEach { methodComplexity ->
+            val methodName = methodComplexity.methodName
+            val complexity = methodComplexity.complexity
+            
+            // 메서드명을 전략 메서드명으로 변환
+            // 예: validateQueryFeasibility -> selectClientForFeasibilityCheck
+            val strategyMethodName = when (methodName) {
+                "validateQueryFeasibility" -> "selectClientForFeasibilityCheck"
+                "createExecutionTree" -> "selectClientForTreeCreation"
+                "evaluateResult" -> "selectClientForEvaluation"
+                "suggestRetryStrategy" -> "selectClientForRetryStrategy"
+                "compareExecutions" -> "selectClientForComparison"
+                "extractParameters" -> "selectClientForParameterExtraction"
+                else -> {
+                    // 기본 변환: camelCase -> selectClientFor + PascalCase
+                    val pascalCase = methodName.replaceFirstChar { it.uppercaseChar() }
+                    "selectClientFor$pascalCase"
+                }
+            }
+            
+            // 복잡도에 따라 적절한 클라이언트 선택
+            val clientProperty = when (complexity) {
+                "SIMPLE" -> "simpleModelClient"
+                "MEDIUM" -> "mediumModelClient"
+                "COMPLEX" -> "complexModelClient"
+                else -> "mediumModelClient" // 기본값
+            }
+            
+            val method = FunSpec.builder(strategyMethodName)
+                .addModifiers(KModifier.OVERRIDE)
+                .returns(ClassName("com.hana.orchestrator.llm", "LLMClient"))
+                .addStatement("return $clientProperty")
+                .build()
+            
+            methods.add(method)
+        }
+        
+        return methods
+    }
+    
+    data class MethodComplexity(
+        val methodName: String,
+        val complexity: String
+    )
+}
+
+class LLMProcessorProvider : SymbolProcessorProvider {
+    override fun create(
+        environment: SymbolProcessorEnvironment
+    ): SymbolProcessor {
+        return LLMProcessor(
+            environment.codeGenerator,
+            environment.logger,
+            environment.options
+        )
+    }
+}
