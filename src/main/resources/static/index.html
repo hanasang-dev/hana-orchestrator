@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Hana Orchestrator - Layer Management</title>
     <style>
         * {
@@ -15,12 +18,94 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
+            overflow-x: hidden;
+            overflow-y: auto;
             padding: 20px;
+            margin: 0;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        
+        @media (min-width: 1200px) {
+            body {
+                height: 100vh;
+                overflow: hidden;
+                width: 100%;
+                padding: 0; /* 넓은 화면에서는 body padding 제거 (헤더가 이미 20px 여백 있음) */
+            }
         }
         
         .container {
-            max-width: 1200px;
-            margin: 0 auto;
+            width: 100%;
+            max-width: 100%;
+            margin: 0;
+            min-height: calc(100vh - 40px);
+            display: flex;
+            flex-direction: column;
+            overflow: visible;
+            position: relative;
+            gap: 20px;
+            padding: 0;
+        }
+        
+        /* 좁은 화면에서는 세로 스크롤 가능 */
+        @media (max-width: 1199px) {
+            .container {
+                overflow-y: visible;
+            }
+            
+            .left-panel,
+            .right-panel {
+                width: 100%;
+            }
+        }
+        
+        /* 넓은 화면에서는 좌우 레이아웃 (1200px 이상) */
+        @media (min-width: 1200px) {
+            .container {
+                flex-direction: row !important;
+                gap: 20px;
+                align-items: flex-start;
+                height: calc(100vh - 140px) !important;
+                overflow: hidden;
+                width: 100% !important;
+                max-width: 100% !important;
+            }
+            
+            .left-panel {
+                flex: 0 0 500px !important;
+                display: flex !important;
+                flex-direction: column !important;
+                overflow: hidden;
+                min-width: 500px !important;
+                max-width: 500px !important;
+                width: 500px !important;
+                height: 100%;
+            }
+            
+            .right-panel {
+                flex: 1 1 0 !important;
+                display: flex !important;
+                flex-direction: column !important;
+                overflow: hidden;
+                min-width: 0;
+                max-width: none !important;
+                width: auto !important;
+                height: 100%;
+            }
+            
+            .card.resizable {
+                max-height: none;
+            }
+            
+            /* 실행 이력 카드는 오른쪽에서 전체 높이 사용 */
+            #executionsCard {
+                flex: 1 1 0 !important;
+                min-height: 0;
+                height: 100% !important;
+                width: 100% !important;
+                max-width: 100% !important;
+            }
         }
         
         .header {
@@ -28,7 +113,59 @@
             padding: 30px;
             border-radius: 10px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            margin-bottom: 30px;
+            margin-bottom: 20px;
+            flex-shrink: 0;
+            max-width: 100%;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        @media (min-width: 1200px) {
+            body {
+                display: flex;
+                flex-direction: column;
+                width: 100%;
+                overflow-x: hidden;
+            }
+            
+            .header {
+                position: fixed;
+                top: 20px;
+                left: 20px;
+                right: 20px;
+                z-index: 1000;
+                margin-bottom: 0;
+                width: calc(100% - 40px);
+                max-width: calc(100% - 40px);
+                height: auto;
+            }
+            
+            .container {
+                margin-top: 0 !important;
+                padding-top: 180px !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                padding-left: 20px;
+                padding-right: 20px;
+                box-sizing: border-box;
+            }
+            
+            .left-panel,
+            .right-panel {
+                margin-top: 0;
+            }
+        }
+        
+        /* 좁은 화면에서는 헤더가 일반 위치에 */
+        @media (max-width: 1199px) {
+            .header {
+                position: relative;
+                margin-bottom: 20px;
+            }
+            
+            .container {
+                margin-top: 0;
+            }
         }
         
         .header h1 {
@@ -45,7 +182,92 @@
             padding: 25px;
             border-radius: 10px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            margin-bottom: 20px;
+            margin-bottom: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            min-height: 0;
+        }
+        
+        .card:first-of-type {
+            flex: 0 0 auto;
+        }
+        
+        .card.resizable {
+            flex: 1 1 0;
+            min-height: 150px;
+            max-height: none;
+        }
+        
+        .card-content {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            min-height: 0;
+            padding-bottom: 30px !important; /* 하단 패딩 추가로 내용이 잘리지 않도록 (강제 적용) */
+            box-sizing: border-box;
+        }
+        
+        .section-resize-handle {
+            height: 20px;
+            background: #667eea;
+            cursor: ns-resize;
+            position: relative;
+            flex-shrink: 0;
+            margin: 5px 0;
+            border-radius: 10px;
+            transition: all 0.2s;
+            z-index: 100;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+            border: 2px solid #5568d3;
+        }
+        
+        @media (min-width: 1200px) {
+            .section-resize-handle {
+                display: none; /* 넓은 화면에서는 세로 리사이저 숨김 */
+            }
+        }
+        
+        .section-resize-handle:hover {
+            background: #5568d3;
+            height: 24px;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.6);
+            border-color: #4455c2;
+        }
+        
+        .section-resize-handle::before {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 100px;
+            height: 5px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 3px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        }
+        
+        .section-resize-handle::after {
+            content: '드래그하여 높이 조절';
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 10px;
+            line-height: 1;
+            font-weight: 600;
+            white-space: nowrap;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+            margin-top: 8px;
+        }
+        
+        .section-resize-handle.resizing {
+            background: #4455c2;
+            height: 24px;
+            box-shadow: 0 6px 16px rgba(102, 126, 234, 0.8);
+            border-color: #3344b1;
         }
         
         .card h2 {
@@ -321,48 +543,109 @@
         .node-stat strong {
             color: #333;
         }
+        
+        .execution-tree {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        
+        .execution-tree strong {
+            display: block;
+            margin-bottom: 10px;
+            color: #667eea;
+            font-size: 14px;
+        }
+        
+        .tree-node {
+            margin-left: 20px;
+            margin-bottom: 8px;
+            padding-left: 15px;
+            border-left: 2px solid #667eea;
+        }
+        
+        .tree-node-root {
+            margin-left: 0;
+            border-left: none;
+            padding-left: 0;
+        }
+        
+        .tree-node-label {
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        
+        .tree-node-info {
+            color: #666;
+            font-size: 11px;
+            margin-left: 10px;
+        }
+        
+        .tree-node-parallel {
+            color: #764ba2;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+        
     </style>
 </head>
 <body>
+    <div class="header">
+        <h1>🌟 Hana Orchestrator</h1>
+        <p>레이어 관리 대시보드</p>
+    </div>
+    
     <div class="container">
-        <div class="header">
-            <h1>🌟 Hana Orchestrator</h1>
-            <p>레이어 관리 대시보드</p>
-        </div>
-        
-        <div class="card">
-            <h2>🔗 원격 레이어 등록</h2>
-            <div id="registerMessage"></div>
-            <form id="registerForm">
-                <div class="form-group">
-                    <label for="baseUrl">원격 서버 URL:</label>
-                    <input type="url" id="baseUrl" placeholder="http://localhost:8081" required>
+        <div class="left-panel">
+            <div class="card" id="registerCard">
+                <h2>🔗 원격 레이어 등록</h2>
+                <div class="card-content">
+                    <div id="registerMessage"></div>
+                    <form id="registerForm">
+                        <div class="form-group">
+                            <label for="baseUrl">원격 서버 URL:</label>
+                            <input type="url" id="baseUrl" placeholder="http://localhost:8081" required>
+                        </div>
+                        <button type="submit">등록</button>
+                    </form>
                 </div>
-                <button type="submit">등록</button>
-            </form>
-        </div>
-        
-        <div class="card">
-            <h2>
-                📋 등록된 레이어 목록
-                <button class="refresh-btn" onclick="loadLayers()">새로고침</button>
-            </h2>
-            <div id="layersList">
-                <p>로딩 중...</p>
+            </div>
+            
+            <div class="section-resize-handle" id="resizeHandle1"></div>
+            
+            <div class="card resizable" id="layersCard">
+                <h2>
+                    📋 등록된 레이어 목록
+                    <button class="refresh-btn" onclick="loadLayers()">새로고침</button>
+                </h2>
+                <div class="card-content">
+                    <div id="layersList">
+                        <p>로딩 중...</p>
+                    </div>
+                </div>
             </div>
         </div>
         
-        <div class="card">
-            <h2>
-                🚀 실행 이력
-                <button class="refresh-btn" onclick="loadExecutions()">새로고침</button>
-                <label style="margin-left: 10px;">
-                    <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()">
-                    자동 새로고침
-                </label>
-            </h2>
-            <div id="executionsList" style="max-height: 300px; overflow-y: auto;">
-                <p>로딩 중...</p>
+        <div class="right-panel">
+            <div class="card resizable" id="executionsCard">
+                <h2>
+                    🚀 실행 이력
+                    <button class="refresh-btn" onclick="loadExecutions()">새로고침</button>
+                    <label style="margin-left: 10px;">
+                        <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()">
+                        자동 새로고침
+                    </label>
+                </h2>
+                <div class="card-content">
+                    <div id="executionsList">
+                        <p>로딩 중...</p>
+                    </div>
+                </div>
             </div>
         </div>
         
@@ -493,7 +776,7 @@
             };
         }
         
-        // 실행 이력 UI 업데이트
+        // 실행 이력 UI 업데이트 (플리커링 방지: 기존 요소 재사용)
         function updateExecutionsUI(data) {
             const executionsList = document.getElementById('executionsList');
             
@@ -501,6 +784,21 @@
                 executionsList.innerHTML = '<p>데이터를 받지 못했습니다.</p>';
                 return;
             }
+            
+            // 펼쳐진 상태와 스크롤 위치 저장
+            const expandedStates = new Map();
+            const scrollPositions = new Map();
+            document.querySelectorAll('.execution-item').forEach(item => {
+                const execId = item.getAttribute('data-id');
+                const details = item.querySelector('.execution-details');
+                if (details && details.classList.contains('expanded')) {
+                    expandedStates.set(execId, true);
+                    const logContent = item.querySelector(`#log-content-${execId}`);
+                    if (logContent) {
+                        scrollPositions.set(execId, logContent.scrollTop);
+                    }
+                }
+            });
             
             let html = '';
             
@@ -519,6 +817,37 @@
             }
             
             executionsList.innerHTML = html;
+            
+            // 펼쳐진 상태 복원 및 스크롤 위치 복원
+            setTimeout(() => {
+                expandedStates.forEach((isExpanded, execId) => {
+                    const item = document.querySelector(`[data-id="${execId}"]`);
+                    if (item) {
+                        const details = item.querySelector('.execution-details');
+                        const logsDiv = item.querySelector(`#logs-${execId}`);
+                        const logContent = item.querySelector(`#log-content-${execId}`);
+                        
+                        if (details && isExpanded) {
+                            details.classList.add('expanded');
+                            if (logsDiv) {
+                                logsDiv.style.display = 'block';
+                            }
+                            
+                            // 로그 업데이트
+                            const execData = findExecutionData(execId);
+                            if (execData && execData.logs && execData.logs.length > 0) {
+                                updateExecutionLogs(execId, execData.logs);
+                                
+                                // 스크롤 위치 복원
+                                if (logContent && scrollPositions.has(execId)) {
+                                    const savedScroll = scrollPositions.get(execId);
+                                    logContent.scrollTop = savedScroll;
+                                }
+                            }
+                        }
+                    }
+                });
+            }, 0);
             
             // 로그 업데이트 (펼쳐진 항목만, 또는 현재 실행 중인 항목)
             setTimeout(() => {
@@ -540,7 +869,7 @@
                 }
             }, 100);
             
-            // 접기/펼치기 이벤트 추가
+            // 접기/펼치기 이벤트 추가 (기존 이벤트 리스너 제거 후 재추가)
             document.querySelectorAll('.execution-item').forEach(item => {
                 const execId = item.getAttribute('data-id');
                 const details = item.querySelector('.execution-details');
@@ -549,30 +878,36 @@
                 
                 // 헤더 클릭 시 상세 정보 토글
                 const header = item.querySelector('.execution-header');
-                header.style.cursor = 'pointer';
-                header.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    if (details) {
-                        const isExpanded = details.classList.contains('expanded');
-                        details.classList.toggle('expanded');
-                        
-                        // 펼칠 때 로그 표시
-                        if (!isExpanded) {
-                            if (logsDiv) {
-                                logsDiv.style.display = 'block';
-                            }
-                            // 실행 데이터에서 로그 가져오기
-                            const execData = findExecutionData(execId);
-                            if (execData && execData.logs && execData.logs.length > 0) {
-                                // 즉시 로그 표시
-                                updateExecutionLogs(execId, execData.logs);
-                            } else if (logContent) {
-                                // 캐시에 없으면 로드 시도
-                                loadExecutionLogs(execId, logContent);
+                if (header) {
+                    header.style.cursor = 'pointer';
+                    // 기존 이벤트 리스너 제거 (중복 방지)
+                    const newHeader = header.cloneNode(true);
+                    header.parentNode.replaceChild(newHeader, header);
+                    
+                    newHeader.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        if (details) {
+                            const isExpanded = details.classList.contains('expanded');
+                            details.classList.toggle('expanded');
+                            
+                            // 펼칠 때 로그 표시
+                            if (!isExpanded) {
+                                if (logsDiv) {
+                                    logsDiv.style.display = 'block';
+                                }
+                                // 실행 데이터에서 로그 가져오기
+                                const execData = findExecutionData(execId);
+                                if (execData && execData.logs && execData.logs.length > 0) {
+                                    // 즉시 로그 표시
+                                    updateExecutionLogs(execId, execData.logs);
+                                } else if (logContent) {
+                                    // 캐시에 없으면 로드 시도
+                                    loadExecutionLogs(execId, logContent);
+                                }
                             }
                         }
-                    }
-                });
+                    });
+                }
             });
             
             // 실행 데이터 저장 (로그 업데이트용)
@@ -664,6 +999,13 @@
             }
             
             try {
+                // 현재 스크롤 위치 확인 (사용자가 스크롤을 올렸는지 확인)
+                // innerHTML 설정 전에 스크롤 위치 저장
+                const scrollHeightBefore = logContentElement.scrollHeight;
+                const scrollTopBefore = logContentElement.scrollTop;
+                const clientHeight = logContentElement.clientHeight;
+                const wasScrolledToBottom = scrollHeightBefore - scrollTopBefore <= clientHeight + 10;
+                
                 const html = logs.map(log => {
                     if (!log) return '';
                     let logClass = 'log-info';
@@ -681,14 +1023,114 @@
                     return '<div class="log-line ' + logClass + '">' + escapedLog + '</div>';
                 }).join('');
                 
+                // innerHTML 설정
                 logContentElement.innerHTML = html;
                 
-                // 자동 스크롤
-                logContentElement.scrollTop = logContentElement.scrollHeight;
+                // requestAnimationFrame을 사용하여 DOM 업데이트 후 스크롤 위치 조정
+                requestAnimationFrame(() => {
+                    if (wasScrolledToBottom) {
+                        // 사용자가 맨 아래에 있었을 때만 자동 스크롤
+                        logContentElement.scrollTop = logContentElement.scrollHeight;
+                    } else {
+                        // 사용자가 위로 스크롤했을 때는 스크롤 위치 유지
+                        // 새 콘텐츠가 추가되어도 상대적 위치 유지
+                        const scrollHeightAfter = logContentElement.scrollHeight;
+                        const heightDiff = scrollHeightAfter - scrollHeightBefore;
+                        if (heightDiff > 0) {
+                            // 새 콘텐츠가 추가된 경우, 기존 스크롤 위치에 높이 차이만큼 더함
+                            logContentElement.scrollTop = scrollTopBefore + heightDiff;
+                        } else {
+                            // 높이가 줄어든 경우 (이론적으로는 발생하지 않아야 함)
+                            logContentElement.scrollTop = scrollTopBefore;
+                        }
+                    }
+                });
             } catch (error) {
                 console.error('로그 업데이트 오류:', error);
                 logContentElement.innerHTML = '<div class="log-line log-error">로그 표시 오류: ' + String(error.message || error) + '</div>';
             }
+        }
+        
+        // 섹션 리사이저 기능
+        function initSectionResizers() {
+            const registerCard = document.getElementById('registerCard');
+            const layersCard = document.getElementById('layersCard');
+            const executionsCard = document.getElementById('executionsCard');
+            const handle1 = document.getElementById('resizeHandle1');
+            const handle2 = document.getElementById('resizeHandle2');
+            
+            if (!registerCard || !layersCard || !executionsCard || !handle1 || !handle2) return;
+            
+            let currentHandle = null;
+            let isResizing = false;
+            let startY = 0;
+            let startRegisterHeight = 0;
+            let startLayersHeight = 0;
+            let startExecutionsHeight = 0;
+            
+            function startResize(handle, e) {
+                isResizing = true;
+                currentHandle = handle;
+                startY = e.clientY;
+                startRegisterHeight = registerCard.offsetHeight;
+                startLayersHeight = layersCard.offsetHeight;
+                startExecutionsHeight = executionsCard.offsetHeight;
+                handle.classList.add('resizing');
+                document.body.style.cursor = 'ns-resize';
+                document.body.style.userSelect = 'none';
+                e.preventDefault();
+            }
+            
+            function handleMouseMove(e) {
+                if (!isResizing || !currentHandle) return;
+                
+                const deltaY = e.clientY - startY;
+                const container = document.querySelector('.container');
+                const header = document.querySelector('.header');
+                const availableHeight = container.offsetHeight - header.offsetHeight - handle1.offsetHeight - handle2.offsetHeight - 60; // 패딩 등 여유 공간
+                
+                if (currentHandle === handle1) {
+                    // 레이어 등록과 레이어 목록 사이
+                    const newRegisterHeight = startRegisterHeight + deltaY;
+                    const newLayersHeight = startLayersHeight - deltaY;
+                    const minHeight = 100;
+                    
+                    if (newRegisterHeight >= minHeight && newLayersHeight >= minHeight) {
+                        registerCard.style.flex = `0 0 ${newRegisterHeight}px`;
+                        layersCard.style.flex = `1 1 ${newLayersHeight}px`;
+                    }
+                } else if (currentHandle === handle2) {
+                    // 레이어 목록과 실행 이력 사이
+                    const newLayersHeight = startLayersHeight + deltaY;
+                    const newExecutionsHeight = startExecutionsHeight - deltaY;
+                    const minHeight = 150;
+                    
+                    if (newLayersHeight >= minHeight && newExecutionsHeight >= minHeight) {
+                        layersCard.style.flex = `1 1 ${newLayersHeight}px`;
+                        executionsCard.style.flex = `1 1 ${newExecutionsHeight}px`;
+                    }
+                }
+            }
+            
+            function stopResize() {
+                if (isResizing && currentHandle) {
+                    isResizing = false;
+                    currentHandle.classList.remove('resizing');
+                    currentHandle = null;
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                }
+            }
+            
+            handle1.addEventListener('mousedown', (e) => startResize(handle1, e));
+            handle2.addEventListener('mousedown', (e) => startResize(handle2, e));
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', stopResize);
+            
+            // 초기 높이 설정
+            registerCard.style.flex = '0 0 auto';
+            layersCard.style.flex = '1 1 0';
+            executionsCard.style.flex = '1 1 0';
         }
         
         function renderExecution(exec, isCurrent) {
@@ -735,6 +1177,12 @@
                         </div>
                     </div>
                     <div class="execution-details" id="details-${exec.id}">
+                        ${exec.executionTree ? `
+                            <div class="execution-tree" id="tree-${exec.id}">
+                                <strong>🌳 실행 트리:</strong>
+                                ${renderExecutionTree(exec.executionTree.rootNode, 0)}
+                            </div>
+                        ` : ''}
                         ${exec.result ? `
                             <div class="execution-result">
                                 <strong>결과:</strong><br>
@@ -783,6 +1231,33 @@
             return window.executionDataCache.get(execId) || null;
         }
         
+        // 실행 트리 렌더링 함수
+        function renderExecutionTree(node, depth) {
+            if (!node) return '';
+            
+            const indent = depth * 20;
+            const isRoot = depth === 0;
+            const nodeClass = isRoot ? 'tree-node tree-node-root' : 'tree-node';
+            const parallelBadge = node.parallel ? '<span class="tree-node-parallel">[병렬]</span>' : '';
+            
+            let html = `<div class="${nodeClass}" style="margin-left: ${indent}px;">
+                <div class="tree-node-label">
+                    ${node.layerName}.${node.function}${parallelBadge}
+                </div>
+                <div class="tree-node-info">
+                    ${Object.keys(node.args).length > 0 ? `args: ${JSON.stringify(node.args)}` : 'args: {}'}
+                </div>`;
+            
+            if (node.children && node.children.length > 0) {
+                node.children.forEach(child => {
+                    html += renderExecutionTree(child, depth + 1);
+                });
+            }
+            
+            html += '</div>';
+            return html;
+        }
+        
         // 실행 로그 로드 함수
         function loadExecutionLogs(execId, logContentElement) {
             if (!logContentElement) return;
@@ -800,6 +1275,8 @@
         loadLayers();
         loadExecutions(); // 초기 로드
         connectWebSocket(); // WebSocket 연결 시작
+        initSectionResizers(); // 섹션 리사이저 초기화
+        initSectionResizers(); // 섹션 리사이저 초기화
         
         // 실행 중인 작업의 경과 시간을 주기적으로 업데이트
         setInterval(() => {

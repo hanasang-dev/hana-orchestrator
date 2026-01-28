@@ -42,3 +42,13 @@ data class ComparisonResult(
     val isSignificantlyDifferent: Boolean,
     val reason: String
 )
+
+/**
+ * 요구사항 실행 가능성 검증 결과
+ */
+@Serializable
+data class QueryFeasibility(
+    val feasible: Boolean,
+    val reason: String,
+    val suggestion: String? = null
+)

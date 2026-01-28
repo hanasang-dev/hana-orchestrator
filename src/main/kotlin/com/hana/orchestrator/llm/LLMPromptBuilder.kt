@@ -10,6 +10,36 @@ import com.hana.orchestrator.domain.entity.ExecutionHistory
  */
 internal class LLMPromptBuilder {
     /**
+     * 요구사항 실행 가능성 검증 프롬프트
+     */
+    fun buildFeasibilityCheckPrompt(
+        userQuery: String,
+        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
+    ): String {
+        val layersInfo = formatLayerDescriptionsCompact(layerDescriptions)
+        
+        return """사용자 요청: "$userQuery"
+
+사용 가능한 레이어 및 기능:
+$layersInfo
+
+요청이 위 레이어들의 기능으로 수행 가능한지 판단하세요.
+
+JSON으로 응답:
+{
+    "feasible": true/false,
+    "reason": "판단 이유",
+    "suggestion": "불가능한 경우 대안 제시 (선택적)"
+}
+
+기준:
+- feasible: 레이어 기능으로 수행 가능 여부
+- reason: 판단 이유 (가능한 경우 어떻게 수행할 수 있는지, 불가능한 경우 왜 불가능한지)
+- suggestion: 불가능한 경우 사용자에게 제안할 대안 (선택적)
+- JSON만 출력""".trimIndent()
+    }
+    
+    /**
      * 실행 트리 생성 프롬프트
      */
     fun buildExecutionTreePrompt(
@@ -50,13 +80,10 @@ JSON 형식으로 실행 트리를 생성하세요:
         executionResult: String,
         executionContext: com.hana.orchestrator.domain.entity.ExecutionContext?
     ): String {
-        return """요구사항: "$userQuery"
-결과: "$executionResult"
-
-중요 제약사항:
-- text-transformer.toUpperCase는 영문자만 대문자로 변환 가능 (한글/중국어/일본어 등은 변환 안됨)
-- 한글/비영문 텍스트에 toUpperCase 적용 시 결과가 입력과 동일하면 변환 실패로 간주
-- 요구사항에 "대문자로 변환"이 있으면 결과가 입력과 달라야 함
+        val contextInfo = formatExecutionContext(executionContext)
+        
+        return """
+        당신은 실행 결과 평가자입니다. 사용자의 요구사항과 실제 실행 결과를 비교하여 평가해주세요.
 
 JSON으로 평가:
 {

@@ -2,6 +2,8 @@ package com.hana.orchestrator.presentation.controller
 
 import com.hana.orchestrator.orchestrator.Orchestrator
 import com.hana.orchestrator.presentation.mapper.ExecutionHistoryMapper.toExecutionState
+import com.hana.orchestrator.presentation.model.execution.ExecutionState
+import com.hana.orchestrator.presentation.model.execution.ExecutionUpdateMessage
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
@@ -104,24 +106,3 @@ class ExecutionWebSocketController(
     }
 }
 
-@Serializable
-data class ExecutionState(
-    val id: String,
-    val query: String,
-    val result: String,
-    val error: String? = null,
-    val startTime: Long,
-    val endTime: Long? = null,
-    val status: String,
-    val nodeCount: Int = 0,
-    val completedNodes: Int = 0,
-    val failedNodes: Int = 0,
-    val runningNodes: Int = 0,
-    val logs: List<String> = emptyList()
-)
-
-@Serializable
-data class ExecutionUpdateMessage(
-    val history: List<ExecutionState>,
-    val current: ExecutionState? = null
-)

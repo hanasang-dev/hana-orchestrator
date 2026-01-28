@@ -4,6 +4,7 @@ import com.hana.orchestrator.layer.LayerFactory
 import com.hana.orchestrator.layer.CommonLayerInterface
 import com.hana.orchestrator.layer.RemoteLayer
 import com.hana.orchestrator.llm.OllamaLLMClient
+import com.hana.orchestrator.llm.QueryFeasibility
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionNode
 import com.hana.orchestrator.domain.entity.NodeExecutionResult
@@ -212,6 +213,66 @@ class Orchestrator : CommonLayerInterface {
                         val queryMsg = "🔍 [Orchestrator] 사용자 쿼리 수신: $query"
                         println(queryMsg)
                         addLog(queryMsg)
+                        
+                        // 요구사항 실행 가능성 사전 검증
+                        val feasibilityCheckMsg = "🔎 [Orchestrator] 요구사항 실행 가능성 검증 중..."
+                        println(feasibilityCheckMsg)
+                        addLog(feasibilityCheckMsg)
+                        val feasibilityStartTime = System.currentTimeMillis()
+                        val feasibility = try {
+                            llmClient.validateQueryFeasibility(query, allDescriptions)
+                        } catch (feasibilityException: Exception) {
+                            val errorMsg = "⚠️ [Orchestrator] 요구사항 검증 실패: ${feasibilityException.message}, 트리 생성 계속 진행"
+                            println(errorMsg)
+                            addLog(errorMsg)
+                            // 검증 실패해도 트리 생성은 계속 진행 (검증이 실패해도 실행 가능할 수 있음)
+                            QueryFeasibility(feasible = true, reason = "검증 실패로 인해 계속 진행")
+                        }
+                        val feasibilityDuration = System.currentTimeMillis() - feasibilityStartTime
+                        val feasibilityPerfMsg = "⏱️ [PERF] 요구사항 검증 완료: ${feasibilityDuration}ms"
+                        println(feasibilityPerfMsg)
+                        addLog(feasibilityPerfMsg)
+                        
+                        if (!feasibility.feasible) {
+                            val rejectionMsg = "❌ [Orchestrator] 요구사항 실행 불가능: ${feasibility.reason}"
+                            println(rejectionMsg)
+                            addLog(rejectionMsg)
+                            val suggestionMsg = if (feasibility.suggestion != null) {
+                                "💡 [Orchestrator] 제안: ${feasibility.suggestion}"
+                            } else {
+                                null
+                            }
+                            if (suggestionMsg != null) {
+                                println(suggestionMsg)
+                                addLog(suggestionMsg)
+                            }
+                            
+                            val errorMessage = if (feasibility.suggestion != null) {
+                                "${feasibility.reason}\n\n제안: ${feasibility.suggestion}"
+                            } else {
+                                feasibility.reason
+                            }
+                            
+                            val failedHistory = ExecutionHistory.createFailed(
+                                executionId, query,
+                                errorMessage,
+                                startTime,
+                                logs = currentExecution?.logs ?: mutableListOf()
+                            )
+                            executionHistory.add(failedHistory)
+                            emitExecutionUpdate(failedHistory)
+                            currentExecution = null
+                            return ExecutionResult(result = "", error = errorMessage)
+                        }
+                        
+                        val feasibleMsg = "✅ [Orchestrator] 요구사항 실행 가능: ${feasibility.reason}"
+                        println(feasibleMsg)
+                        addLog(feasibleMsg)
+                        
+                        val treeStartMsg = "🌳 [Orchestrator] 실행 트리 생성 시작..."
+                        println(treeStartMsg)
+                        addLog(treeStartMsg)
+                        
                         val treeStartTime = System.currentTimeMillis()
                         val tree = try {
                             llmClient.createExecutionTree(query, allDescriptions)
@@ -219,15 +280,19 @@ class Orchestrator : CommonLayerInterface {
                             val errorMsg = "❌ [Orchestrator] 트리 생성 실패: ${treeException.message}"
                             println(errorMsg)
                             addLog(errorMsg)
+                            
+                            // 로그 복사 (currentExecution이 null이 되기 전에)
+                            val logsCopy = currentExecution?.logs?.toMutableList() ?: mutableListOf()
+                            
                             val failedHistory = ExecutionHistory.createFailed(
                                 executionId, query,
                                 "트리 생성 실패: ${treeException.message}",
                                 startTime,
-                                logs = currentExecution?.logs ?: mutableListOf()
+                                logs = logsCopy
                             )
                             executionHistory.add(failedHistory)
-                            emitExecutionUpdate(failedHistory)
                             currentExecution = null
+                            emitExecutionUpdate(failedHistory)
                             return ExecutionResult(result = "", error = "트리 생성 실패: ${treeException.message}")
                         }
                         val treeDuration = System.currentTimeMillis() - treeStartTime

@@ -1,12 +1,14 @@
 package com.hana.orchestrator.presentation.mapper
 
 import com.hana.orchestrator.domain.entity.ExecutionHistory
-import com.hana.orchestrator.presentation.controller.ExecutionState
+import com.hana.orchestrator.presentation.mapper.ExecutionTreeMapper.toResponse
 import com.hana.orchestrator.presentation.model.execution.ExecutionHistoryResponse
+import com.hana.orchestrator.presentation.model.execution.ExecutionState
+import com.hana.orchestrator.presentation.model.execution.ExecutionTreeResponse
 
 /**
  * ExecutionHistory → Presentation Model 변환
- * SRP: 도메인 엔티티를 프레젠테이션 모델로 변환만 담당
+ * SRP: ExecutionHistory 변환만 담당 (트리 변환은 ExecutionTreeMapper에 위임)
  * DRY: 공통 변환 로직을 추출
  */
 object ExecutionHistoryMapper {
@@ -22,6 +24,7 @@ object ExecutionHistoryMapper {
      */
     fun ExecutionHistory.toExecutionHistoryResponse(): ExecutionHistoryResponse {
         val state = createExecutionState(this)
+        val tree = this.result.executionTree?.toResponse()
         return ExecutionHistoryResponse(
             id = state.id,
             query = state.query,
@@ -34,7 +37,8 @@ object ExecutionHistoryMapper {
             completedNodes = state.completedNodes,
             failedNodes = state.failedNodes,
             runningNodes = state.runningNodes,
-            logs = state.logs
+            logs = state.logs,
+            executionTree = tree
         )
     }
     
@@ -44,6 +48,7 @@ object ExecutionHistoryMapper {
      */
     private fun createExecutionState(history: ExecutionHistory): ExecutionState {
         val context = history.result.context
+        val tree = history.result.executionTree?.toResponse()
         return ExecutionState(
             id = history.id,
             query = history.query,
@@ -56,7 +61,8 @@ object ExecutionHistoryMapper {
             completedNodes = context?.completedNodes?.size ?: 0,
             failedNodes = context?.failedNodes?.size ?: 0,
             runningNodes = context?.runningNodes?.size ?: 0,
-            logs = history.logs.toList()
+            logs = history.logs.toList(),
+            executionTree = tree
         )
     }
 }
