@@ -72,7 +72,7 @@ class LayerController(
                 
                 // function이 레이어 이름인지 확인
                 val layerDescriptions = orchestrator.getAllLayerDescriptions()
-                val targetLayer = layerDescriptions.find { it.name == request.function }
+                val targetLayer = layerDescriptions.find { desc -> desc.name == request.function }
                 
                 val result = if (targetLayer != null) {
                     // 레이어 이름이면 해당 레이어의 기본 함수 실행
@@ -81,12 +81,12 @@ class LayerController(
                 } else {
                     // 레이어 이름이 아니면 모든 레이어에서 함수를 찾아서 실행
                     // 먼저 orchestrator 레이어에서 찾기 (원격 레이어가 등록된 경우)
-                    val orchestratorLayer = layerDescriptions.find { it.name == "orchestrator" }
+                    val orchestratorLayer = layerDescriptions.find { desc -> desc.name == "orchestrator" }
                     if (orchestratorLayer != null && orchestratorLayer.functions.contains(request.function)) {
                         orchestrator.executeOnLayer("orchestrator", request.function, args)
                     } else {
                         // 다른 레이어에서 함수 찾기
-                        val layerWithFunction = layerDescriptions.find { it.functions.contains(request.function) }
+                        val layerWithFunction = layerDescriptions.find { desc -> desc.functions.contains(request.function) }
                         if (layerWithFunction != null) {
                             orchestrator.executeOnLayer(layerWithFunction.name, request.function, args)
                         } else {
