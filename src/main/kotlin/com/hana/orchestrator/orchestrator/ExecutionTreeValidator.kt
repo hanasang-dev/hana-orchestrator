@@ -11,7 +11,7 @@ class ExecutionTreeValidator(
     private val availableLayers: List<LayerDescription>
 ) {
     private val layerMap = availableLayers.associateBy { it.name }
-    
+
     /**
      * 트리 유효성 검증 결과
      */
@@ -21,34 +21,49 @@ class ExecutionTreeValidator(
         val warnings: List<String> = emptyList(),
         val fixedTree: ExecutionTree? = null
     )
-    
+
     /**
      * 트리 구조를 검증하고 필요시 수정
+     * 다중 루트 노드를 지원: 각 루트는 독립적으로 검증됨
      */
     fun validateAndFix(tree: ExecutionTree, userQuery: String): ValidationResult {
         val errors = mutableListOf<String>()
         val warnings = mutableListOf<String>()
         
-        // 트리 깊이 검증
-        val depth = calculateTreeDepth(tree.rootNode)
-        if (depth > MAX_TREE_DEPTH) {
-            errors.add("트리 깊이($depth)가 최대값($MAX_TREE_DEPTH)을 초과합니다.")
+        // 루트 노드가 없는 경우 에러
+        if (tree.rootNodes.isEmpty()) {
+            errors.add("실행 트리에 루트 노드가 없습니다.")
+            return ValidationResult(
+                isValid = false,
+                errors = errors,
+                warnings = warnings,
+                fixedTree = null
+            )
         }
         
-        // 순환 참조 검증
-        val cycleDetected = detectCycle(tree.rootNode)
-        if (cycleDetected) {
-            errors.add("트리 구조에 순환 참조가 감지되었습니다.")
+        // 각 루트 노드 검증 및 수정
+        val fixedRootNodes = tree.rootNodes.mapIndexed { index, rootNode ->
+            // 트리 깊이 검증
+            val depth = calculateTreeDepth(rootNode)
+            if (depth > MAX_TREE_DEPTH) {
+                errors.add("루트 노드 #${index + 1}의 트리 깊이($depth)가 최대값($MAX_TREE_DEPTH)을 초과합니다.")
+            }
+            
+            // 순환 참조 검증
+            val cycleDetected = detectCycle(rootNode)
+            if (cycleDetected) {
+                errors.add("루트 노드 #${index + 1}의 트리 구조에 순환 참조가 감지되었습니다.")
+            }
+            
+            // 노드 검증 및 수정
+            validateAndFixNode(rootNode, userQuery, errors, warnings, depth = 0)
         }
-        
-        // 루트 노드 검증 및 수정
-        val fixedRoot = validateAndFixNode(tree.rootNode, userQuery, errors, warnings, depth = 0)
         
         return if (errors.isEmpty()) {
             ValidationResult(
                 isValid = true,
                 warnings = warnings,
-                fixedTree = ExecutionTree(rootNode = fixedRoot, name = tree.name)
+                fixedTree = ExecutionTree(rootNodes = fixedRootNodes, name = tree.name)
             )
         } else {
             // 에러가 있으면 null 반환 (폴백 없이 실패 처리)
@@ -60,7 +75,7 @@ class ExecutionTreeValidator(
             )
         }
     }
-    
+
     /**
      * 트리 깊이 계산
      */
@@ -70,7 +85,7 @@ class ExecutionTreeValidator(
         }
         return node.children.maxOfOrNull { calculateTreeDepth(it, currentDepth + 1) } ?: currentDepth
     }
-    
+
     /**
      * 순환 참조 감지
      */
@@ -80,20 +95,20 @@ class ExecutionTreeValidator(
             return true
         }
         visited.add(nodeKey)
-        
+
         for (child in node.children) {
             if (detectCycle(child, visited.toMutableSet())) {
                 return true
             }
         }
-        
+
         return false
     }
-    
+
     companion object {
         private const val MAX_TREE_DEPTH = 10
     }
-    
+
     /**
      * 노드를 재귀적으로 검증하고 수정
      */
@@ -109,6 +124,7 @@ class ExecutionTreeValidator(
             errors.add("노드 깊이가 최대값을 초과했습니다. 자식 노드들을 제거합니다.")
             return node.copy(children = emptyList())
         }
+        
         // 레이어명 검증
         val layerDescription = layerMap[node.layerName]
         if (layerDescription == null) {
@@ -137,11 +153,17 @@ class ExecutionTreeValidator(
                 }
             }
         }
-        
+
         // 함수명 검증
         val layerDesc = layerMap[node.layerName] ?: return node
         if (!layerDesc.functions.contains(node.function)) {
-            warnings.add("레이어 '${node.layerName}'에 함수 '${node.function}'가 없습니다. 사용 가능한 함수: ${layerDesc.functions.joinToString(", ")}")
+            warnings.add(
+                "레이어 '${node.layerName}'에 함수 '${node.function}'가 없습니다. 사용 가능한 함수: ${
+                    layerDesc.functions.joinToString(
+                        ", "
+                    )
+                }"
+            )
             // 첫 번째 함수로 대체
             val fallbackFunction = layerDesc.functions.firstOrNull() ?: "execute"
             warnings.add("함수 '${node.function}'를 '${fallbackFunction}'로 자동 수정합니다.")
@@ -152,20 +174,20 @@ class ExecutionTreeValidator(
                 warnings
             )
         }
-        
-        // args에 query가 없으면 추가
-        val fixedArgs = if (!node.args.containsKey("query")) {
-            warnings.add("노드에 'query' 인자가 없어 자동으로 추가합니다.")
-            node.args + ("query" to userQuery)
-        } else {
-            node.args
+
+        // args는 그대로 사용 (query는 더 이상 필수가 아님)
+        val fixedArgs = node.args
+
+        // 병렬 실행 검증: parallel=true인데 children이 1개면 경고
+        if (node.parallel && node.children.size < 2) {
+            warnings.add("병렬 실행(parallel=true)인데 자식 노드가 ${node.children.size}개입니다. 병렬 실행은 자식 노드가 2개 이상일 때 의미가 있습니다.")
         }
-        
+
         // 자식 노드들 재귀적으로 검증 및 수정
         val fixedChildren = node.children.map { child ->
             validateAndFixNode(child, userQuery, errors, warnings, depth + 1)
         }
-        
+
         return ExecutionNode(
             layerName = node.layerName,
             function = node.function,
@@ -175,27 +197,26 @@ class ExecutionTreeValidator(
             id = node.id
         )
     }
-    
+
     /**
      * 유사한 레이어명 찾기 (간단한 문자열 매칭)
      */
     private fun findSimilarLayer(layerName: String): LayerDescription? {
         // 정확히 일치하는 경우
         layerMap[layerName]?.let { return it }
-        
+
         // 대소문자 무시 매칭
         layerMap.keys.firstOrNull { it.equals(layerName, ignoreCase = true) }?.let {
             return layerMap[it]
         }
-        
+
         // 부분 문자열 매칭
-        layerMap.keys.firstOrNull { 
+        layerMap.keys.firstOrNull {
             it.contains(layerName, ignoreCase = true) || layerName.contains(it, ignoreCase = true)
         }?.let {
             return layerMap[it]
         }
-        
+
         return null
     }
-    
 }

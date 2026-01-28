@@ -18,24 +18,20 @@ internal class LLMPromptBuilder {
     ): String {
         val layersInfo = formatLayerDescriptionsCompact(layerDescriptions)
         
-        return """사용자 요청: "$userQuery"
+        return """요청: "$userQuery"
 
-사용 가능한 레이어 및 기능:
+레이어:
 $layersInfo
 
-요청이 위 레이어들의 기능으로 수행 가능한지 판단하세요.
+가능 여부 판단:
 
-JSON으로 응답:
-{
-    "feasible": true/false,
-    "reason": "판단 이유",
-    "suggestion": "불가능한 경우 대안 제시 (선택적)"
-}
+JSON:
+{"feasible":true,"reason":"이유","suggestion":"대안(선택)"}
 
-기준:
-- feasible: 레이어 기능으로 수행 가능 여부
-- reason: 판단 이유 (가능한 경우 어떻게 수행할 수 있는지, 불가능한 경우 왜 불가능한지)
-- suggestion: 불가능한 경우 사용자에게 제안할 대안 (선택적)
+규칙:
+- feasible: 가능 여부
+- reason: 판단 이유
+- suggestion: 불가능시 대안(선택)
 - JSON만 출력""".trimIndent()
     }
     
@@ -48,27 +44,18 @@ JSON으로 응답:
     ): String {
         val layersInfo = formatLayerDescriptionsCompact(layerDescriptions)
         
-        return """사용자 요청: "$userQuery"
+        return """요청: "$userQuery"
 
-사용 가능한 레이어:
+레이어:
 $layersInfo
 
-JSON 형식으로 실행 트리를 생성하세요:
-{
-    "rootNode": {
-        "layerName": "레이어명",
-        "function": "함수명",
-        "args": {"key": "value"},
-        "parallel": false,
-        "children": []
-    }
-}
+JSON 생성:
+{"rootNodes":[{"layerName":"레이어명","function":"함수명","args":{"파라미터명":"값"},"parallel":false,"children":[]}]}
 
 규칙:
-- rootNode는 하나만
-- children으로 순서 정의
-- parallel=true면 병렬 실행
-- args에 "query" 포함
+- rootNodes: 여러 개면 병렬 실행
+- parallel: true=children 병렬, false=순차
+- args: 실제 파라미터명 사용
 - JSON만 출력""".trimIndent()
     }
     
@@ -113,26 +100,19 @@ JSON으로 평가:
 이전 결과: "$previousResult"
 에러: ${previousHistory.result.error ?: "없음"}
 
-사용 가능한 레이어:
+레이어:
 $layersInfo
 
-JSON으로 재처리 방안 제시:
-{
-    "shouldStop": true/false,
-    "reason": "이유",
-    "newTree": {
-        "rootNode": {
-            "layerName": "레이어명",
-            "function": "함수명",
-            "args": {},
-            "parallel": false,
-            "children": []
-        }
-    }
-}
+JSON:
+{"shouldStop":false,"reason":"이유","newTree":{"rootNodes":[{"layerName":"레이어명","function":"함수명","args":{},"parallel":false,"children":[]}]}}
 
+규칙:
 - shouldStop: 해결 불가능시만 true
+- reason: 필수
 - newTree: 재처리 트리 (shouldStop=true면 무시)
+- rootNodes: 여러 개면 병렬 실행
+- parallel: true=children 병렬, false=순차
+- JSON만 출력
 - JSON만 출력""".trimIndent()
     }
     
@@ -146,8 +126,10 @@ JSON으로 재처리 방안 제시:
         currentTree: ExecutionTree,
         currentResult: String
     ): String {
-        val prevTree = previousTree?.let { "${it.rootNode.layerName}.${it.rootNode.function}" } ?: "없음"
-        val currTree = "${currentTree.rootNode.layerName}.${currentTree.rootNode.function}"
+        val prevTree = previousTree?.let { 
+            it.rootNodes.joinToString(", ") { node -> "${node.layerName}.${node.function}" }
+        } ?: "없음"
+        val currTree = currentTree.rootNodes.joinToString(", ") { node -> "${node.layerName}.${node.function}" }
         
         return """요구사항: "$userQuery"
 이전 트리: $prevTree
@@ -168,7 +150,7 @@ JSON으로 비교:
     }
     
     /**
-     * 레이어 설명 포맷팅 (간소화 버전)
+     * 레이어 설명 포맷팅 (간소화 버전 - 최소한의 정보만)
      */
     private fun formatLayerDescriptionsCompact(
         layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
@@ -176,11 +158,13 @@ JSON으로 비교:
         return layerDescriptions.joinToString("\n") { layer ->
             val funcs = if (layer.functionDetails.isNotEmpty()) {
                 layer.functionDetails.values.joinToString(", ") { func ->
-                    val params = func.parameters.keys.joinToString(",")
+                    val params = func.parameters.entries.joinToString(",") { (name, param) ->
+                        "$name:${param.type}"
+                    }
                     "${func.name}($params)"
                 }
             } else {
-                layer.functions.joinToString(",")
+                layer.functions.joinToString(", ")
             }
             "${layer.name}: $funcs"
         }
@@ -230,8 +214,8 @@ JSON으로 비교:
         return tree?.let { t ->
             """
             실행 트리:
-            - 루트: ${t.rootNode.layerName}.${t.rootNode.function}
-            - 자식 수: ${t.rootNode.children.size}
+            - 루트 노드 수: ${t.rootNodes.size}
+            - 루트들: ${t.rootNodes.joinToString(", ") { "${it.layerName}.${it.function}" }}
             """.trimIndent()
         } ?: "트리 정보 없음"
     }

@@ -190,17 +190,17 @@ class OllamaLLMClient(
      * SRP: 파싱 로직 분리
      */
     private fun parseRetryStrategy(retryResponse: RetryStrategyResponse): RetryStrategy {
-        return if (retryResponse.shouldStop) {
+        return if (retryResponse.shouldStop || retryResponse.newTree == null) {
             RetryStrategy(
                 shouldStop = true,
-                reason = retryResponse.reason,
+                reason = retryResponse.reason.ifEmpty { "재처리 불가능" },
                 newTree = null
             )
         } else {
             val newTree = ExecutionTreeMapper.toExecutionTree(retryResponse.newTree)
             RetryStrategy(
                 shouldStop = false,
-                reason = retryResponse.reason,
+                reason = retryResponse.reason.ifEmpty { "재처리 방안 제시" },
                 newTree = newTree
             )
         }

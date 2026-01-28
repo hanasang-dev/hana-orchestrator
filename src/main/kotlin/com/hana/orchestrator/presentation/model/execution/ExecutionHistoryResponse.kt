@@ -14,7 +14,7 @@ data class ExecutionTreeNodeResponse(
 
 @Serializable
 data class ExecutionTreeResponse(
-    val rootNode: ExecutionTreeNodeResponse,
+    val rootNodes: List<ExecutionTreeNodeResponse>,
     val name: String = "execution_plan"
 )
 

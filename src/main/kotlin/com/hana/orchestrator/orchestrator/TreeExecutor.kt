@@ -25,6 +25,7 @@ class TreeExecutor(
     private val logger = createOrchestratorLogger(TreeExecutor::class.java, historyManager)
     /**
      * ExecutionTree를 재귀적으로 실행
+     * 다중 루트 노드를 지원: 각 루트는 독립적으로 실행되며 병렬 실행 가능
      */
     suspend fun executeTree(
         tree: ExecutionTree,
@@ -32,18 +33,19 @@ class TreeExecutor(
     ): ExecutionResult {
         val context = ExecutionContext()
         val treeStartTime = System.currentTimeMillis()
-        logger.info("🌳 [TreeExecutor] 실행 트리 시작: ${tree.name}")
+        logger.info("🌳 [TreeExecutor] 실행 트리 시작: ${tree.name} (루트 노드 ${tree.rootNodes.size}개)")
         
-        val result = executeNode(tree.rootNode, context, parentNodeId = null, depth = 0)
+        // 다중 루트 노드 실행 (병렬 실행)
+        val rootResults = coroutineScope {
+            tree.rootNodes.map { rootNode ->
+                async {
+                    executeNode(rootNode, context, parentNodeId = null, depth = 0)
+                }
+            }.awaitAll()
+        }
         
         val treeDuration = System.currentTimeMillis() - treeStartTime
         logger.perf("⏱️ [PERF] executeTree 총 소요 시간: ${treeDuration}ms")
-        
-        // 실행 중인 경우 현재 실행 상태 업데이트 (노드 레벨 정보 포함)
-        val updatedHistory = statePublisher.updateCurrentExecutionWithContext(
-            currentExecution, context, tree, result
-        )
-        historyManager.setCurrentExecution(updatedHistory)
         
         // 실행 완료 후 전체 상태 로그 출력
         logger.debug("\n📊 [TreeExecutor] ========== 실행 결과 요약 ==========")
@@ -68,9 +70,10 @@ class TreeExecutor(
         logger.debug("📊 전체 노드 수: ${context.getAllResults().size}개")
         logger.debug("==========================================\n")
         
-        // 최종 결과: 루트 노드의 최종 결과를 사용
-        val resultText = if (result.isSuccess && result.result != null && result.result.isNotEmpty()) {
-            result.result
+        // 최종 결과: 모든 루트 노드의 결과를 결합
+        val allRootResults = rootResults.mapNotNull { it.result }.filter { it.isNotEmpty() }
+        val resultText = if (allRootResults.isNotEmpty()) {
+            allRootResults.joinToString("\n")
         } else if (context.completedNodes.isNotEmpty()) {
             // 루트 노드 결과가 없으면 fallback으로 모든 성공 노드 결과 결합
             val allResults = context.completedNodes
@@ -78,16 +81,29 @@ class TreeExecutor(
                 .mapNotNull { it.result }
                 .filter { it.isNotEmpty() }
                 .joinToString("\n")
-            allResults.ifEmpty { result.resultText }
+            if (allResults.isNotEmpty()) {
+                allResults
+            } else {
+                "실행 완료 (결과 없음)"
+            }
         } else {
-            result.resultText
+            "실행 완료 (결과 없음)"
         }
         
-        return ExecutionResult(
+        // 최종 결과 계산
+        val finalResult = ExecutionResult(
             result = resultText,
             executionTree = tree,
             context = context
         )
+        
+        // 실행 중인 경우 현재 실행 상태 업데이트 (노드 레벨 정보 포함)
+        val updatedHistory = statePublisher.updateCurrentExecutionWithContext(
+            currentExecution, context, tree, finalResult
+        )
+        historyManager.setCurrentExecution(updatedHistory)
+        
+        return finalResult
     }
     
     /**
@@ -115,6 +131,7 @@ class TreeExecutor(
         val runningResult = context.recordNode(node, NodeStatus.RUNNING, depth, parentNodeId)
         logger.debug("${indent}🎯 [TreeExecutor] 실행 시작: ${node.layerName}.${node.function} (id=$nodeId, depth=$depth, parent=$parentNodeId, children=${node.children.size}, parallel=${node.parallel})")
         
+        // 레이어 함수 실행
         val layer = layerManager.findLayerByName(node.layerName)
         
         if (layer == null) {
@@ -126,7 +143,6 @@ class TreeExecutor(
             return failedResult
         }
         
-        // 현재 노드 실행
         val executionResult: NodeExecutionResult = try {
             // 원격 레이어인지 확인
             val isRemote = layer is RemoteLayer
@@ -182,31 +198,51 @@ class TreeExecutor(
                 }
             }
             
-            // 자식 결과를 부모 결과에 통합
+            // 자식 노드 실행 후, 마지막 자식 노드의 결과를 부모 노드의 최종 결과로 사용
+            // (순차 실행의 경우 마지막 결과가 최종 결과, 병렬 실행의 경우 모든 결과 결합)
             val allChildrenResults = childrenResults.mapNotNull { it.result }
                 .filter { it.isNotEmpty() }
-                .joinToString("\n")
             
             if (allChildrenResults.isNotEmpty()) {
-                val combinedResult = if (executionResult.result != null && executionResult.result.isNotEmpty()) {
-                    "${executionResult.result}\n$allChildrenResults"
+                // 순차 실행: 마지막 자식 노드의 결과만 사용 (최종 결과)
+                // 병렬 실행: 모든 자식 노드 결과 결합
+                val finalChildResult = if (node.parallel) {
+                    allChildrenResults.joinToString("\n")
                 } else {
-                    allChildrenResults
+                    allChildrenResults.last() // 순차 실행이면 마지막 결과만
                 }
                 
-                // 부모 노드 결과 업데이트
+                // 최종 상태 결정: 자식 노드들의 상태를 확인
+                val finalStatus = if (childrenResults.any { it.isFailure }) {
+                    NodeStatus.FAILED
+                } else if (childrenResults.all { it.isSuccess }) {
+                    NodeStatus.SUCCESS
+                } else {
+                    executionResult.status
+                }
+                
+                // 자식 노드 중 실패한 것이 있으면 에러 메시지 수집
+                val finalError = if (childrenResults.any { it.isFailure }) {
+                    childrenResults.filter { it.isFailure }
+                        .mapNotNull { it.error }
+                        .joinToString("; ")
+                } else {
+                    executionResult.error
+                }
+                
+                // 부모 노드 결과를 자식 결과로 업데이트
                 context.recordNode(
-                    node, executionResult.status, depth, parentNodeId,
-                    result = combinedResult,
-                    error = executionResult.error
+                    node, finalStatus, depth, parentNodeId,
+                    result = finalChildResult,
+                    error = finalError
                 )
                 
                 return NodeExecutionResult(
                     nodeId = node.id,
                     node = node,
-                    status = executionResult.status,
-                    result = combinedResult,
-                    error = executionResult.error,
+                    status = finalStatus,
+                    result = finalChildResult,
+                    error = finalError,
                     depth = depth,
                     parentNodeId = parentNodeId
                 )

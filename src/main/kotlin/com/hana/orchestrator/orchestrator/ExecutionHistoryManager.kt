@@ -47,6 +47,18 @@ class ExecutionHistoryManager {
     }
     
     /**
+     * 실행 이력 업데이트 (같은 ID의 이력을 찾아서 교체)
+     */
+    fun updateHistory(updatedHistory: ExecutionHistory) {
+        val index = executionHistory.indexOfFirst { it.id == updatedHistory.id }
+        if (index >= 0) {
+            executionHistory[index] = updatedHistory
+        } else {
+            executionHistory.add(updatedHistory)
+        }
+    }
+    
+    /**
      * 현재 실행에 로그 추가
      */
     fun addLogToCurrent(message: String) {

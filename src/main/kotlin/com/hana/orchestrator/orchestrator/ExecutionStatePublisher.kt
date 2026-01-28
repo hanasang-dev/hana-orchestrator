@@ -44,14 +44,10 @@ class ExecutionStatePublisher {
         currentExecution: ExecutionHistory,
         context: ExecutionContext,
         tree: ExecutionTree,
-        nodeResult: NodeExecutionResult
+        finalResult: ExecutionResult
     ): ExecutionHistory {
         val updatedHistory = currentExecution.copy(
-            result = ExecutionResult(
-                result = nodeResult.resultText,
-                executionTree = tree,
-                context = context
-            )
+            result = finalResult
         )
         emitExecutionUpdate(updatedHistory)
         return updatedHistory

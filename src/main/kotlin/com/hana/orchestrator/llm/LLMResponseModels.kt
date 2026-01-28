@@ -30,8 +30,8 @@ data class RetryStrategy(
 @Serializable
 internal data class RetryStrategyResponse(
     val shouldStop: Boolean,
-    val reason: String,
-    val newTree: ExecutionTreeResponse
+    val reason: String = "",  // 기본값 제공 (LLM이 누락할 수 있음)
+    val newTree: ExecutionTreeResponse? = null  // shouldStop=true일 때는 null 가능
 )
 
 /**

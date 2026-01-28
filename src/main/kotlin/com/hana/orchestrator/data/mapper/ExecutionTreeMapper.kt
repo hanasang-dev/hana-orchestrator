@@ -11,9 +11,10 @@ import com.hana.orchestrator.domain.entity.ExecutionNode
  */
 object ExecutionTreeMapper {
     fun toExecutionTree(response: ExecutionTreeResponse): ExecutionTree {
-        return ExecutionTree(
-            rootNode = toExecutionNode(response.rootNode, parentPath = "")
-        )
+        val rootNodes = response.getActualRootNodes().map { rootNodeResponse ->
+            toExecutionNode(rootNodeResponse, parentPath = "")
+        }
+        return ExecutionTree(rootNodes = rootNodes)
     }
     
     private fun toExecutionNode(response: ExecutionNodeResponse, parentPath: String = ""): ExecutionNode {

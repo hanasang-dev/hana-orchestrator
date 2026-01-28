@@ -15,7 +15,7 @@ object ExecutionTreeMapper {
      */
     fun ExecutionTree.toResponse(): ExecutionTreeResponse {
         return ExecutionTreeResponse(
-            rootNode = rootNode.toResponse(),
+            rootNodes = rootNodes.map { it.toResponse() },
             name = name
         )
     }

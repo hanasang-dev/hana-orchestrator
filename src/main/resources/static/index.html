@@ -413,6 +413,8 @@
             border-left: 4px solid #667eea;
             cursor: pointer;
             transition: all 0.3s;
+            position: relative;
+            isolation: isolate; /* 새로운 stacking context 생성 */
         }
         
         .execution-item:hover {
@@ -469,31 +471,47 @@
         
         .execution-result {
             background: white;
-            padding: 12px;
+            padding: 8px 12px;
             border-radius: 6px;
             margin-top: 10px;
             font-family: 'Courier New', monospace;
             font-size: 13px;
+            min-height: auto;
+        }
+        .execution-result .result-content {
+            margin-top: 6px;
             white-space: pre-wrap;
             word-break: break-word;
+            padding: 0;
         }
         
         .execution-logs {
             background: #1e1e1e;
             color: #d4d4d4;
-            padding: 15px;
+            padding: 8px 12px;
             border-radius: 6px;
             margin-top: 10px;
             font-family: 'Courier New', monospace;
             font-size: 12px;
             max-height: 400px;
             overflow-y: auto;
+            min-height: auto;
+        }
+        .execution-logs .log-content {
+            margin-top: 6px;
+            padding: 0;
         }
         
         .log-content {
             white-space: pre-wrap;
             word-break: break-word;
             line-height: 1.5;
+            margin: 0;
+            padding: 0;
+        }
+        .log-content:empty::before {
+            content: "로그를 불러오는 중...";
+            color: #999;
         }
         
         .log-content .log-line {
@@ -801,16 +819,21 @@
             });
             
             let html = '';
+            const renderedIds = new Set(); // 중복 방지를 위한 Set
             
             // 현재 실행 중인 작업
             if (data.current) {
                 html += renderExecution(data.current, true);
+                renderedIds.add(data.current.id);
             }
             
-            // 이력
+            // 이력 (현재 실행 중인 것과 중복되지 않는 것만)
             if (data.history && data.history.length > 0) {
                 data.history.forEach(exec => {
-                    html += renderExecution(exec, false);
+                    if (!renderedIds.has(exec.id)) {
+                        html += renderExecution(exec, false);
+                        renderedIds.add(exec.id);
+                    }
                 });
             } else if (!data.current) {
                 html = '<p>실행 이력이 없습니다.</p>';
@@ -849,19 +872,19 @@
                 });
             }, 0);
             
-            // 로그 업데이트 (펼쳐진 항목만, 또는 현재 실행 중인 항목)
+            // 로그 업데이트 (모든 항목에 대해 로그가 있으면 표시)
             setTimeout(() => {
                 if (data.current && data.current.logs && data.current.logs.length > 0) {
-                    const details = document.querySelector(`#details-${data.current.id}`);
-                    if (details && details.classList.contains('expanded')) {
+                    const logContent = document.querySelector(`#log-content-${data.current.id}`);
+                    if (logContent) {
                         updateExecutionLogs(data.current.id, data.current.logs);
                     }
                 }
                 if (data.history) {
                     data.history.forEach(exec => {
                         if (exec.logs && exec.logs.length > 0) {
-                            const details = document.querySelector(`#details-${exec.id}`);
-                            if (details && details.classList.contains('expanded')) {
+                            const logContent = document.querySelector(`#log-content-${exec.id}`);
+                            if (logContent) {
                                 updateExecutionLogs(exec.id, exec.logs);
                             }
                         }
@@ -988,63 +1011,80 @@
             }
         }
         
-        // 실행 로그 업데이트 함수
+        // 실행 로그 업데이트 함수 (깜빡거림 방지: append 방식)
         function updateExecutionLogs(execId, logs) {
             const logContentElement = document.getElementById(`log-content-${execId}`);
             if (!logContentElement || !logs || logs.length === 0) {
-                if (logContentElement) {
+                if (logContentElement && logContentElement.children.length === 0) {
                     logContentElement.innerHTML = '<div class="log-line log-info">로그가 없습니다.</div>';
                 }
                 return;
             }
             
             try {
-                // 현재 스크롤 위치 확인 (사용자가 스크롤을 올렸는지 확인)
-                // innerHTML 설정 전에 스크롤 위치 저장
+                // 현재 스크롤 위치 확인
                 const scrollHeightBefore = logContentElement.scrollHeight;
                 const scrollTopBefore = logContentElement.scrollTop;
                 const clientHeight = logContentElement.clientHeight;
                 const wasScrolledToBottom = scrollHeightBefore - scrollTopBefore <= clientHeight + 10;
                 
-                const html = logs.map(log => {
-                    if (!log) return '';
-                    let logClass = 'log-info';
-                    const logStr = String(log);
-                    if (logStr.includes('❌') || logStr.includes('실패') || logStr.includes('에러') || logStr.includes('ERROR') || logStr.includes('FAILED')) {
-                        logClass = 'log-error';
-                    } else if (logStr.includes('✅') || logStr.includes('성공') || logStr.includes('완료') || logStr.includes('SUCCESS') || logStr.includes('COMPLETED')) {
-                        logClass = 'log-success';
-                    } else if (logStr.includes('⚠️') || logStr.includes('경고') || logStr.includes('WARNING')) {
-                        logClass = 'log-warning';
-                    } else if (logStr.includes('⏱️') || logStr.includes('PERF') || logStr.includes('성능')) {
-                        logClass = 'log-perf';
-                    }
-                    const escapedLog = escapeHtml(logStr);
-                    return '<div class="log-line ' + logClass + '">' + escapedLog + '</div>';
-                }).join('');
+                // 기존 로그 수 확인
+                const existingLogCount = logContentElement.children.length;
+                const newLogCount = logs.length;
                 
-                // innerHTML 설정
-                logContentElement.innerHTML = html;
-                
-                // requestAnimationFrame을 사용하여 DOM 업데이트 후 스크롤 위치 조정
-                requestAnimationFrame(() => {
-                    if (wasScrolledToBottom) {
-                        // 사용자가 맨 아래에 있었을 때만 자동 스크롤
-                        logContentElement.scrollTop = logContentElement.scrollHeight;
-                    } else {
-                        // 사용자가 위로 스크롤했을 때는 스크롤 위치 유지
-                        // 새 콘텐츠가 추가되어도 상대적 위치 유지
-                        const scrollHeightAfter = logContentElement.scrollHeight;
-                        const heightDiff = scrollHeightAfter - scrollHeightBefore;
-                        if (heightDiff > 0) {
-                            // 새 콘텐츠가 추가된 경우, 기존 스크롤 위치에 높이 차이만큼 더함
-                            logContentElement.scrollTop = scrollTopBefore + heightDiff;
-                        } else {
-                            // 높이가 줄어든 경우 (이론적으로는 발생하지 않아야 함)
-                            logContentElement.scrollTop = scrollTopBefore;
+                // 새 로그만 추가 (깜빡거림 방지)
+                if (newLogCount > existingLogCount) {
+                    const newLogs = logs.slice(existingLogCount);
+                    const fragment = document.createDocumentFragment();
+                    
+                    newLogs.forEach(log => {
+                        if (!log) return;
+                        let logClass = 'log-info';
+                        const logStr = String(log);
+                        if (logStr.includes('❌') || logStr.includes('실패') || logStr.includes('에러') || logStr.includes('ERROR') || logStr.includes('FAILED')) {
+                            logClass = 'log-error';
+                        } else if (logStr.includes('✅') || logStr.includes('성공') || logStr.includes('완료') || logStr.includes('SUCCESS') || logStr.includes('COMPLETED')) {
+                            logClass = 'log-success';
+                        } else if (logStr.includes('⚠️') || logStr.includes('경고') || logStr.includes('WARNING')) {
+                            logClass = 'log-warning';
+                        } else if (logStr.includes('⏱️') || logStr.includes('PERF') || logStr.includes('성능')) {
+                            logClass = 'log-perf';
                         }
-                    }
-                });
+                        
+                        const logDiv = document.createElement('div');
+                        logDiv.className = `log-line ${logClass}`;
+                        logDiv.textContent = logStr;
+                        fragment.appendChild(logDiv);
+                    });
+                    
+                    logContentElement.appendChild(fragment);
+                    
+                    // 스크롤 위치 조정
+                    requestAnimationFrame(() => {
+                        if (wasScrolledToBottom) {
+                            logContentElement.scrollTop = logContentElement.scrollHeight;
+                        }
+                    });
+                } else if (newLogCount < existingLogCount) {
+                    // 로그가 줄어든 경우 (이론적으로는 발생하지 않아야 함) 전체 재렌더링
+                    const html = logs.map(log => {
+                        if (!log) return '';
+                        let logClass = 'log-info';
+                        const logStr = String(log);
+                        if (logStr.includes('❌') || logStr.includes('실패') || logStr.includes('에러') || logStr.includes('ERROR') || logStr.includes('FAILED')) {
+                            logClass = 'log-error';
+                        } else if (logStr.includes('✅') || logStr.includes('성공') || logStr.includes('완료') || logStr.includes('SUCCESS') || logStr.includes('COMPLETED')) {
+                            logClass = 'log-success';
+                        } else if (logStr.includes('⚠️') || logStr.includes('경고') || logStr.includes('WARNING')) {
+                            logClass = 'log-warning';
+                        } else if (logStr.includes('⏱️') || logStr.includes('PERF') || logStr.includes('성능')) {
+                            logClass = 'log-perf';
+                        }
+                        const escapedLog = escapeHtml(logStr);
+                        return '<div class="log-line ' + logClass + '">' + escapedLog + '</div>';
+                    }).join('');
+                    logContentElement.innerHTML = html;
+                }
             } catch (error) {
                 console.error('로그 업데이트 오류:', error);
                 logContentElement.innerHTML = '<div class="log-line log-error">로그 표시 오류: ' + String(error.message || error) + '</div>';
@@ -1180,27 +1220,40 @@
                         ${exec.executionTree ? `
                             <div class="execution-tree" id="tree-${exec.id}">
                                 <strong>🌳 실행 트리:</strong>
-                                ${renderExecutionTree(exec.executionTree.rootNode, 0)}
+                                ${exec.executionTree.rootNodes && exec.executionTree.rootNodes.length > 0 
+                                    ? exec.executionTree.rootNodes.map((rootNode, index) => {
+                                        const hasChildren = rootNode.children && rootNode.children.length > 0;
+                                        const isParallel = rootNode.parallel;
+                                        const internalType = hasChildren ? (isParallel ? ' (내부 병렬)' : ' (내부 순차)') : '';
+                                        const rootLabel = exec.executionTree.rootNodes.length > 1 
+                                            ? `🔹 루트 노드 #${index + 1}${internalType}` 
+                                            : `🔹 루트 노드${internalType}`;
+                                        return `<div style="margin-top: ${index > 0 ? '15px' : '0'}; padding-left: 0;">
+                                            <div style="color: #667eea; font-weight: 600; margin-bottom: 8px; font-size: 12px;">
+                                                ${rootLabel}
+                                                ${exec.executionTree.rootNodes.length > 1 ? '<span style="color: #764ba2; font-size: 11px; margin-left: 8px;">(다른 루트 노드들과 병렬 실행)</span>' : ''}
+                                            </div>
+                                            ${renderExecutionTree(rootNode, 0)}
+                                        </div>`;
+                                    }).join('')
+                                    : exec.executionTree.rootNode 
+                                        ? renderExecutionTree(exec.executionTree.rootNode, 0)  // 호환성: 단일 rootNode
+                                        : ''
+                                }
                             </div>
                         ` : ''}
-                        ${exec.result ? `
-                            <div class="execution-result">
-                                <strong>결과:</strong><br>
-                                ${exec.result}
-                            </div>
-                        ` : ''}
+                        ${exec.result && exec.result.trim() !== '' ? `
+                            <div class="execution-result"><strong>✅ 최종 결과:</strong><div class="result-content">${escapeHtml(exec.result.trim())}</div></div>
+                        ` : exec.error ? '' : `
+                            <div class="execution-result" style="color: #999; font-style: italic; padding: 6px 12px;">결과가 아직 없습니다...</div>
+                        `}
                         ${exec.error ? `
                             <div class="execution-result" style="background: #f8d7da; color: #721c24;">
                                 <strong>에러:</strong><br>
                                 ${exec.error}
                             </div>
                         ` : ''}
-                        <div class="execution-logs" id="logs-${exec.id}" style="display: none;">
-                            <strong>📋 실행 로그:</strong>
-                            <div class="log-content" id="log-content-${exec.id}">
-                                로그를 불러오는 중...
-                            </div>
-                        </div>
+                        <div class="execution-logs" id="logs-${exec.id}" style="display: none;"><strong>📋 실행 로그:</strong><div class="log-content" id="log-content-${exec.id}" style="padding: 0; margin: 4px 0 0 0;"></div></div>
                     </div>
                 </div>
             `;
@@ -1240,12 +1293,21 @@
             const nodeClass = isRoot ? 'tree-node tree-node-root' : 'tree-node';
             const parallelBadge = node.parallel ? '<span class="tree-node-parallel">[병렬]</span>' : '';
             
+            // 노드 레이블 표시
+            const nodeLabel = `${node.layerName}.${node.function}${parallelBadge}`;
+            
+            // 파라미터 전달 여부 명확히 표시
+            const hasArgs = node.args && Object.keys(node.args).length > 0;
+            const argsDisplay = hasArgs 
+                ? `<span style="color: #28a745;">✓ 파라미터 전달됨</span>: ${JSON.stringify(node.args)}`
+                : '<span style="color: #999;">파라미터 없음</span>';
+            
             let html = `<div class="${nodeClass}" style="margin-left: ${indent}px;">
                 <div class="tree-node-label">
-                    ${node.layerName}.${node.function}${parallelBadge}
+                    ${nodeLabel}
                 </div>
                 <div class="tree-node-info">
-                    ${Object.keys(node.args).length > 0 ? `args: ${JSON.stringify(node.args)}` : 'args: {}'}
+                    ${argsDisplay}
                 </div>`;
             
             if (node.children && node.children.length > 0) {
@@ -1262,11 +1324,17 @@
         function loadExecutionLogs(execId, logContentElement) {
             if (!logContentElement) return;
             
+            // 이미 로그가 있으면 업데이트하지 않음
+            if (logContentElement.children.length > 0) {
+                return;
+            }
+            
             // 캐시에서 로그 가져오기
             const execData = findExecutionData(execId);
             if (execData && execData.logs && execData.logs.length > 0) {
                 updateExecutionLogs(execId, execData.logs);
             } else {
+                // 로그가 정말 없을 때만 메시지 표시
                 logContentElement.innerHTML = '<div class="log-line log-info">로그가 아직 없습니다.</div>';
             }
         }
@@ -1275,7 +1343,6 @@
         loadLayers();
         loadExecutions(); // 초기 로드
         connectWebSocket(); // WebSocket 연결 시작
-        initSectionResizers(); // 섹션 리사이저 초기화
         initSectionResizers(); // 섹션 리사이저 초기화
         
         // 실행 중인 작업의 경과 시간을 주기적으로 업데이트
