@@ -9,6 +9,7 @@ import com.hana.orchestrator.llm.config.LLMConfig
 import com.hana.orchestrator.service.PortAllocator
 import com.hana.orchestrator.service.ServiceInfo
 import com.hana.orchestrator.service.ServiceRegistry
+import io.ktor.server.config.*
 import io.ktor.server.engine.EmbeddedServer
 import kotlinx.coroutines.*
 
@@ -23,13 +24,45 @@ class ApplicationBootstrap {
     
     /**
      * 애플리케이션 시작
-     * 현재는 환경변수만 사용 (application.conf는 향후 추가)
+     * application.conf에서 설정 로드, 환경변수로 오버라이드 가능
      */
     suspend fun start(args: Array<String>) {
-        // LLM 설정 로드 (환경변수에서)
-        val llmConfig = LLMConfig.fromEnvironment()
+        // ApplicationConfig 로드 시도
+        val llmConfig = try {
+            val config = loadApplicationConfig()
+            println("✅ application.conf 로드 성공")
+            val loadedConfig = LLMConfig.fromApplicationConfig(config)
+            println("📋 LLM 설정: simple=${loadedConfig.simpleModelId}, medium=${loadedConfig.mediumModelId}, complex=${loadedConfig.complexModelId}")
+            loadedConfig
+        } catch (e: Exception) {
+            // application.conf 로드 실패 시 환경변수 사용
+            println("⚠️ application.conf 로드 실패, 환경변수 사용: ${e.message}")
+            LLMConfig.fromEnvironment()
+        }
         
         startWithLLMConfig(llmConfig, args)
+    }
+    
+    /**
+     * application.conf 파일 로드
+     * Ktor의 HOCON 설정 파일을 로드
+     */
+    private fun loadApplicationConfig(): ApplicationConfig {
+        return try {
+            // 클래스패스에서 application.conf 로드
+            val resource = javaClass.classLoader.getResource("application.conf")
+            if (resource != null) {
+                // HOCON 설정 파싱 및 환경변수 치환 해결
+                val config = com.typesafe.config.ConfigFactory.parseURL(resource)
+                    .resolve() // 환경변수 치환(${?PORT} 등) 해결
+                HoconApplicationConfig(config)
+            } else {
+                // 파일이 없으면 기본 설정으로 생성
+                throw Exception("application.conf not found in classpath")
+            }
+        } catch (e: Exception) {
+            throw Exception("Failed to load application.conf: ${e.message}", e)
+        }
     }
     
     /**

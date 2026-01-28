@@ -8,10 +8,15 @@ import com.hana.orchestrator.llm.LLMClient
  * 
  * KSP 프로세서가 LLMClient 인터페이스의 @LLMTask 어노테이션을 읽어서
  * 이 인터페이스의 구현체를 자동 생성함
+ * 
+ * 설계 변경:
+ * - Factory 패턴 도입으로 병렬 처리 및 확장성 지원
+ * - 필요할 때마다 새로운 클라이언트 인스턴스 생성 가능
  */
 interface ModelSelectionStrategy {
     /**
      * validateQueryFeasibility 작업용 클라이언트 선택
+     * 매번 새로운 인스턴스를 반환하여 병렬 처리 지원
      */
     fun selectClientForFeasibilityCheck(): LLMClient
     
@@ -37,6 +42,7 @@ interface ModelSelectionStrategy {
     
     /**
      * extractParameters 작업용 클라이언트 선택
+     * 병렬 자식 노드 실행 시 각각 독립적인 클라이언트 인스턴스 반환
      */
     fun selectClientForParameterExtraction(): LLMClient
 }

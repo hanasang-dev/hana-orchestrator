@@ -14,6 +14,11 @@ import com.hana.orchestrator.domain.entity.ExecutionContext
 import com.hana.orchestrator.domain.entity.ExecutionResult
 import com.hana.orchestrator.domain.entity.ExecutionHistory
 import com.hana.orchestrator.llm.config.LLMConfig
+import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
+import com.hana.orchestrator.llm.strategy.GeneratedModelSelectionStrategy
+import com.hana.orchestrator.llm.factory.LLMClientFactory
+import com.hana.orchestrator.llm.factory.DefaultLLMClientFactory
+import com.hana.orchestrator.llm.useSuspend
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -31,13 +36,25 @@ class Orchestrator(
 ) : CommonLayerInterface {
     
     private val layers = mutableListOf<CommonLayerInterface>()
-    // LLM 설정이 있으면 사용, 없으면 기본값 (하위 호환성)
-    // 인터페이스 타입으로 선언하여 추후 다른 구현체로 교체 가능
-    private val llmClient: LLMClient = if (llmConfig != null) {
-        // 일단 기본 모델 사용 (나중에 전략 패턴으로 변경)
-        OllamaLLMClient(llmConfig.complexModelId, llmConfig.complexModelContextLength, llmConfig.timeoutMs)
-    } else {
-        OllamaLLMClient()
+    
+    // LLM 클라이언트 팩토리 (병렬 처리 및 확장성 지원)
+    private val clientFactory: LLMClientFactory
+    
+    // 모델 선택 전략 (KSP가 자동 생성한 클래스 사용)
+    private val modelSelectionStrategy: ModelSelectionStrategy
+    
+    init {
+        // LLM 설정이 있으면 사용, 없으면 기본값 (하위 호환성)
+        val config = llmConfig ?: LLMConfig.fromEnvironment()
+        
+        // Factory 생성 (필요할 때마다 클라이언트 인스턴스 생성)
+        clientFactory = DefaultLLMClientFactory(config)
+        
+        // 전략 인스턴스 생성 (KSP가 생성한 클래스 사용)
+        // Factory를 주입하여 필요할 때마다 새로운 클라이언트 생성 가능
+        modelSelectionStrategy = GeneratedModelSelectionStrategy(
+            clientFactory = clientFactory
+        )
     }
     private val executionHistory = mutableListOf<ExecutionHistory>()
     private var currentExecution: ExecutionHistory? = null
@@ -231,7 +248,8 @@ class Orchestrator(
                         addLog(feasibilityCheckMsg)
                         val feasibilityStartTime = System.currentTimeMillis()
                         val feasibility = try {
-                            llmClient.validateQueryFeasibility(query, allDescriptions)
+                            modelSelectionStrategy.selectClientForFeasibilityCheck()
+                                .validateQueryFeasibility(query, allDescriptions)
                         } catch (feasibilityException: Exception) {
                             val errorMsg = "⚠️ [Orchestrator] 요구사항 검증 실패: ${feasibilityException.message}, 트리 생성 계속 진행"
                             println(errorMsg)
@@ -286,7 +304,10 @@ class Orchestrator(
                         
                         val treeStartTime = System.currentTimeMillis()
                         val tree = try {
-                            llmClient.createExecutionTree(query, allDescriptions)
+                            modelSelectionStrategy.selectClientForTreeCreation()
+                                .useSuspend { client ->
+                                    client.createExecutionTree(query, allDescriptions)
+                                }
                         } catch (treeException: Exception) {
                             val errorMsg = "❌ [Orchestrator] 트리 생성 실패: ${treeException.message}"
                             println(errorMsg)
@@ -318,7 +339,10 @@ class Orchestrator(
                         addLog(retryMsg)
                         val retryStartTime = System.currentTimeMillis()
                         val retryStrategy = try {
-                            llmClient.suggestRetryStrategy(query, previousHistory!!, allDescriptions)
+                            modelSelectionStrategy.selectClientForRetryStrategy()
+                                .useSuspend { client ->
+                                    client.suggestRetryStrategy(query, previousHistory!!, allDescriptions)
+                                }
                         } catch (retryException: Exception) {
                             val errorMsg = "❌ [Orchestrator] 재처리 방안 요청 실패: ${retryException.message}"
                             println(errorMsg)
@@ -419,7 +443,8 @@ class Orchestrator(
                     println(evalStartMsg)
                     addLog(evalStartMsg)
                     val evaluationStartTime = System.currentTimeMillis()
-                    val evaluation = llmClient.evaluateResult(query, result.result, result.context)
+                    val evaluation = modelSelectionStrategy.selectClientForEvaluation()
+                        .evaluateResult(query, result.result, result.context)
                     val evaluationDuration = System.currentTimeMillis() - evaluationStartTime
                     val evalPerfMsg = "⏱️ [PERF] 결과 평가 완료: ${evaluationDuration}ms"
                     println(evalPerfMsg)
@@ -468,13 +493,18 @@ class Orchestrator(
                             println(compareMsg)
                             addLog(compareMsg)
                             val comparisonStartTime = System.currentTimeMillis()
-                            val comparison = llmClient.compareExecutions(
-                                query,
-                                previousTree,
-                                previousHistory.result.result,
-                                treeToExecute,
-                                result.result
-                            )
+                            val prevHistory = previousHistory  // 로컬 변수로 복사하여 smart cast 가능하게
+                            val prevTree = previousTree
+                            val comparison = modelSelectionStrategy.selectClientForComparison()
+                                .useSuspend { client ->
+                                    client.compareExecutions(
+                                        query,
+                                        prevTree,
+                                        prevHistory.result.result,
+                                        treeToExecute,
+                                        result.result
+                                    )
+                                }
                             val comparisonDuration = System.currentTimeMillis() - comparisonStartTime
                             val comparePerfMsg = "⏱️ [PERF] 실행 비교 완료: ${comparisonDuration}ms"
                             println(comparePerfMsg)
@@ -548,7 +578,11 @@ class Orchestrator(
                         val retryAnalysisMsg = "🔧 [Orchestrator] 실패 분석 및 재처리 방안 요청 중..."
                         println(retryAnalysisMsg)
                         addLog(retryAnalysisMsg)
-                        val retryStrategy = llmClient.suggestRetryStrategy(query, previousHistory, allDescriptions)
+                        val prevHistory = previousHistory  // 로컬 변수로 복사하여 smart cast 가능하게
+                        val retryStrategy = modelSelectionStrategy.selectClientForRetryStrategy()
+                            .useSuspend { client ->
+                                client.suggestRetryStrategy(query, prevHistory, allDescriptions)
+                            }
                         
                         if (retryStrategy.shouldStop) {
                             val stopMsg = "🛑 [Orchestrator] LLM 판단: 근본 해결 불가능 - ${retryStrategy.reason}"
@@ -838,13 +872,16 @@ class Orchestrator(
                 if (childFunctionDesc != null && childLayerDesc != null) {
                     // LLM이 부모 결과를 자식 함수 파라미터로 변환
                     val extractStartTime = System.currentTimeMillis()
-                    val extractedParams = llmClient.extractParameters(
-                        parentResult = parentResult,
-                        childLayerName = node.layerName,
-                        childFunctionName = node.function,
-                        childFunctionDetails = childFunctionDesc,
-                        layerDescriptions = getAllLayerDescriptions()
-                    )
+                    val extractedParams = modelSelectionStrategy.selectClientForParameterExtraction()
+                        .useSuspend { client ->
+                            client.extractParameters(
+                                parentResult = parentResult,
+                                childLayerName = node.layerName,
+                                childFunctionName = node.function,
+                                childFunctionDetails = childFunctionDesc,
+                                layerDescriptions = getAllLayerDescriptions()
+                            )
+                        }
                     val extractDuration = System.currentTimeMillis() - extractStartTime
                     val extractPerfMsg = "  ⏱️ [PERF] 파라미터 추출 완료: ${extractDuration}ms (${node.layerName}.${node.function})"
                     println(extractPerfMsg)
@@ -874,9 +911,14 @@ class Orchestrator(
     
     /**
      * 리소스 정리 (메모리 누수 방지)
+     * 
+     * 주의: Factory 패턴으로 변경되면서 더 이상 고정된 클라이언트 인스턴스가 없음
+     * 각 클라이언트는 사용 후 즉시 정리되거나, 향후 풀링 전략에서 관리됨
+     * 현재는 각 클라이언트가 독립적으로 생성/소멸되므로 여기서는 특별한 정리 작업 불필요
      */
     suspend fun close() {
-        llmClient.close()
+        // Factory 패턴으로 변경되어 고정된 클라이언트 인스턴스가 없음
+        // 향후 클라이언트 풀링을 구현하면 여기서 풀 정리 로직 추가
     }
     
 }

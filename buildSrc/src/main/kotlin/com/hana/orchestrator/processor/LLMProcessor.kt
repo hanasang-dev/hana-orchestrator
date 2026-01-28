@@ -16,21 +16,52 @@ class LLMProcessor(
     private val options: Map<String, String>
 ) : SymbolProcessor {
     
+    // 프로세서가 이미 실행되었는지 추적 (중복 실행 방지)
+    private var hasProcessed = false
+    
     override fun process(resolver: Resolver): List<KSAnnotated> {
+        // 중복 실행 방지: 이미 처리했으면 스킵
+        if (hasProcessed) {
+            logger.info("KSP LLMProcessor already processed, skipping")
+            return emptyList()
+        }
+        
         logger.info("KSP LLMProcessor started, looking for @LLMTask annotations")
         
-        // @LLMTask 어노테이션이 붙은 심볼 찾기
-        val llmTaskAnnotationName = "com.hana.orchestrator.llm.LLMTask"
-        val annotatedSymbols = resolver
-            .getSymbolsWithAnnotation(llmTaskAnnotationName)
+        // LLMClient 인터페이스를 직접 찾기 (효율적)
+        val llmClientClassName = "com.hana.orchestrator.llm.LLMClient"
+        val llmClientClass = resolver.getClassDeclarationByName(
+            resolver.getKSNameFromString(llmClientClassName)
+        )
+        
+        if (llmClientClass == null) {
+            logger.warn("LLMClient interface not found")
+            return emptyList()
+        }
+        
+        // LLMClient 파일에 대한 의존성 설정 (파일 생성 전에 설정)
+        val llmClientFile = llmClientClass.containingFile
+        val dependencies = if (llmClientFile != null) {
+            Dependencies(aggregating = false, llmClientFile)
+        } else {
+            Dependencies(false)
+        }
+        
+        // LLMClient 인터페이스의 선언된 메서드만 가져오기 (상속 제외)
+        val annotatedSymbols = llmClientClass.declarations
             .filterIsInstance<KSFunctionDeclaration>()
+            .filter { func ->
+                func.annotations.any { annotation ->
+                    annotation.shortName.asString() == "LLMTask"
+                }
+            }
             .filter { it.validate() }
             .toList()
         
-        logger.info("Found ${annotatedSymbols.size} methods with @LLMTask annotation")
+        logger.info("Found ${annotatedSymbols.size} methods with @LLMTask annotation in LLMClient")
         
         if (annotatedSymbols.isEmpty()) {
-            logger.warn("No methods with @LLMTask annotation found")
+            logger.warn("No methods with @LLMTask annotation found in LLMClient")
             return emptyList()
         }
         
@@ -67,18 +98,31 @@ class LLMProcessor(
         logger.info("Extracted complexities: ${methodComplexities.joinToString { "${it.methodName}=${it.complexity}" }}")
         
         // 전략 클래스 생성
-        generateModelSelectionStrategy(methodComplexities)
+        try {
+            generateModelSelectionStrategy(methodComplexities, dependencies)
+            hasProcessed = true
+        } catch (e: Exception) {
+            // 파일이 이미 존재하는 경우 무시 (다른 프로세서가 이미 생성했을 수 있음)
+            if (e.message?.contains("FileAlreadyExistsException") == true || 
+                e is java.nio.file.FileAlreadyExistsException) {
+                logger.warn("File already exists, skipping generation: ${e.message}")
+                hasProcessed = true
+            } else {
+                logger.error("Failed to generate ModelSelectionStrategy: ${e.message}")
+                throw e
+            }
+        }
         
         return emptyList()
     }
     
-    private fun generateModelSelectionStrategy(methodComplexities: List<MethodComplexity>) {
+    private fun generateModelSelectionStrategy(methodComplexities: List<MethodComplexity>, dependencies: Dependencies) {
         val packageName = "com.hana.orchestrator.llm.strategy"
         val className = "GeneratedModelSelectionStrategy"
         
         logger.info("Generating $className with ${methodComplexities.size} method mappings")
         
-        // 전략 클래스 생성
+        // 전략 클래스 생성 (Factory 기반)
         val strategyClass = TypeSpec.classBuilder(className)
             .addModifiers(KModifier.INTERNAL)
             .addSuperinterface(
@@ -86,26 +130,12 @@ class LLMProcessor(
             )
             .primaryConstructor(
                 FunSpec.constructorBuilder()
-                    .addParameter("simpleModelClient", ClassName("com.hana.orchestrator.llm", "LLMClient"))
-                    .addParameter("mediumModelClient", ClassName("com.hana.orchestrator.llm", "LLMClient"))
-                    .addParameter("complexModelClient", ClassName("com.hana.orchestrator.llm", "LLMClient"))
+                    .addParameter("clientFactory", ClassName("com.hana.orchestrator.llm.factory", "LLMClientFactory"))
                     .build()
             )
             .addProperty(
-                PropertySpec.builder("simpleModelClient", ClassName("com.hana.orchestrator.llm", "LLMClient"))
-                    .initializer("simpleModelClient")
-                    .addModifiers(KModifier.PRIVATE)
-                    .build()
-            )
-            .addProperty(
-                PropertySpec.builder("mediumModelClient", ClassName("com.hana.orchestrator.llm", "LLMClient"))
-                    .initializer("mediumModelClient")
-                    .addModifiers(KModifier.PRIVATE)
-                    .build()
-            )
-            .addProperty(
-                PropertySpec.builder("complexModelClient", ClassName("com.hana.orchestrator.llm", "LLMClient"))
-                    .initializer("complexModelClient")
+                PropertySpec.builder("clientFactory", ClassName("com.hana.orchestrator.llm.factory", "LLMClientFactory"))
+                    .initializer("clientFactory")
                     .addModifiers(KModifier.PRIVATE)
                     .build()
             )
@@ -117,29 +147,32 @@ class LLMProcessor(
             .addType(strategyClass)
             .build()
         
-        // 기존 파일이 있으면 덮어쓰기
-        val file = try {
-            codeGenerator.createNewFile(
-                Dependencies(false),
+        // 파일 생성 (의존성 정보 포함)
+        // FileAlreadyExistsException이 발생할 수 있으므로 try-catch로 처리
+        try {
+            val file = codeGenerator.createNewFile(
+                dependencies,
                 packageName,
                 className
             )
+            
+            OutputStreamWriter(file).use { writer ->
+                fileSpec.writeTo(writer)
+                writer.flush()
+            }
+            
+            logger.info("Generated $className successfully")
+        } catch (e: java.nio.file.FileAlreadyExistsException) {
+            // 파일이 이미 존재하는 경우 (다른 프로세서나 이전 실행에서 생성됨)
+            logger.warn("File $className already exists, skipping generation")
+            // 파일이 올바르게 생성되었는지 확인하기 위해 내용을 읽어볼 수도 있음
         } catch (e: Exception) {
-            // 파일이 이미 존재하면 덮어쓰기
-            logger.warn("File already exists, will overwrite: ${e.message}")
-            codeGenerator.createNewFile(
-                Dependencies(false),
-                packageName,
-                className
-            )
+            if (e.message?.contains("FileAlreadyExistsException") == true) {
+                logger.warn("File $className already exists (wrapped exception), skipping generation")
+            } else {
+                throw e
+            }
         }
-        
-        OutputStreamWriter(file).use { writer ->
-            fileSpec.writeTo(writer)
-            writer.flush()
-        }
-        
-        logger.info("Generated $className successfully")
     }
     
     private fun generateStrategyMethods(methodComplexities: List<MethodComplexity>): List<FunSpec> {
@@ -171,18 +204,18 @@ class LLMProcessor(
                 }
             }
             
-            // 복잡도에 따라 적절한 클라이언트 선택
-            val clientProperty = when (complexity) {
-                "SIMPLE" -> "simpleModelClient"
-                "MEDIUM" -> "mediumModelClient"
-                "COMPLEX" -> "complexModelClient"
-                else -> "mediumModelClient" // 기본값
+            // 복잡도에 따라 Factory 메서드 호출
+            val factoryMethod = when (complexity) {
+                "SIMPLE" -> "createSimpleClient"
+                "MEDIUM" -> "createMediumClient"
+                "COMPLEX" -> "createComplexClient"
+                else -> "createMediumClient" // 기본값
             }
             
             val method = FunSpec.builder(strategyMethodName)
                 .addModifiers(KModifier.OVERRIDE)
                 .returns(ClassName("com.hana.orchestrator.llm", "LLMClient"))
-                .addStatement("return $clientProperty")
+                .addStatement("return clientFactory.$factoryMethod()")
                 .build()
             
             methods.add(method)
