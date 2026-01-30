@@ -49,6 +49,16 @@ data class LLMConfig(
     val timeoutMs: Long
 ) {
     companion object {
+        // 기본값 상수 (DRY: 중복 제거 및 일관성 유지)
+        private const val DEFAULT_SIMPLE_MODEL = "gemma2:2b"
+        private const val DEFAULT_MEDIUM_MODEL = "llama3.1:8b"
+        private const val DEFAULT_COMPLEX_MODEL = "llama3.1:8b"
+        private const val DEFAULT_SIMPLE_CONTEXT_LENGTH = 8_192L
+        private const val DEFAULT_MEDIUM_CONTEXT_LENGTH = 128_000L
+        private const val DEFAULT_COMPLEX_CONTEXT_LENGTH = 128_000L
+        private const val DEFAULT_BASE_URL = "http://localhost:11434"
+        private const val DEFAULT_TIMEOUT_MS = 120_000L
+        
         /**
          * 환경변수에서 직접 로드
          * 환경변수가 없으면 기본값 사용
@@ -56,21 +66,21 @@ data class LLMConfig(
         fun fromEnvironment(): LLMConfig {
             return LLMConfig(
                 simpleProvider = LLMProvider.fromString(System.getenv("LLM_SIMPLE_PROVIDER")),
-                simpleModelId = System.getenv("LLM_SIMPLE_MODEL") ?: "gemma2:2b", // 2026년 기준: M3 Pro에서 18 tok/s, 가장 빠름
-                simpleModelContextLength = System.getenv("LLM_SIMPLE_CONTEXT")?.toLongOrNull() ?: 8_192L,
-                simpleModelBaseUrl = System.getenv("LLM_SIMPLE_BASE_URL") ?: "http://localhost:11434",
-                simpleApiKey = System.getenv("LLM_SIMPLE_API_KEY"), // 환경변수로만 설정 (보안)
+                simpleModelId = System.getenv("LLM_SIMPLE_MODEL") ?: DEFAULT_SIMPLE_MODEL,
+                simpleModelContextLength = System.getenv("LLM_SIMPLE_CONTEXT")?.toLongOrNull() ?: DEFAULT_SIMPLE_CONTEXT_LENGTH,
+                simpleModelBaseUrl = System.getenv("LLM_SIMPLE_BASE_URL") ?: DEFAULT_BASE_URL,
+                simpleApiKey = System.getenv("LLM_SIMPLE_API_KEY"),
                 mediumProvider = LLMProvider.fromString(System.getenv("LLM_MEDIUM_PROVIDER")),
-                mediumModelId = System.getenv("LLM_MEDIUM_MODEL") ?: "llama3.1:8b", // 2026년 기준: M3 Pro 28 tok/s, 안정적이고 빠름
-                mediumModelContextLength = System.getenv("LLM_MEDIUM_CONTEXT")?.toLongOrNull() ?: 128_000L,
-                mediumModelBaseUrl = System.getenv("LLM_MEDIUM_BASE_URL") ?: "http://localhost:11434",
-                mediumApiKey = System.getenv("LLM_MEDIUM_API_KEY"), // 환경변수로만 설정 (보안)
+                mediumModelId = System.getenv("LLM_MEDIUM_MODEL") ?: DEFAULT_MEDIUM_MODEL,
+                mediumModelContextLength = System.getenv("LLM_MEDIUM_CONTEXT")?.toLongOrNull() ?: DEFAULT_MEDIUM_CONTEXT_LENGTH,
+                mediumModelBaseUrl = System.getenv("LLM_MEDIUM_BASE_URL") ?: DEFAULT_BASE_URL,
+                mediumApiKey = System.getenv("LLM_MEDIUM_API_KEY"),
                 complexProvider = LLMProvider.fromString(System.getenv("LLM_COMPLEX_PROVIDER")),
-                complexModelId = System.getenv("LLM_COMPLEX_MODEL") ?: "llama3.1:8b", // 2026년 기준: 안정적 (llama3.2:11b는 일반 텍스트 모델로 없음)
-                complexModelContextLength = System.getenv("LLM_COMPLEX_CONTEXT")?.toLongOrNull() ?: 128_000L,
-                complexModelBaseUrl = System.getenv("LLM_COMPLEX_BASE_URL") ?: "http://localhost:11434",
-                complexApiKey = System.getenv("LLM_COMPLEX_API_KEY"), // 환경변수로만 설정 (보안)
-                timeoutMs = System.getenv("LLM_TIMEOUT_MS")?.toLongOrNull() ?: 120_000L
+                complexModelId = System.getenv("LLM_COMPLEX_MODEL") ?: DEFAULT_COMPLEX_MODEL,
+                complexModelContextLength = System.getenv("LLM_COMPLEX_CONTEXT")?.toLongOrNull() ?: DEFAULT_COMPLEX_CONTEXT_LENGTH,
+                complexModelBaseUrl = System.getenv("LLM_COMPLEX_BASE_URL") ?: DEFAULT_BASE_URL,
+                complexApiKey = System.getenv("LLM_COMPLEX_API_KEY"),
+                timeoutMs = System.getenv("LLM_TIMEOUT_MS")?.toLongOrNull() ?: DEFAULT_TIMEOUT_MS
             )
         }
         
@@ -89,52 +99,51 @@ data class LLMConfig(
             
             return LLMConfig(
                 // 환경변수 우선, 없으면 application.conf, 없으면 기본값
-                // API 키는 보안상 환경변수로만 설정 가능 (application.conf에 포함하지 않음)
                 simpleProvider = LLMProvider.fromString(
                     System.getenv("LLM_SIMPLE_PROVIDER")
                         ?: simpleConfig.propertyOrNull("provider")?.getString()
                 ),
                 simpleModelId = System.getenv("LLM_SIMPLE_MODEL") 
                     ?: simpleConfig.propertyOrNull("modelId")?.getString()
-                    ?: "gemma2:2b", // 2026년 기준: M3 Pro에서 18 tok/s, 가장 빠름
+                    ?: DEFAULT_SIMPLE_MODEL,
                 simpleModelContextLength = System.getenv("LLM_SIMPLE_CONTEXT")?.toLongOrNull()
                     ?: simpleConfig.propertyOrNull("contextLength")?.getString()?.toLongOrNull()
-                    ?: 8_192L,
+                    ?: DEFAULT_SIMPLE_CONTEXT_LENGTH,
                 simpleModelBaseUrl = System.getenv("LLM_SIMPLE_BASE_URL")
                     ?: simpleConfig.propertyOrNull("baseUrl")?.getString()
-                    ?: "http://localhost:11434",
-                simpleApiKey = System.getenv("LLM_SIMPLE_API_KEY"), // 환경변수로만 설정 (보안)
+                    ?: DEFAULT_BASE_URL,
+                simpleApiKey = System.getenv("LLM_SIMPLE_API_KEY"),
                 mediumProvider = LLMProvider.fromString(
                     System.getenv("LLM_MEDIUM_PROVIDER")
                         ?: mediumConfig.propertyOrNull("provider")?.getString()
                 ),
                 mediumModelId = System.getenv("LLM_MEDIUM_MODEL")
                     ?: mediumConfig.propertyOrNull("modelId")?.getString()
-                    ?: "llama3.1:8b", // 2026년 기준: M3 Pro 28 tok/s, 안정적이고 빠름
+                    ?: DEFAULT_MEDIUM_MODEL,
                 mediumModelContextLength = System.getenv("LLM_MEDIUM_CONTEXT")?.toLongOrNull()
                     ?: mediumConfig.propertyOrNull("contextLength")?.getString()?.toLongOrNull()
-                    ?: 128_000L, // Llama 3.1 8B의 컨텍스트 윈도우
+                    ?: DEFAULT_MEDIUM_CONTEXT_LENGTH,
                 mediumModelBaseUrl = System.getenv("LLM_MEDIUM_BASE_URL")
                     ?: mediumConfig.propertyOrNull("baseUrl")?.getString()
-                    ?: "http://localhost:11434",
-                mediumApiKey = System.getenv("LLM_MEDIUM_API_KEY"), // 환경변수로만 설정 (보안)
+                    ?: DEFAULT_BASE_URL,
+                mediumApiKey = System.getenv("LLM_MEDIUM_API_KEY"),
                 complexProvider = LLMProvider.fromString(
                     System.getenv("LLM_COMPLEX_PROVIDER")
                         ?: complexConfig.propertyOrNull("provider")?.getString()
                 ),
                 complexModelId = System.getenv("LLM_COMPLEX_MODEL")
                     ?: complexConfig.propertyOrNull("modelId")?.getString()
-                    ?: "llama3.1:8b", // 2026년 기준: 안정적 (llama3.2:11b는 일반 텍스트 모델로 없음)
+                    ?: DEFAULT_COMPLEX_MODEL,
                 complexModelContextLength = System.getenv("LLM_COMPLEX_CONTEXT")?.toLongOrNull()
                     ?: complexConfig.propertyOrNull("contextLength")?.getString()?.toLongOrNull()
-                    ?: 128_000L, // Llama 3.1 8B의 컨텍스트 윈도우
+                    ?: DEFAULT_COMPLEX_CONTEXT_LENGTH,
                 complexModelBaseUrl = System.getenv("LLM_COMPLEX_BASE_URL")
                     ?: complexConfig.propertyOrNull("baseUrl")?.getString()
-                    ?: "http://localhost:11434",
-                complexApiKey = System.getenv("LLM_COMPLEX_API_KEY"), // 환경변수로만 설정 (보안)
+                    ?: DEFAULT_BASE_URL,
+                complexApiKey = System.getenv("LLM_COMPLEX_API_KEY"),
                 timeoutMs = System.getenv("LLM_TIMEOUT_MS")?.toLongOrNull()
                     ?: llmConfig.propertyOrNull("timeoutMs")?.getString()?.toLongOrNull()
-                    ?: 120_000L
+                    ?: DEFAULT_TIMEOUT_MS
             )
         }
     }

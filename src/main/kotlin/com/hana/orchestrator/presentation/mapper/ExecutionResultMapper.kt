@@ -9,7 +9,7 @@ import com.hana.orchestrator.presentation.model.chat.ChatResponse
 object ExecutionResultMapper {
     fun toChatResponse(result: ExecutionResult): ChatResponse {
         // 현재는 result만 사용
-        // 나중에 executionTree, context 정보 추가 가능
+        // 향후 확장: executionTree, context 정보를 포함한 상세 응답 추가 가능
         return ChatResponse(listOf(result.result))
     }
 }

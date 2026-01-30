@@ -50,6 +50,8 @@ $layersInfo
     
     /**
      * 결과 평가 프롬프트
+     * 
+     * @param executionContext 현재는 사용하지 않지만, LLMClient 인터페이스 일관성 및 향후 확장을 위해 유지
      */
     fun buildEvaluationPrompt(
         userQuery: String,
@@ -143,6 +145,8 @@ $layersInfo
     /**
      * 파라미터 추출 프롬프트
      * 부모 레이어의 결과를 자식 레이어 함수의 파라미터로 변환
+     * 
+     * @param layerDescriptions 현재는 사용하지 않지만, LLMClient 인터페이스 일관성 및 향후 확장을 위해 유지
      */
     fun buildParameterExtractionPrompt(
         parentResult: String,

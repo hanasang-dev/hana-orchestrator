@@ -31,7 +31,7 @@ enum class LLMProvider {
                 "OPENAI" -> OPENAI
                 "ANTHROPIC" -> ANTHROPIC
                 "OLLAMA", null, "" -> OLLAMA
-                else -> OLLAMA // 기본값
+                else -> OLLAMA
             }
         }
     }

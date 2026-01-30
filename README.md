@@ -170,8 +170,7 @@ val result = remoteLayer.execute("read_file", mapOf("path" to "config.json"))
 ### 사전 요구사항
 - Java 17+
 - Kotlin 1.9+
-- Ollama (LLM 서버, 로컬 또는 원격)
-- Docker (선택사항)
+- Ollama (로컬 설치 필요, GPU 가속 권장)
 
 ### 빌드
 ```bash
@@ -179,11 +178,26 @@ val result = remoteLayer.execute("read_file", mapOf("path" to "config.json"))
 ```
 
 ### 실행
+
+#### 1. Ollama 설치 및 실행
+```bash
+# macOS
+brew install ollama
+ollama serve
+
+# 필요한 모델 다운로드
+ollama pull gemma2:2b
+ollama pull llama3.1:8b
+```
+
+#### 2. 애플리케이션 실행
 ```bash
 ./gradlew run
 ```
 
-**참고**: 프로그램 시작 시 자동으로 `PortAllocator.cleanupHanaPorts()`를 호출하여 기존 실행 중인 Hana 서비스를 그레이스풀하게 종료합니다.
+**참고**: 
+- 프로그램 시작 시 자동으로 `PortAllocator.cleanupHanaPorts()`를 호출하여 기존 실행 중인 Hana 서비스를 그레이스풀하게 종료합니다.
+- Ollama가 실행 중이어야 합니다 (기본 포트: 11434)
 
 ### API 테스트
 
@@ -223,11 +237,13 @@ curl -X POST http://localhost:8080/shutdown \
   -d '{"reason": "테스트 완료"}'
 ```
 
-### Docker로 실행
+### LLM 상태 확인
 ```bash
-cd docker
-docker-compose up --build
+# LLM 상태 확인 (로컬 Ollama 서버 및 모델 확인)
+curl http://localhost:8080/llm-status
 ```
+
+**참고**: 현재는 로컬 Ollama를 사용합니다. GPU 가속을 위해 Mac에서는 Metal을 활용합니다.
 
 ## 프로젝트 구조
 
@@ -262,7 +278,7 @@ hana-orchestrator/
 │   │   ├── ServiceDiscovery.kt      # 서비스 발견
 │   │   └── PortAllocator.kt       # 포트 할당
 │   └── Application.kt             # 메인 애플리케이션
-├── docker/                        # Docker 설정
+├── docker/                        # Docker 설정 (레거시, 현재 미사용)
 ├── docs/                          # 문서
 └── build.gradle.kts              # 빌드 설정
 ```
@@ -309,8 +325,7 @@ hana-orchestrator/
 - **Kotlinx Coroutines**: 비동기 처리
 - **KSP (Kotlin Symbol Processing)**: 메타데이터 자동 생성
 - **Gradle**: 빌드 도구
-- **Docker**: 컨테이너화
-- **Ollama**: LLM 서버
+- **Ollama**: 로컬 LLM 서버 (단일 인스턴스, 다중 모델 지원)
 
 ## 라이선스
 

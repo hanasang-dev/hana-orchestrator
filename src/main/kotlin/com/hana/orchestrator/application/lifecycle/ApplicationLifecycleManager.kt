@@ -1,9 +1,10 @@
 package com.hana.orchestrator.application.lifecycle
 
 import com.hana.orchestrator.orchestrator.Orchestrator
+import com.hana.orchestrator.orchestrator.createOrchestratorLogger
 import com.hana.orchestrator.service.ServiceRegistry
 import com.hana.orchestrator.service.ServiceDiscovery
-import com.hana.orchestrator.service.DockerComposeManager
+import com.hana.orchestrator.service.OllamaHealthChecker
 import io.ktor.server.engine.EmbeddedServer
 import kotlinx.coroutines.*
 
@@ -13,9 +14,9 @@ import kotlinx.coroutines.*
  */
 class ApplicationLifecycleManager {
     
+    private val logger = createOrchestratorLogger(ApplicationLifecycleManager::class.java, null)
     private var shutdownRequested = false
     private var heartbeatJob: Job? = null
-    private val dockerComposeManager = DockerComposeManager()
     
     fun isShutdownRequested(): Boolean = shutdownRequested
     
@@ -29,7 +30,7 @@ class ApplicationLifecycleManager {
                     ServiceRegistry.updateHeartbeat(serviceId)
                     delay(30_000)
                 } catch (e: Exception) {
-                    println("⚠️  Heartbeat failed: ${e.message}")
+                    logger.warn("⚠️ Heartbeat failed: ${e.message}")
                 }
             }
         }
@@ -59,74 +60,72 @@ class ApplicationLifecycleManager {
     ) {
         // 이미 shutdown이 진행 중이면 중복 실행 방지
         if (isShuttingDown) {
-            println("⚠️  Shutdown already in progress, skipping...")
+            logger.warn("⚠️ Shutdown already in progress, skipping...")
             return
         }
         
         isShuttingDown = true
         shutdownRequested = true
-        println("\n🛑 Starting graceful shutdown...")
+        logger.info("🛑 Starting graceful shutdown...")
         
         try {
             // 1. Heartbeat 중지
             heartbeatJob.cancel()
-            println("✅ Heartbeat stopped")
+            logger.info("✅ Heartbeat stopped")
             
             // 2. 서버 중지 (먼저 실행하여 새로운 요청 차단)
             try {
                 server.stop(1000, 5000)
-                println("✅ Server stopped")
+                logger.info("✅ Server stopped")
             } catch (e: Exception) {
-                println("⚠️  Server stop error: ${e.message}")
+                logger.warn("⚠️ Server stop error: ${e.message}")
                 // 에러가 발생해도 계속 진행
             }
             
             // 3. Orchestrator 리소스 정리
             try {
                 orchestrator.close()
-                println("✅ Orchestrator closed")
+                logger.info("✅ Orchestrator closed")
             } catch (e: Exception) {
-                println("⚠️  Orchestrator close error: ${e.message}")
+                logger.warn("⚠️ Orchestrator close error: ${e.message}")
             }
             
             // 4. Service 등록 해제
             try {
                 ServiceRegistry.unregisterService(serviceId)
-                println("✅ Service unregistered")
+                logger.info("✅ Service unregistered")
             } catch (e: Exception) {
-                println("⚠️  Service unregister error: ${e.message}")
+                logger.warn("⚠️ Service unregister error: ${e.message}")
             }
             
             // 5. Service Discovery 종료
             try {
                 ServiceDiscovery.closeAsync()
-                println("✅ Service discovery closed")
+                logger.info("✅ Service discovery closed")
             } catch (e: Exception) {
-                println("⚠️  Service discovery close error: ${e.message}")
+                logger.warn("⚠️ Service discovery close error: ${e.message}")
             }
             
-            // 6. Docker Compose 서비스 종료
+            // 6. Ollama Health Checker 리소스 정리
             try {
-                val ollamaServices = listOf("ollama-simple", "ollama-medium", "ollama-complex")
-                dockerComposeManager.stopServices(ollamaServices)
-                println("✅ Docker Compose services stopped")
+                OllamaHealthChecker.close()
+                logger.info("✅ Ollama health checker closed")
             } catch (e: Exception) {
-                println("⚠️  Docker Compose stop error: ${e.message}")
+                logger.warn("⚠️ Ollama health checker close error: ${e.message}")
             }
             
             // 7. Application scope 취소 (마지막에 실행)
             try {
                 applicationScope.cancel()
-                println("✅ Application scope cancelled")
+                logger.info("✅ Application scope cancelled")
             } catch (e: Exception) {
-                println("⚠️  Application scope cancel error: ${e.message}")
+                logger.warn("⚠️ Application scope cancel error: ${e.message}")
             }
 
-            println("🎉 Graceful shutdown completed")
+            logger.info("🎉 Graceful shutdown completed")
             
         } catch (e: Exception) {
-            println("⚠️  Shutdown error: ${e.message}")
-            e.printStackTrace()
+            logger.error("⚠️ Shutdown error: ${e.message}", e)
         }
     }
     

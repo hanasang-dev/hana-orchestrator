@@ -1,6 +1,7 @@
 package com.hana.orchestrator.presentation.controller
 
 import com.hana.orchestrator.orchestrator.Orchestrator
+import com.hana.orchestrator.orchestrator.createOrchestratorLogger
 import com.hana.orchestrator.presentation.mapper.ExecutionHistoryMapper.toExecutionState
 import com.hana.orchestrator.presentation.model.execution.ExecutionState
 import com.hana.orchestrator.presentation.model.execution.ExecutionUpdateMessage
@@ -22,6 +23,7 @@ import kotlinx.serialization.encodeToString
 class ExecutionWebSocketController(
     private val orchestrator: Orchestrator
 ) {
+    private val logger = createOrchestratorLogger(ExecutionWebSocketController::class.java, null)
     private val json = Json { ignoreUnknownKeys = true }
     private val connections = mutableSetOf<DefaultWebSocketSession>()
     
@@ -58,7 +60,7 @@ class ExecutionWebSocketController(
             } catch (e: ClosedReceiveChannelException) {
                 // 연결 종료
             } catch (e: Exception) {
-                println("WebSocket error: ${e.message}")
+                logger.error("WebSocket error: ${e.message}", e)
             } finally {
                 connections.remove(session)
             }
@@ -70,7 +72,7 @@ class ExecutionWebSocketController(
             val message = createUpdateMessage()
             session.send(json.encodeToString(message))
         } catch (e: Exception) {
-            println("Error sending state: ${e.message}")
+            logger.error("Error sending state: ${e.message}", e)
         }
     }
     

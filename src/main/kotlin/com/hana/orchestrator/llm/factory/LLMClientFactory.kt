@@ -67,7 +67,8 @@ class DefaultLLMClientFactory(
             modelId = config.simpleModelId,
             contextLength = config.simpleModelContextLength,
             baseUrl = config.simpleModelBaseUrl,
-            apiKey = config.simpleApiKey
+            apiKey = config.simpleApiKey,
+            complexityName = "SIMPLE"
         )
     }
     
@@ -77,7 +78,8 @@ class DefaultLLMClientFactory(
             modelId = config.mediumModelId,
             contextLength = config.mediumModelContextLength,
             baseUrl = config.mediumModelBaseUrl,
-            apiKey = config.mediumApiKey
+            apiKey = config.mediumApiKey,
+            complexityName = "MEDIUM"
         )
     }
     
@@ -87,7 +89,8 @@ class DefaultLLMClientFactory(
             modelId = config.complexModelId,
             contextLength = config.complexModelContextLength,
             baseUrl = config.complexModelBaseUrl,
-            apiKey = config.complexApiKey
+            apiKey = config.complexApiKey,
+            complexityName = "COMPLEX"
         )
     }
     
@@ -102,7 +105,8 @@ class DefaultLLMClientFactory(
         modelId: String,
         contextLength: Long,
         baseUrl: String,
-        apiKey: String? = null
+        apiKey: String? = null,
+        complexityName: String
     ): LLMClient {
         return when (provider) {
             LLMProvider.OLLAMA -> OllamaLLMClient(
@@ -110,23 +114,19 @@ class DefaultLLMClientFactory(
                 modelId = modelId,
                 contextLength = contextLength,
                 baseUrl = baseUrl
-                // Ollama는 API 키 불필요
             )
-            LLMProvider.OPENAI -> {
-                // TODO: 향후 OpenAI 클라이언트 구현 시 활성화
-                // OpenAIClient(config, modelId, contextLength, baseUrl, apiKey)
-                if (apiKey == null) {
-                    throw IllegalArgumentException("OpenAI provider 사용 시 LLM_MEDIUM_API_KEY 환경변수가 필요합니다.")
-                }
-                throw UnsupportedOperationException("OpenAI provider는 아직 지원되지 않습니다. 향후 구현 예정입니다.")
-            }
+            LLMProvider.OPENAI,
             LLMProvider.ANTHROPIC -> {
-                // TODO: 향후 Anthropic 클라이언트 구현 시 활성화
-                // AnthropicClient(config, modelId, contextLength, baseUrl, apiKey)
-                if (apiKey == null) {
-                    throw IllegalArgumentException("Anthropic provider 사용 시 LLM_MEDIUM_API_KEY 환경변수가 필요합니다.")
+                // 클라우드 API는 API 키 필수
+                if (apiKey == null || apiKey.isBlank()) {
+                    val envVarName = "LLM_${complexityName}_API_KEY"
+                    throw IllegalArgumentException(
+                        "${provider.name} provider 사용 시 $envVarName 환경변수가 필요합니다."
+                    )
                 }
-                throw UnsupportedOperationException("Anthropic provider는 아직 지원되지 않습니다. 향후 구현 예정입니다.")
+                throw UnsupportedOperationException(
+                    "${provider.name} provider는 아직 지원되지 않습니다. 향후 구현 예정입니다."
+                )
             }
         }
     }
