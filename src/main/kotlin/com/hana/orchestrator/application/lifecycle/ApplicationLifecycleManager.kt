@@ -3,6 +3,7 @@ package com.hana.orchestrator.application.lifecycle
 import com.hana.orchestrator.orchestrator.Orchestrator
 import com.hana.orchestrator.service.ServiceRegistry
 import com.hana.orchestrator.service.ServiceDiscovery
+import com.hana.orchestrator.service.DockerComposeManager
 import io.ktor.server.engine.EmbeddedServer
 import kotlinx.coroutines.*
 
@@ -14,6 +15,7 @@ class ApplicationLifecycleManager {
     
     private var shutdownRequested = false
     private var heartbeatJob: Job? = null
+    private val dockerComposeManager = DockerComposeManager()
     
     fun isShutdownRequested(): Boolean = shutdownRequested
     
@@ -103,7 +105,16 @@ class ApplicationLifecycleManager {
                 println("⚠️  Service discovery close error: ${e.message}")
             }
             
-            // 6. Application scope 취소 (마지막에 실행)
+            // 6. Docker Compose 서비스 종료
+            try {
+                val ollamaServices = listOf("ollama-simple", "ollama-medium", "ollama-complex")
+                dockerComposeManager.stopServices(ollamaServices)
+                println("✅ Docker Compose services stopped")
+            } catch (e: Exception) {
+                println("⚠️  Docker Compose stop error: ${e.message}")
+            }
+            
+            // 7. Application scope 취소 (마지막에 실행)
             try {
                 applicationScope.cancel()
                 println("✅ Application scope cancelled")

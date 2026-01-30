@@ -1,10 +1,12 @@
 package com.hana.orchestrator.llm
 
-import ai.koog.agents.core.agent.AIAgent
-import ai.koog.prompt.executor.llms.all.simpleOllamaAIExecutor
+import ai.koog.prompt.executor.ollama.client.OllamaClient
+import ai.koog.prompt.executor.clients.ConnectionTimeoutConfig
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.message.Message
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionHistory
 import com.hana.orchestrator.domain.entity.ExecutionContext
@@ -14,7 +16,6 @@ import com.hana.orchestrator.llm.config.LLMConfig
 import com.hana.orchestrator.layer.LayerDescription
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.TimeoutCancellationException
 
 /**
  * Ollama 로컬 LLM 통신을 위한 모듈
@@ -29,15 +30,17 @@ import kotlinx.coroutines.TimeoutCancellationException
 class OllamaLLMClient(
     private val modelId: String = "qwen3:8b",
     private val contextLength: Long = 40_960L,
-    private val timeoutMs: Long = 120_000L
+    private val timeoutMs: Long = 120_000L,
+    private val baseUrl: String = "http://localhost:11434"
 ) : LLMClient {
     /**
      * 설정 기반 생성자
      */
-    constructor(config: LLMConfig, modelId: String, contextLength: Long) : this(
+    constructor(config: LLMConfig, modelId: String, contextLength: Long, baseUrl: String) : this(
         modelId = modelId,
         contextLength = contextLength,
-        timeoutMs = config.timeoutMs
+        timeoutMs = config.timeoutMs,
+        baseUrl = baseUrl
     )
     // 공통 JSON 설정 (캡슐화)
     private val jsonConfig = Json { 
@@ -45,6 +48,20 @@ class OllamaLLMClient(
         isLenient = true
         coerceInputValues = true
     }
+    
+    // Ollama 클라이언트 (baseUrl 설정 가능)
+    // ai.koog의 simpleOllamaAIExecutor()는 환경변수 OLLAMA_HOST를 읽지만,
+    // 런타임에 환경변수를 변경할 수 없으므로 OllamaClient를 직접 생성하여 사용
+    // OllamaClient 생성자의 첫 번째 파라미터가 baseUrl: String
+    // 타임아웃 설정: 적절한 타임아웃으로 설정
+    private val ollamaClient = OllamaClient(
+        baseUrl = baseUrl,
+        timeoutConfig = ConnectionTimeoutConfig(
+            connectTimeoutMillis = 5_000L,       // 연결 타임아웃: 5초
+            requestTimeoutMillis = timeoutMs,     // 요청 타임아웃: 설정값 사용
+            socketTimeoutMillis = timeoutMs      // 소켓 타임아웃: 요청 타임아웃과 동일
+        )
+    )
     
     // 프롬프트 생성기 (SRP: 프롬프트 생성 책임 분리)
     private val promptBuilder = LLMPromptBuilder()
@@ -68,10 +85,7 @@ class OllamaLLMClient(
     
     /**
      * 공통 LLM 호출 로직
-     * DRY: 반복되는 호출 패턴 공통화
-     * Template Method 패턴 적용
-     * 타임아웃: 120초로 제한하여 무한 대기 방지
-     * 실패 시 예외를 throw하여 폴백 없이 실패 처리
+     * 성능 최적화: 단순하고 빠른 호출, 불필요한 재시도 제거
      */
     private suspend fun <T> callLLM(
         prompt: String,
@@ -79,38 +93,31 @@ class OllamaLLMClient(
         timeoutMs: Long = this.timeoutMs
     ): T {
         val model = createLLMModel()
-        val agent = AIAgent(
-            promptExecutor = simpleOllamaAIExecutor(),
-            llmModel = model
-        )
-        
-        val response = try {
-            withTimeout(timeoutMs) {
-                agent.run(prompt)
-            }
-        } catch (e: TimeoutCancellationException) {
-            println("⏱️ LLM 호출 타임아웃 (${timeoutMs}ms 초과)")
-            handleLLMError(e)
-            throw Exception("LLM 호출 타임아웃: ${timeoutMs}ms 초과", e)
-        } catch (e: Exception) {
-            handleLLMError(e)
-            throw Exception("LLM 호출 실패: ${e.message}", e)
+        val promptDsl = Prompt.build(id = "llm-call") {
+            user(prompt)
         }
         
-        val jsonText = JsonExtractor.extract(response)
+        // 단순한 1회 시도 - 재시도는 상위 레벨에서 처리
+        val responses = withTimeout(timeoutMs) {
+            ollamaClient.execute(
+                prompt = promptDsl,
+                model = model,
+                tools = emptyList()
+            )
+        }
+        
+        val responseText = when (val firstResponse = responses.firstOrNull()) {
+            is Message.Assistant -> firstResponse.content
+            is Message.Tool.Call -> firstResponse.content
+            else -> throw Exception("LLM 응답이 비어있습니다")
+        }
+        
+        val jsonText = JsonExtractor.extract(responseText)
         return try {
             responseParser(jsonText)
         } catch (e: Exception) {
             throw Exception("LLM 응답 파싱 실패: ${e.message}", e)
         }
-    }
-    
-    /**
-     * LLM 에러 처리
-     * SRP: 에러 처리 로직 분리
-     */
-    private fun handleLLMError(error: Exception) {
-        println("❌ LLM 호출 실패: ${error.message}")
     }
     
     /**
@@ -267,6 +274,7 @@ class OllamaLLMClient(
     }
     
     override suspend fun close() {
-        // 리소스 정리 (현재는 사용하지 않지만 확장성을 위해 유지)
+        // Ollama 클라이언트 리소스 정리
+        ollamaClient.close()
     }
 }

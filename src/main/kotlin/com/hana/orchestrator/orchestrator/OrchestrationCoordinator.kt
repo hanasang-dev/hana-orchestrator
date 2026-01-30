@@ -215,7 +215,12 @@ class OrchestrationCoordinator(
         val feasibility = validateFeasibility(query, allDescriptions)
         if (!feasibility.feasible) {
             handleFeasibilityFailure(feasibility, query, executionId, startTime)
-            throw Exception(feasibility.reason)
+            val reason = if (feasibility.reason.isBlank()) {
+                "요구사항을 실행할 수 없습니다"
+            } else {
+                feasibility.reason
+            }
+            throw Exception(reason)
         }
         
         logger.info("🌳 [OrchestrationCoordinator] 실행 트리 생성 시작...")
@@ -234,6 +239,11 @@ class OrchestrationCoordinator(
         val treeDuration = System.currentTimeMillis() - treeStartTime
         logger.perf("⏱️ [PERF] 트리 생성 완료: ${treeDuration}ms")
         
+        // 로그 타이밍 문제 해결: perf 로그 후 즉시 UI 업데이트
+        historyManager.getCurrentExecution()?.let { currentExecution ->
+            statePublisher.emitExecutionUpdateAsync(currentExecution)
+        }
+        
         return tree
     }
     
@@ -248,6 +258,10 @@ class OrchestrationCoordinator(
         startTime: Long
     ): ExecutionTree {
         logger.info("🔧 [OrchestrationCoordinator] 재처리 방안 요청 중...")
+        // 로그 emit을 즉시 업데이트
+        historyManager.getCurrentExecution()?.let { currentExecution ->
+            statePublisher.emitExecutionUpdateAsync(currentExecution)
+        }
         
         val retryStartTime = System.currentTimeMillis()
         val retryStrategy = try {
@@ -284,18 +298,18 @@ class OrchestrationCoordinator(
         logger.info("🔎 [OrchestrationCoordinator] 요구사항 실행 가능성 검증 중...")
         
         val feasibilityStartTime = System.currentTimeMillis()
-        val feasibility = try {
-            modelSelectionStrategy.selectClientForFeasibilityCheck()
-                .useSuspend { client ->
-                    client.validateQueryFeasibility(query, allDescriptions)
-                }
-        } catch (feasibilityException: Exception) {
-            logger.warn("⚠️ [OrchestrationCoordinator] 요구사항 검증 실패: ${feasibilityException.message}, 트리 생성 계속 진행")
-            return QueryFeasibility(feasible = true, reason = "검증 실패로 인해 계속 진행")
-        }
+        val feasibility = modelSelectionStrategy.selectClientForFeasibilityCheck()
+            .useSuspend { client ->
+                client.validateQueryFeasibility(query, allDescriptions)
+            }
         
         val feasibilityDuration = System.currentTimeMillis() - feasibilityStartTime
         logger.perf("⏱️ [PERF] 요구사항 검증 완료: ${feasibilityDuration}ms")
+        
+        // 로그 타이밍 문제 해결: perf 로그 후 즉시 UI 업데이트
+        historyManager.getCurrentExecution()?.let { currentExecution ->
+            statePublisher.emitExecutionUpdateAsync(currentExecution)
+        }
         
         if (feasibility.feasible) {
             logger.info("✅ [OrchestrationCoordinator] 요구사항 실행 가능: ${feasibility.reason}")
@@ -324,6 +338,11 @@ class OrchestrationCoordinator(
         val validationDuration = System.currentTimeMillis() - validationStartTime
         logger.perf("⏱️ [PERF] 트리 검증 완료: ${validationDuration}ms")
         
+        // 로그 타이밍 문제 해결: perf 로그 후 즉시 UI 업데이트
+        historyManager.getCurrentExecution()?.let { currentExecution ->
+            statePublisher.emitExecutionUpdateAsync(currentExecution)
+        }
+        
         if (validationResult.errors.isNotEmpty()) {
             val errorMsg = "❌ [OrchestrationCoordinator] 트리 검증 실패: ${validationResult.errors.joinToString(", ")}"
             logger.error(errorMsg)
@@ -346,11 +365,16 @@ class OrchestrationCoordinator(
         logger.info("🚀 [OrchestrationCoordinator] 트리 실행 시작...")
         
         val executionStartTime = System.currentTimeMillis()
-        val currentExecution = historyManager.getCurrentExecution()!!
-        val result = treeExecutor.executeTree(treeToExecute, currentExecution)
+        val executionContext = historyManager.getCurrentExecution()!!
+        val result = treeExecutor.executeTree(treeToExecute, executionContext)
         
         val executionDuration = System.currentTimeMillis() - executionStartTime
         logger.perf("⏱️ [PERF] 트리 실행 완료: ${executionDuration}ms")
+        
+        // 로그 타이밍 문제 해결: perf 로그 후 즉시 UI 업데이트
+        historyManager.getCurrentExecution()?.let { currentExecution ->
+            statePublisher.emitExecutionUpdateAsync(currentExecution)
+        }
         
         logger.info("✅ [OrchestrationCoordinator] 트리 실행 완료")
         
@@ -376,6 +400,11 @@ class OrchestrationCoordinator(
         
         val evaluationDuration = System.currentTimeMillis() - evaluationStartTime
         logger.perf("⏱️ [PERF] 결과 평가 완료: ${evaluationDuration}ms")
+        
+        // 로그 타이밍 문제 해결: perf 로그 후 즉시 UI 업데이트
+        historyManager.getCurrentExecution()?.let { currentExecution ->
+            statePublisher.emitExecutionUpdateAsync(currentExecution)
+        }
         
         val statusText = if (evaluation.isSatisfactory) "✅ 요구사항 부합" else "⚠️ 요구사항 미부합"
         val reasonText = evaluation.reason.take(100) // 너무 긴 이유는 자름
@@ -461,6 +490,10 @@ class OrchestrationCoordinator(
         try {
             val prevHistory = previousHistory ?: failedHistory
             logger.info("🔧 [OrchestrationCoordinator] 실패 분석 및 재처리 방안 요청 중...")
+            // 로그 emit을 즉시 업데이트
+            historyManager.getCurrentExecution()?.let { currentExecution ->
+                statePublisher.emitExecutionUpdateAsync(currentExecution)
+            }
             
             val retryStrategy = modelSelectionStrategy.selectClientForRetryStrategy()
                 .useSuspend { client ->
@@ -504,16 +537,21 @@ class OrchestrationCoordinator(
         executionId: String,
         startTime: Long
     ) {
-        logger.error("❌ [OrchestrationCoordinator] 요구사항 실행 불가능: ${feasibility.reason}")
+        val reason = if (feasibility.reason.isBlank()) {
+            "요구사항을 실행할 수 없습니다"
+        } else {
+            feasibility.reason
+        }
+        logger.error("❌ [OrchestrationCoordinator] 요구사항 실행 불가능: $reason")
         
         feasibility.suggestion?.let {
             logger.info("💡 [OrchestrationCoordinator] 제안: $it")
         }
         
         val errorMessage = if (feasibility.suggestion != null) {
-            "${feasibility.reason}\n\n제안: ${feasibility.suggestion}"
+            "$reason\n\n제안: ${feasibility.suggestion}"
         } else {
-            feasibility.reason
+            reason
         }
         
         val failedHistory = ExecutionHistory.createFailed(
@@ -550,17 +588,20 @@ class OrchestrationCoordinator(
         executionId: String,
         startTime: Long
     ) {
-        logger.error("❌ [OrchestrationCoordinator] 재처리 방안 요청 실패: ${e.message}", e)
+        val errorMessage = e.message ?: "알 수 없는 오류"
+        logger.error("❌ [OrchestrationCoordinator] 재처리 방안 요청 실패: $errorMessage", e)
         
         // 재처리 방안 요청 실패 이력 저장 (중복 제거)
         val failedHistory = ExecutionHistory.createFailed(
             executionId, query,
-            "재처리 방안 요청 실패: ${e.message}",
+            "재처리 방안 요청 실패: $errorMessage",
             startTime,
             logs = historyManager.getCurrentLogs()
         )
         historyManager.addHistory(failedHistory)
         statePublisher.emitExecutionUpdate(failedHistory)
+        // 로그 emit을 즉시 업데이트
+        statePublisher.emitExecutionUpdateAsync(failedHistory)
     }
     
     private suspend fun handleRetryStop(

@@ -27,6 +27,7 @@ class Orchestrator(
     private val coordinator: OrchestrationCoordinator
     
     // LLM 관련
+    val config: LLMConfig // 외부에서 접근 가능하도록 public
     private val clientFactory: LLMClientFactory
     private val modelSelectionStrategy: ModelSelectionStrategy
     
@@ -35,7 +36,7 @@ class Orchestrator(
     
     init {
         // LLM 설정 초기화
-        val config = llmConfig ?: LLMConfig.fromEnvironment()
+        config = llmConfig ?: LLMConfig.fromEnvironment()
         clientFactory = DefaultLLMClientFactory(config)
         modelSelectionStrategy = GeneratedModelSelectionStrategy(clientFactory = clientFactory)
         

@@ -11,6 +11,72 @@ services:
       - ENV=production
     networks:
       - hana-network
+    depends_on:
+      - ollama-simple
+      - ollama-medium
+      - ollama-complex
+
+  # 간단한 작업용 Ollama 인스턴스 (포트 11435) - SmolLM2:1.7B
+  # 모델 로드 시 약 2GB 필요, 대기 시 약 50MB
+  ollama-simple:
+    build:
+      context: .
+      dockerfile: Dockerfile.ollama-smollm2
+    image: hana-orchestrator/ollama-smollm2:latest
+    ports:
+      - "11435:11434"
+    volumes:
+      - ollama-simple-data:/root/.ollama
+    networks:
+      - hana-network
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_KEEP_ALIVE=30m  # 모델을 30분간 메모리에 유지 (성능 최적화)
+    # 최대 3GB까지 사용 가능 (모델 로드 시)
+    mem_limit: 3g
+
+  # 중간 작업용 Ollama 인스턴스 (포트 11436) - Llama 3.1:8B
+  # 모델 로드 시 약 10GB 필요, 대기 시 약 50MB
+  ollama-medium:
+    build:
+      context: .
+      dockerfile: Dockerfile.ollama-llama3.1
+    image: hana-orchestrator/ollama-llama3.1:latest
+    ports:
+      - "11436:11434"
+    volumes:
+      - ollama-medium-data:/root/.ollama
+    networks:
+      - hana-network
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_KEEP_ALIVE=30m  # 모델을 30분간 메모리에 유지 (성능 최적화)
+    # 최대 10GB까지 사용 가능 (모델 로드 시)
+    mem_limit: 10g
+
+  # 복잡한 작업용 Ollama 인스턴스 (포트 11437) - Qwen3:8B
+  # 모델 로드 시 약 8GB 필요, 대기 시 약 50MB (14B는 로컬에서 너무 느림)
+  ollama-complex:
+    build:
+      context: .
+      dockerfile: Dockerfile.ollama-qwen3
+    image: hana-orchestrator/ollama-qwen3:latest
+    ports:
+      - "11437:11434"
+    volumes:
+      - ollama-complex-data:/root/.ollama
+    networks:
+      - hana-network
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_KEEP_ALIVE=30m  # 모델을 30분간 메모리에 유지 (성능 최적화)
+    # 최대 10GB까지 사용 가능 (모델 로드 시, 8B 모델용)
+    mem_limit: 10g
+
+volumes:
+  ollama-simple-data:
+  ollama-medium-data:
+  ollama-complex-data:
 
 networks:
   hana-network:

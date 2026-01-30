@@ -49,6 +49,6 @@ data class ComparisonResult(
 @Serializable
 data class QueryFeasibility(
     val feasible: Boolean,
-    val reason: String,
+    val reason: String = "",  // 기본값 제공 (LLM이 null이나 누락할 수 있음)
     val suggestion: String? = null
 )

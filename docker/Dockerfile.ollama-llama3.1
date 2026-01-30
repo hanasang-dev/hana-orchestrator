@@ -1,0 +1,37 @@
+FROM ollama/ollama:latest
+
+# 초기화 스크립트 생성 (컨테이너 시작 시 모델 자동 설치)
+RUN echo '#!/bin/sh\n\
+set -e\n\
+\n\
+# Ollama 서버를 백그라운드로 시작\n\
+ollama serve &\n\
+OLLAMA_PID=$!\n\
+\n\
+# 서버가 준비될 때까지 대기\n\
+echo "Waiting for Ollama server to start..."\n\
+for i in $(seq 1 30); do\n\
+  if curl -f http://localhost:11434/api/tags > /dev/null 2>&1; then\n\
+    echo "Ollama server is ready!"\n\
+    break\n\
+  fi\n\
+  sleep 1\n\
+done\n\
+\n\
+# 모델이 없으면 설치\n\
+if ! ollama list | grep -q "llama3.1:8b"; then\n\
+  echo "Installing llama3.1:8b model..."\n\
+  ollama pull llama3.1:8b\n\
+else\n\
+  echo "llama3.1:8b model already installed"\n\
+fi\n\
+\n\
+# Ollama 서버를 포그라운드로 실행 (기존 프로세스 종료 후)\n\
+kill $OLLAMA_PID 2>/dev/null || true\n\
+wait $OLLAMA_PID 2>/dev/null || true\n\
+\n\
+# 메인 프로세스로 Ollama 서버 실행\n\
+exec ollama serve\n\
+' > /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

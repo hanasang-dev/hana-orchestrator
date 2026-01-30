@@ -20,19 +20,12 @@ internal class LLMPromptBuilder {
         
         return """요청: "$userQuery"
 
-레이어:
+사용 가능한 레이어:
 $layersInfo
 
-가능 여부 판단:
+위 레이어로 실행 가능한지 판단하고, 반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요:
 
-JSON:
-{"feasible":true,"reason":"이유","suggestion":"대안(선택)"}
-
-규칙:
-- feasible: 가능 여부
-- reason: 판단 이유
-- suggestion: 불가능시 대안(선택)
-- JSON만 출력""".trimIndent()
+{"feasible":true,"reason":"이유","suggestion":null}""".trimIndent()
     }
     
     /**
@@ -42,21 +35,17 @@ JSON:
         userQuery: String,
         layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
     ): String {
+        // 모든 파라미터 정보 필요 (필수 + 선택 모두)
         val layersInfo = formatLayerDescriptionsCompact(layerDescriptions)
         
         return """요청: "$userQuery"
 
-레이어:
+사용 가능한 레이어:
 $layersInfo
 
-JSON 생성:
-{"rootNodes":[{"layerName":"레이어명","function":"함수명","args":{"파라미터명":"값"},"parallel":false,"children":[]}]}
+실행 계획을 생성하고, 반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요:
 
-규칙:
-- rootNodes: 여러 개면 병렬 실행
-- parallel: true=children 병렬, false=순차
-- args: 실제 파라미터명 사용
-- JSON만 출력""".trimIndent()
+{"rootNodes":[{"layerName":"레이어명","function":"함수명","args":{"파라미터명":"값"},"parallel":false,"children":[]}]}""".trimIndent()
     }
     
     /**
@@ -65,24 +54,20 @@ JSON 생성:
     fun buildEvaluationPrompt(
         userQuery: String,
         executionResult: String,
-        executionContext: com.hana.orchestrator.domain.entity.ExecutionContext?
+        @Suppress("UNUSED_PARAMETER") executionContext: com.hana.orchestrator.domain.entity.ExecutionContext?
     ): String {
-        val contextInfo = formatExecutionContext(executionContext)
-        
-        return """
-        당신은 실행 결과 평가자입니다. 사용자의 요구사항과 실제 실행 결과를 비교하여 평가해주세요.
+        return """요구사항: "$userQuery"
+실행 결과: "$executionResult"
 
-JSON으로 평가:
-{
-    "isSatisfactory": true/false,
-    "reason": "판단 이유",
-    "needsRetry": true/false
-}
+결과가 요구사항을 충족하는지 평가하세요. 다음을 고려하세요:
+- 요구사항의 의도를 파악하고, 결과가 그 의도를 충족하는지 판단
+- 결과에 요구사항의 핵심 내용이 포함되어 있으면 충족으로 판단
+- 기술적으로 불가능한 요구사항의 경우, 원본이 그대로 나오거나 적절한 대안이 제공되면 충족으로 판단
+- 요구사항의 의도와 결과의 일치 여부를 중시하되, 형식적인 차이는 허용
 
-기준:
-- isSatisfactory: 요구사항 충족 여부 (대문자 변환 요구 시 결과가 실제로 변환되어야 함)
-- needsRetry: 재처리 필요 여부
-- JSON만 출력""".trimIndent()
+반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요:
+
+{"isSatisfactory":true,"reason":"이유","needsRetry":false}""".trimIndent()
     }
     
     /**
@@ -103,17 +88,9 @@ JSON으로 평가:
 레이어:
 $layersInfo
 
-JSON:
-{"shouldStop":false,"reason":"이유","newTree":{"rootNodes":[{"layerName":"레이어명","function":"함수명","args":{},"parallel":false,"children":[]}]}}
+재처리 방안을 제시하고, 반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요:
 
-규칙:
-- shouldStop: 해결 불가능시만 true
-- reason: 필수
-- newTree: 재처리 트리 (shouldStop=true면 무시)
-- rootNodes: 여러 개면 병렬 실행
-- parallel: true=children 병렬, false=순차
-- JSON만 출력
-- JSON만 출력""".trimIndent()
+{"shouldStop":false,"reason":"이유","newTree":{"rootNodes":[{"layerName":"레이어명","function":"함수명","args":{},"parallel":false,"children":[]}]}}""".trimIndent()
     }
     
     /**
@@ -137,16 +114,9 @@ JSON:
 현재 트리: $currTree
 현재 결과: "${currentResult.take(200)}"
 
-JSON으로 비교:
-{
-    "isSignificantlyDifferent": true/false,
-    "reason": "이유"
-}
+비교하고, 반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요:
 
-기준:
-- true: 트리 구조 변경 또는 결과 개선
-- false: 구조/결과 유사, 개선 없음
-- JSON만 출력""".trimIndent()
+{"isSignificantlyDifferent":true,"reason":"이유"}""".trimIndent()
     }
     
     /**
@@ -171,56 +141,6 @@ JSON으로 비교:
     }
     
     /**
-     * 레이어 설명 포맷팅 (상세 버전 - 필요시 사용)
-     */
-    private fun formatLayerDescriptions(
-        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
-    ): String {
-        return formatLayerDescriptionsCompact(layerDescriptions)
-    }
-    
-    /**
-     * 실행 컨텍스트 포맷팅
-     */
-    private fun formatExecutionContext(
-        context: com.hana.orchestrator.domain.entity.ExecutionContext?
-    ): String {
-        return context?.let { ctx ->
-            """
-            실행 컨텍스트:
-            - 성공한 노드: ${ctx.completedNodes.size}개
-            - 실패한 노드: ${ctx.failedNodes.size}개
-            - 실행 중인 노드: ${ctx.runningNodes.size}개
-            """.trimIndent()
-        } ?: "실행 컨텍스트 정보 없음"
-    }
-    
-    /**
-     * 실패한 노드 포맷팅
-     */
-    private fun formatFailedNodes(
-        failedNodes: List<com.hana.orchestrator.domain.entity.NodeExecutionResult>?
-    ): String {
-        return failedNodes?.joinToString("\n") { node ->
-            val errorMessage = node.error ?: "에러 정보 없음"
-            "- ${node.node.layerName}.${node.node.function}: $errorMessage"
-        } ?: "실패한 노드 없음"
-    }
-    
-    /**
-     * 실행 트리 포맷팅
-     */
-    private fun formatExecutionTree(tree: ExecutionTree?): String {
-        return tree?.let { t ->
-            """
-            실행 트리:
-            - 루트 노드 수: ${t.rootNodes.size}
-            - 루트들: ${t.rootNodes.joinToString(", ") { "${it.layerName}.${it.function}" }}
-            """.trimIndent()
-        } ?: "트리 정보 없음"
-    }
-    
-    /**
      * 파라미터 추출 프롬프트
      * 부모 레이어의 결과를 자식 레이어 함수의 파라미터로 변환
      */
@@ -229,7 +149,7 @@ JSON으로 비교:
         childLayerName: String,
         childFunctionName: String,
         childFunctionDetails: com.hana.orchestrator.layer.FunctionDescription,
-        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
+        @Suppress("UNUSED_PARAMETER") layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
     ): String {
         val paramsInfo = childFunctionDetails.parameters.entries.joinToString(", ") { (name, param) ->
             val req = if (param.required) "필수" else "선택"
@@ -241,14 +161,8 @@ JSON으로 비교:
 설명: ${childFunctionDetails.description}
 파라미터: $paramsInfo
 
-JSON으로 변환:
-{
-    "파라미터명": "값"
-}
+부모 결과를 파라미터에 매핑하고, 반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요:
 
-- 부모 결과를 파라미터에 매핑
-- 타입 변환 (String/Int/Boolean)
-- 필수 파라미터 포함
-- JSON만 출력""".trimIndent()
+{"파라미터명":"값"}""".trimIndent()
     }
 }

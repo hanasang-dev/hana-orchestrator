@@ -5,13 +5,12 @@ class EchoLayer : CommonLayerInterface {
     
     @LayerFunction
     suspend fun echo(message: String): String {
-        return "Echo: $message"
+        return message
     }
     
     @LayerFunction
     suspend fun repeat(message: String, times: Int = 1): String {
-        val repeated = message.repeat(times)
-        return "Repeated: $repeated"
+        return message.repeat(times)
     }
 
     // KSP 프로세서가 자동 생성한 describe() 사용

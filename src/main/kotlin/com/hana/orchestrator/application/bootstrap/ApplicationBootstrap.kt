@@ -9,7 +9,10 @@ import com.hana.orchestrator.llm.config.LLMConfig
 import com.hana.orchestrator.service.PortAllocator
 import com.hana.orchestrator.service.ServiceInfo
 import com.hana.orchestrator.service.ServiceRegistry
+import com.hana.orchestrator.llm.LLMProvider
 import io.ktor.server.config.*
+import java.net.HttpURLConnection
+import java.net.URL
 import io.ktor.server.engine.EmbeddedServer
 import kotlinx.coroutines.*
 
@@ -74,6 +77,37 @@ class ApplicationBootstrap {
         // 명령줄 인자 파싱
         val cliPort = portManager.parsePort(args)
         val skipCleanup = args.contains("--skip-cleanup")
+        
+        // 로컬 Ollama 인스턴스 확인 및 준비
+        // 확장성: OLLAMA provider만 확인, 향후 클라우드 API는 확인 불필요
+        val ollamaUrls = mutableListOf<String>()
+        if (llmConfig.simpleProvider == LLMProvider.OLLAMA) {
+            ollamaUrls.add(llmConfig.simpleModelBaseUrl)
+        }
+        if (llmConfig.mediumProvider == LLMProvider.OLLAMA) {
+            ollamaUrls.add(llmConfig.mediumModelBaseUrl)
+        }
+        if (llmConfig.complexProvider == LLMProvider.OLLAMA) {
+            ollamaUrls.add(llmConfig.complexModelBaseUrl)
+        }
+        
+        // 중복 제거 (단일 Ollama 인스턴스 사용 시)
+        val uniqueOllamaUrls = ollamaUrls.distinct()
+        
+        if (uniqueOllamaUrls.isNotEmpty()) {
+            println("🔍 로컬 Ollama 인스턴스 확인 중...")
+            val allReady = waitForOllamaInstances(uniqueOllamaUrls, maxWaitSeconds = 30)
+            if (!allReady) {
+                println("⚠️ 일부 Ollama 인스턴스가 준비되지 않았지만 계속 진행합니다.")
+                println("💡 해결 방법:")
+                println("   1. Ollama를 설치하고 실행하세요: brew install ollama && ollama serve")
+                println("   2. 또는 필요한 모델을 미리 다운로드하세요: ollama pull smollm2:1.7b llama3.1:8b")
+            } else {
+                println("✅ 모든 Ollama 인스턴스 준비 완료")
+            }
+        } else {
+            println("ℹ️ Ollama provider를 사용하지 않습니다 (클라우드 API 사용 중)")
+        }
         
         // 기존 서비스 정리
         if (!skipCleanup) {
@@ -169,6 +203,45 @@ class ApplicationBootstrap {
         } catch (e: Exception) {
             println("❌ Server error: ${e.message}")
             lifecycleManager.gracefulShutdownAsync(server, serviceId, heartbeatJob, applicationScope, orchestrator)
+        }
+    }
+    
+    /**
+     * Ollama 인스턴스들이 준비될 때까지 대기
+     * 확장성: 향후 클라우드 API는 이 확인이 불필요하므로 provider별로 분기 가능
+     */
+    private suspend fun waitForOllamaInstances(urls: List<String>, maxWaitSeconds: Long): Boolean {
+        return withContext(Dispatchers.IO) {
+            val startTime = System.currentTimeMillis()
+            val maxWaitMs = maxWaitSeconds * 1000
+            val readyUrls = mutableSetOf<String>()
+            
+            while (System.currentTimeMillis() - startTime < maxWaitMs && readyUrls.size < urls.size) {
+                urls.forEach { url ->
+                    if (url !in readyUrls) {
+                        try {
+                            val connection = URL("$url/api/tags").openConnection() as HttpURLConnection
+                            connection.connectTimeout = 2000
+                            connection.readTimeout = 2000
+                            connection.requestMethod = "GET"
+                            
+                            if (connection.responseCode == 200) {
+                                readyUrls.add(url)
+                                println("✅ Ollama 준비 완료: $url")
+                            }
+                            connection.disconnect()
+                        } catch (e: Exception) {
+                            // 아직 준비되지 않음, 계속 대기
+                        }
+                    }
+                }
+                
+                if (readyUrls.size < urls.size) {
+                    delay(1000)
+                }
+            }
+            
+            readyUrls.size == urls.size
         }
     }
 }

@@ -58,7 +58,7 @@ class ServerConfigurator(
                 
                 // 컨트롤러들 설정
                 HealthController(lifecycleManager).configureRoutes(this)
-                ServiceController(serviceInfo, lifecycleManager).configureRoutes(this)
+                ServiceController(serviceInfo, lifecycleManager, orchestrator.config).configureRoutes(this)
                 ChatController(orchestrator, lifecycleManager).configureRoutes(this)
                 LayerController(orchestrator, lifecycleManager).configureRoutes(this)
                 ExecutionWebSocketController(orchestrator).configureRoutes(this)
