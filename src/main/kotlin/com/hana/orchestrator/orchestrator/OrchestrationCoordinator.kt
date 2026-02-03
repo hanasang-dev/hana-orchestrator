@@ -5,7 +5,6 @@ import com.hana.orchestrator.domain.entity.ExecutionHistory
 import com.hana.orchestrator.domain.entity.ExecutionResult
 import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 import com.hana.orchestrator.llm.useSuspend
-import com.hana.orchestrator.llm.QueryFeasibility
 
 /**
  * 재처리 방안 요청 실패 예외 (무한 루프 방지용)
@@ -55,14 +54,17 @@ class OrchestrationCoordinator(
                 logger.info("🔄 [OrchestrationCoordinator] 실행 시도 #$attemptCount")
                 
                 try {
-                    // 매번 feasibility check 수행 (LLM 레이어 포함하여 모든 레이어 고려)
-                    val feasibility = validateFeasibility(query, allDescriptions)
+                    // 트리 생성: LLM이 모든 레이어(LLMLayer 포함)를 보고 적절한 실행 계획을 생성
+                    // LLMLayer가 있으면 사실상 모든 질문이 가능하므로, feasibility 체크는 의미가 없음
+                    // LLM이 트리 생성 시 적절한 레이어를 선택하도록 함
+                    val rawTree: ExecutionTree
                     
-                    // LLM으로 트리 생성 (모든 레이어 포함, LLM이 자동으로 선택)
-                    val rawTree = if (attemptCount == 1) {
-                        createInitialTree(query, allDescriptions, executionId, startTime)
+                    if (attemptCount == 1) {
+                        // 초기 트리 생성: LLM이 모든 레이어를 보고 적절한 실행 계획 생성
+                        rawTree = createInitialTree(query, allDescriptions, executionId, startTime)
                     } else {
-                        createRetryTree(query, previousHistory!!, allDescriptions, executionId, startTime)
+                        // 재시도: 이전 실행 결과를 바탕으로 재처리 방안 생성
+                        rawTree = createRetryTree(query, previousHistory!!, allDescriptions, executionId, startTime)
                     }
                     
                     // 트리 검증 및 실행
@@ -95,21 +97,13 @@ class OrchestrationCoordinator(
                         }
                         
                         // 재처리 루프 계속
-                        val failedHistory = ExecutionHistory.createFailed(
+                        previousHistory = saveAndEmitFailedHistory(
                             executionId, query,
                             "요구사항 미부합: ${evaluation.reason}",
-                            startTime,
-                            logs = historyManager.getCurrentLogs()
+                            startTime
                         )
-                        historyManager.addHistory(failedHistory)
-                        statePublisher.emitExecutionUpdate(failedHistory)
-                        
-                        previousHistory = failedHistory
                         previousTree = rawTree
-                        val newRunningHistory = ExecutionHistory.createRunning(executionId, query, System.currentTimeMillis())
-                        newRunningHistory.logs.addAll(historyManager.getCurrentLogs())
-                        historyManager.setCurrentExecution(newRunningHistory)
-                        statePublisher.emitExecutionUpdate(newRunningHistory)
+                        prepareRetry(executionId, query)
                         continue
                     }
                     
@@ -117,40 +111,32 @@ class OrchestrationCoordinator(
                     // needsRetry가 true면 재처리 시도, false면 종료
                     if (evaluation.needsRetry && attemptCount < maxAttempts) {
                         // 재처리 필요: 실패 이력 저장 후 재시도
-                        val failedHistory = ExecutionHistory.createFailed(
+                        previousHistory = saveAndEmitFailedHistory(
                             executionId, query,
                             "요구사항 미부합: ${evaluation.reason}",
-                            startTime,
-                            logs = historyManager.getCurrentLogs()
+                            startTime
                         )
-                        historyManager.addHistory(failedHistory)
-                        statePublisher.emitExecutionUpdate(failedHistory)
-                        
-                        previousHistory = failedHistory
                         previousTree = rawTree
-                        val newRunningHistory = ExecutionHistory.createRunning(executionId, query, System.currentTimeMillis())
-                        newRunningHistory.logs.addAll(historyManager.getCurrentLogs())
-                        historyManager.setCurrentExecution(newRunningHistory)
-                        statePublisher.emitExecutionUpdate(newRunningHistory)
+                        prepareRetry(executionId, query)
                         continue
                     }
                     
                     // 재처리 불필요 또는 최대 재시도 도달: 최종 이력 저장 후 종료
                     val finalHistory = if (!evaluation.isSatisfactory) {
-                        ExecutionHistory.createFailed(
+                        saveAndEmitFailedHistory(
                             executionId, query,
                             "요구사항 미부합: ${evaluation.reason}",
-                            startTime,
-                            logs = historyManager.getCurrentLogs()
+                            startTime
                         )
                     } else {
-                        ExecutionHistory.createCompleted(
+                        val completedHistory = ExecutionHistory.createCompleted(
                             executionId, query, result, startTime,
                             logs = historyManager.getCurrentLogs()
                         )
+                        historyManager.addHistory(completedHistory)
+                        statePublisher.emitExecutionUpdate(completedHistory)
+                        completedHistory
                     }
-                    historyManager.addHistory(finalHistory)
-                    statePublisher.emitExecutionUpdate(finalHistory)
                     historyManager.clearCurrentExecution()
                     return result
                     
@@ -158,14 +144,11 @@ class OrchestrationCoordinator(
                     // 재처리 방안 요청 실패 시 더 이상 재시도하지 않음
                     if (e is RetryStrategyRequestFailedException) {
                         logger.error("🛑 [OrchestrationCoordinator] 재처리 방안 요청 실패로 인한 중단: ${e.message}")
-                        val finalFailedHistory = ExecutionHistory.createFailed(
+                        saveAndEmitFailedHistory(
                             executionId, query,
                             e.message ?: "재처리 방안 요청 실패",
-                            startTime,
-                            logs = historyManager.getCurrentLogs()
+                            startTime
                         )
-                        historyManager.addHistory(finalFailedHistory)
-                        statePublisher.emitExecutionUpdate(finalFailedHistory)
                         historyManager.clearCurrentExecution()
                         return ExecutionResult(result = "", error = e.message)
                     }
@@ -174,11 +157,10 @@ class OrchestrationCoordinator(
                         historyManager.clearCurrentExecution()
                         return ExecutionResult(result = "", error = "최대 재시도 횟수 도달: ${e.message}")
                     }
-                    previousHistory = ExecutionHistory.createFailed(
+                    previousHistory = saveAndEmitFailedHistory(
                         executionId, query,
                         e.message ?: "알 수 없는 오류",
-                        startTime,
-                        logs = historyManager.getCurrentLogs()
+                        startTime
                     )
                     continue
                 }
@@ -186,14 +168,11 @@ class OrchestrationCoordinator(
             
             // 최대 재시도 횟수 도달
             logger.warn("🛑 [OrchestrationCoordinator] 최대 재시도 횟수 도달")
-            val finalFailedHistory = ExecutionHistory.createFailed(
+            saveAndEmitFailedHistory(
                 executionId, query,
                 "최대 재시도 횟수 도달",
-                startTime,
-                logs = historyManager.getCurrentLogs()
+                startTime
             )
-            historyManager.addHistory(finalFailedHistory)
-            statePublisher.emitExecutionUpdate(finalFailedHistory)
             historyManager.clearCurrentExecution()
             return ExecutionResult(result = "", error = "최대 재시도 횟수 도달")
             
@@ -201,39 +180,6 @@ class OrchestrationCoordinator(
             // 빈 쿼리인 경우 기본 결과 반환
             ExecutionResult(result = "Empty query")
         }
-    }
-    
-    /**
-     * 요구사항 실행 가능성 검증
-     * 참고용으로만 사용 (트리 생성에는 영향 없음, LLM이 모든 레이어를 보고 선택)
-     */
-    private suspend fun validateFeasibility(
-        query: String,
-        allDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
-    ): QueryFeasibility {
-        logger.info("🔎 [OrchestrationCoordinator] 요구사항 실행 가능성 검증 중...")
-        
-        val feasibilityStartTime = System.currentTimeMillis()
-        val feasibility = modelSelectionStrategy.selectClientForFeasibilityCheck()
-            .useSuspend { client ->
-                client.validateQueryFeasibility(query, allDescriptions)
-            }
-        
-        val feasibilityDuration = System.currentTimeMillis() - feasibilityStartTime
-        logger.perf("⏱️ [PERF] 요구사항 검증 완료: ${feasibilityDuration}ms")
-        
-        // 로그 타이밍 문제 해결: perf 로그 후 즉시 UI 업데이트
-        historyManager.getCurrentExecution()?.let { currentExecution ->
-            statePublisher.emitExecutionUpdateAsync(currentExecution)
-        }
-        
-        if (feasibility.feasible) {
-            logger.info("✅ [OrchestrationCoordinator] 요구사항 실행 가능: ${feasibility.reason}")
-        } else {
-            logger.info("ℹ️ [OrchestrationCoordinator] 레이어로 실행 불가능 (LLM 레이어 사용 가능): ${feasibility.reason}")
-        }
-        
-        return feasibility
     }
     
     /**
@@ -464,14 +410,11 @@ class OrchestrationCoordinator(
         logger.error("❌ [OrchestrationCoordinator] 실행 실패: ${e.message}", e)
         
         // 실패 이력 저장
-        val failedHistory = ExecutionHistory.createFailed(
+        val failedHistory = saveAndEmitFailedHistory(
             executionId, query,
             e.message ?: "알 수 없는 오류",
-            startTime,
-            logs = historyManager.getCurrentLogs()
+            startTime
         )
-        historyManager.addHistory(failedHistory)
-        statePublisher.emitExecutionUpdate(failedHistory)
         
         // 재처리 가능 여부 확인
         if (attemptCount >= maxAttempts) {
@@ -500,10 +443,7 @@ class OrchestrationCoordinator(
             
             logger.info("✅ [OrchestrationCoordinator] 재처리 방안 수신: ${retryStrategy.reason}")
             
-            val newRunningHistory = ExecutionHistory.createRunning(executionId, query, System.currentTimeMillis())
-            newRunningHistory.logs.addAll(historyManager.getCurrentLogs())
-            historyManager.setCurrentExecution(newRunningHistory)
-            statePublisher.emitExecutionUpdate(newRunningHistory)
+            prepareRetry(executionId, query)
             return true
         } catch (retryException: Exception) {
             logger.error("❌ [OrchestrationCoordinator] 재처리 방안 요청 실패: ${retryException.message}", retryException)
@@ -525,6 +465,40 @@ class OrchestrationCoordinator(
     
     // Helper methods for error handling
     
+    /**
+     * 실패 이력 저장 및 emit (DRY: 중복 패턴 제거)
+     */
+    private suspend fun saveAndEmitFailedHistory(
+        executionId: String,
+        query: String,
+        error: String,
+        startTime: Long
+    ): ExecutionHistory {
+        val failedHistory = ExecutionHistory.createFailed(
+            executionId, query, error, startTime,
+            logs = historyManager.getCurrentLogs()
+        )
+        historyManager.addHistory(failedHistory)
+        statePublisher.emitExecutionUpdate(failedHistory)
+        return failedHistory
+    }
+    
+    /**
+     * 재시도 준비: 새 실행 이력 생성 및 설정 (DRY: 중복 패턴 제거)
+     */
+    private suspend fun prepareRetry(
+        executionId: String,
+        query: String
+    ): ExecutionHistory {
+        val newRunningHistory = ExecutionHistory.createRunning(
+            executionId, query, System.currentTimeMillis()
+        )
+        newRunningHistory.logs.addAll(historyManager.getCurrentLogs())
+        historyManager.setCurrentExecution(newRunningHistory)
+        statePublisher.emitExecutionUpdate(newRunningHistory)
+        return newRunningHistory
+    }
+    
     private suspend fun handleTreeCreationFailure(
         e: Exception,
         query: String,
@@ -532,15 +506,11 @@ class OrchestrationCoordinator(
         startTime: Long
     ) {
         logger.error("❌ [OrchestrationCoordinator] 트리 생성 실패: ${e.message}", e)
-        
-        val failedHistory = ExecutionHistory.createFailed(
+        saveAndEmitFailedHistory(
             executionId, query,
             "트리 생성 실패: ${e.message}",
-            startTime,
-            logs = historyManager.getCurrentLogs()
+            startTime
         )
-        historyManager.addHistory(failedHistory)
-        statePublisher.emitExecutionUpdate(failedHistory)
     }
     
     private suspend fun handleRetryStrategyFailure(
@@ -552,15 +522,12 @@ class OrchestrationCoordinator(
         val errorMessage = e.message ?: "알 수 없는 오류"
         logger.error("❌ [OrchestrationCoordinator] 재처리 방안 요청 실패: $errorMessage", e)
         
-        // 재처리 방안 요청 실패 이력 저장 (중복 제거)
-        val failedHistory = ExecutionHistory.createFailed(
+        // 재처리 방안 요청 실패 이력 저장
+        val failedHistory = saveAndEmitFailedHistory(
             executionId, query,
             "재처리 방안 요청 실패: $errorMessage",
-            startTime,
-            logs = historyManager.getCurrentLogs()
+            startTime
         )
-        historyManager.addHistory(failedHistory)
-        statePublisher.emitExecutionUpdate(failedHistory)
         // 로그 emit을 즉시 업데이트
         statePublisher.emitExecutionUpdateAsync(failedHistory)
     }
@@ -572,15 +539,11 @@ class OrchestrationCoordinator(
         startTime: Long
     ) {
         logger.warn("🛑 [OrchestrationCoordinator] LLM 판단: 근본 해결 불가능 - $reason")
-        
-        val finalHistory = ExecutionHistory.createFailed(
+        saveAndEmitFailedHistory(
             executionId, query,
             "재처리 중단: $reason",
-            startTime,
-            logs = historyManager.getCurrentLogs()
+            startTime
         )
-        historyManager.addHistory(finalHistory)
-        statePublisher.emitExecutionUpdate(finalHistory)
     }
     
 }

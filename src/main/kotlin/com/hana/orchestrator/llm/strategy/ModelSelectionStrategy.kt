@@ -15,12 +15,6 @@ import com.hana.orchestrator.llm.LLMClient
  */
 interface ModelSelectionStrategy {
     /**
-     * validateQueryFeasibility 작업용 클라이언트 선택
-     * 매번 새로운 인스턴스를 반환하여 병렬 처리 지원
-     */
-    fun selectClientForFeasibilityCheck(): LLMClient
-    
-    /**
      * createExecutionTree 작업용 클라이언트 선택
      */
     fun selectClientForTreeCreation(): LLMClient

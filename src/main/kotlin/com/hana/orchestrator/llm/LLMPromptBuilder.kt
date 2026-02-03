@@ -68,36 +68,6 @@ internal class LLMPromptBuilder {
     }
     
     /**
-     * 요구사항 실행 가능성 검증 프롬프트
-     */
-    fun buildFeasibilityCheckPrompt(
-        userQuery: String,
-        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
-    ): String {
-        val layersInfo = formatLayerDescriptionsCompact(layerDescriptions)
-        
-        return """요청: "$userQuery"
-
-사용 가능한 레이어:
-$layersInfo
-
-위 레이어들의 목적(description)과 각 함수의 설명을 정확히 읽고 분석하여, 요청을 실행할 수 있는지 판단하세요.
-
-$FOUR_STEP_PROCEDURE
-- 레이어 description이나 함수 설명에 명시되지 않은 기능을 요청이 요구하면 반드시 feasible=false입니다
-
-판단 기준:
-- 레이어 description에 명시된 기능만 제공합니다. 명시되지 않은 기능은 제공하지 않습니다.
-- 함수 설명에 명시된 작업만 수행합니다. 명시되지 않은 작업은 수행하지 않습니다.
-- 요청이 요구하는 기능이 레이어 description과 함수 설명에 명시된 기능 범위 내에 있어야만 feasible=true입니다.
-- 요청이 요구하는 기능이 레이어 description이나 함수 설명에 명시되지 않으면 feasible=false입니다.
-
-반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요:
-
-{"feasible":true,"reason":"이유","suggestion":null}""".trimIndent()
-    }
-    
-    /**
      * 실행 트리 생성 프롬프트
      */
     fun buildExecutionTreePrompt(

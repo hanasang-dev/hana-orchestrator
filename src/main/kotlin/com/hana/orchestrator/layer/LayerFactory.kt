@@ -40,13 +40,6 @@ object LayerFactory {
     }
     
     /**
-     * TextGenerator 레이어 생성
-     */
-    fun createTextGeneratorLayer(): TextGeneratorLayer {
-        return TextGeneratorLayer()
-    }
-    
-    /**
      * TextTransformer 레이어 생성
      */
     fun createTextTransformerLayer(): TextTransformerLayer {
@@ -73,7 +66,6 @@ object LayerFactory {
     fun createDefaultLayers(modelSelectionStrategy: com.hana.orchestrator.llm.strategy.ModelSelectionStrategy? = null): List<CommonLayerInterface> {
         val layers = mutableListOf<CommonLayerInterface>(
             createEchoLayer(),
-            createTextGeneratorLayer(),
             createTextTransformerLayer(),
             createTextValidatorLayer()
         )

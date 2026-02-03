@@ -14,16 +14,6 @@ import com.hana.orchestrator.layer.LayerDescription
  */
 interface LLMClient {
     /**
-     * 요구사항이 레이어 기능으로 수행 가능한지 사전 검증
-     * 간단한 작업: 짧은 프롬프트, 빠른 응답
-     */
-    @LLMTask(complexity = LLMTaskComplexity.SIMPLE)
-    suspend fun validateQueryFeasibility(
-        userQuery: String,
-        layerDescriptions: List<LayerDescription>
-    ): QueryFeasibility
-    
-    /**
      * 사용자 질문과 레이어 정보를 바탕으로 ExecutionTree 구조의 실행 계획을 생성
      * 복잡한 작업: 긴 프롬프트, 많은 컨텍스트
      */

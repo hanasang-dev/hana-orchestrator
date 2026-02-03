@@ -121,23 +121,6 @@ class OllamaLLMClient(
     }
     
     /**
-     * 요구사항이 레이어 기능으로 수행 가능한지 사전 검증
-     */
-    override suspend fun validateQueryFeasibility(
-        userQuery: String,
-        layerDescriptions: List<LayerDescription>
-    ): QueryFeasibility {
-        val prompt = promptBuilder.buildFeasibilityCheckPrompt(userQuery, layerDescriptions)
-        
-        return callLLM(
-            prompt = prompt,
-            responseParser = { jsonText ->
-                jsonConfig.decodeFromString<QueryFeasibility>(jsonText)
-            }
-        )
-    }
-    
-    /**
      * 사용자 질문과 레이어 정보를 바탕으로 ExecutionTree 구조의 실행 계획을 생성
      */
     override suspend fun createExecutionTree(
