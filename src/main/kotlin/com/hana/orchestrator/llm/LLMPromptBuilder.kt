@@ -17,7 +17,8 @@ internal class LLMPromptBuilder {
 - 문자열 값 내부의 따옴표(")는 반드시 백슬래시로 이스케이프하세요 (\")
 - 유니코드 이스케이프(\\u{...})나 잘못된 형식(\\u{C5AC번 등)을 절대 사용하지 마세요. 한글, 영문 등 모든 문자는 일반 문자열로 작성하세요
 - 예: "args": {"message": "안녕"} (O) vs "args": {"message": "\\u{c548}\\u{d55c}"} (X) vs "args": {"message": "\\u{C5AC번"} (X)
-- 올바른 예: "args": {"message": "안녕"} 또는 "args": {"text": "문자열 내부의 \\\"따옴표\\\"는 이스케이프"}"""
+- 올바른 예: "args": {"message": "안녕"} 또는 "args": {"text": "문자열 내부의 \\\"따옴표\\\"는 이스케이프"}
+- 경로 처리: 상대 경로는 그대로 사용하세요. "현재 디렉토리"는 "."로, "src"는 "src"로 표현하세요. 절대 경로(/로 시작)로 변환하지 마세요."""
         
         /**
          * 4단계 분석 절차 (공통)
@@ -101,11 +102,13 @@ $JSON_RULES
 
 ${buildNodeRequiredFields(availableLayerNames)}
 
-예시 (단일 노드):
-{"rootNodes":[{"layerName":"echo","function":"echo","args":{"message":"Hello"},"parallel":false,"children":[]}]}
+중요: 예시는 참고용입니다. 실제 레이어 이름과 함수 이름은 위에 나열된 사용 가능한 레이어 목록에서 선택하세요.
 
-예시 (중첩된 children):
-{"rootNodes":[{"layerName":"text-generator","function":"generate","args":{"text":"안녕"},"parallel":false,"children":[{"layerName":"echo","function":"echo","args":{"message":"안녕"},"parallel":false,"children":[]}]}]}""".trimIndent()
+예시 구조 (단일 노드):
+{"rootNodes":[{"layerName":"레이어이름","function":"함수이름","args":{"파라미터명":"값"},"parallel":false,"children":[]}]}
+
+예시 구조 (중첩된 children):
+{"rootNodes":[{"layerName":"레이어이름","function":"함수이름","args":{"파라미터명":"값"},"parallel":false,"children":[{"layerName":"자식레이어이름","function":"자식함수이름","args":{"파라미터명":"값"},"parallel":false,"children":[]}]}]}""".trimIndent()
     }
     
     /**
@@ -131,19 +134,21 @@ ${buildNodeRequiredFields(availableLayerNames)}
 
 반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요.
 
-중요: 다음 세 필드는 모두 필수입니다. 반드시 모두 포함하세요:
-- isSatisfactory: 요구사항 충족 여부 (불린, 필수) - true 또는 false만 사용
+중요: 다음 세 필드는 모두 필수입니다. 반드시 모두 포함하세요. 필드가 누락되면 파싱 오류가 발생합니다:
+- isSatisfactory: 요구사항 충족 여부 (불린, 필수) - 반드시 true 또는 false만 사용. null이나 생략 불가
 - reason: 평가 이유 (문자열, 필수) - 문자열 내부에 따옴표(")가 있으면 백슬래시로 이스케이프하세요 (\")
-- needsRetry: 재처리 필요 여부 (불린, 필수) - true 또는 false만 사용
+- needsRetry: 재처리 필요 여부 (불린, 필수) - 반드시 true 또는 false만 사용. null이나 생략 불가
 
 $JSON_RULES
 
-예시:
+응답 형식 (반드시 이 형식을 정확히 따르세요):
 {"isSatisfactory":true,"reason":"결과가 요구사항을 충족합니다","needsRetry":false}
 
 또는
 
-{"isSatisfactory":false,"reason":"결과가 요구사항을 충족하지 않습니다","needsRetry":true}""".trimIndent()
+{"isSatisfactory":false,"reason":"결과가 요구사항을 충족하지 않습니다","needsRetry":true}
+
+주의: JSON 응답은 반드시 완전한 객체여야 합니다. 중간에 끊기거나 필드가 누락되면 안 됩니다.""".trimIndent()
     }
     
     /**
@@ -183,11 +188,15 @@ ${buildNodeRequiredFields(availableLayerNames).replace("중요: 모든 노드", 
 - 올바른 형식: {"shouldStop":false,"reason":"...","newTree":{"rootNodes":[...]}}
 - 잘못된 형식: [{"layerName":...}] (배열로 시작하면 안 됩니다)
 
-예시 (재처리 계속):
-{"shouldStop":false,"reason":"파라미터 수정 필요","newTree":{"rootNodes":[{"layerName":"echo","function":"echo","args":{"message":"Hello"},"parallel":false,"children":[]}]}}
+중요: reason 필드의 문자열이 끝나기 전에 JSON이 끊기지 않도록 주의하세요. 따옴표를 제대로 닫으세요.
 
-예시 (재처리 중단):
-{"shouldStop":true,"reason":"근본 해결 불가능"}""".trimIndent()
+응답 형식 (재처리 계속):
+{"shouldStop":false,"reason":"파라미터 수정 필요","newTree":{"rootNodes":[{"layerName":"실제레이어이름","function":"실제함수이름","args":{"파라미터명":"값"},"parallel":false,"children":[]}]}}
+
+응답 형식 (재처리 중단):
+{"shouldStop":true,"reason":"근본 해결 불가능","newTree":null}
+
+주의: reason 필드 내부의 따옴표는 반드시 이스케이프하세요. 예: "reason":"파일이 존재하지 않습니다. \\\"test.txt\\\""""".trimIndent()
     }
     
     /**

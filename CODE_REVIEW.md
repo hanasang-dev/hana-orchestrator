@@ -1,188 +1,192 @@
-# 코드 리뷰 보고서 - DRY, KISS, YAGNI, OOP 관점
+# 코드 리뷰: JSON Schema Builder 및 LLM Client 개선
 
-## 🔴 심각한 문제점
+## 변경사항 요약
+1. **JsonSchemaBuilder.kt** - 새로 생성 (250줄)
+2. **OllamaLLMClient.kt** - schema 파라미터 추가, 재시도 로직 개선
+3. **LLMPromptBuilder.kt** - 경로 처리 규칙 추가, 예시 generic화
 
-### 1. DRY 위반: 중복된 패턴들
+---
 
-#### 1.1 실패 이력 저장 패턴 중복 (8회 이상)
-**위치**: `OrchestrationCoordinator.kt`
-- 100-107줄, 122-129줄, 142-147줄, 163-170줄, 179-184줄, 436-443줄, 505-512줄, 525-532줄
+## 원칙별 검토
 
-**해결 방안**: 헬퍼 메서드 추출
+### ✅ KISS (Keep It Simple, Stupid)
+
+**잘 된 점:**
+- `JsonSchemaBuilder`는 단일 책임 (JSON Schema 생성만)
+- 각 함수는 명확한 목적을 가짐
+- 재시도 로직이 단순하고 이해하기 쉬움
+
+**개선 필요:**
+- ❌ **JsonSchemaBuilder의 중복 패턴**: 각 스키마 빌더 함수가 비슷한 구조를 반복
+  ```kotlin
+  // 반복되는 패턴:
+  "type" to JsonPrimitive("object"),
+  "required" to JsonArray(...),
+  "properties" to JsonObject(...)
+  ```
+
+---
+
+### ❌ DRY (Don't Repeat Yourself)
+
+**문제점:**
+
+1. **JsonSchemaBuilder의 중복 코드**
+   - `buildResultEvaluationSchema()`, `buildComparisonResultSchema()`, `buildLLMDirectAnswerCapabilitySchema()`가 거의 동일한 패턴
+   - 각 함수에서 `JsonObject(mapOf("type" to JsonPrimitive(...)))` 반복
+   - `required` 필드 생성 로직 중복: `listOf(...).map { JsonPrimitive(it) }`
+
+2. **프로퍼티 스키마 생성 중복**
+   - boolean 타입 프로퍼티 생성 패턴이 여러 곳에서 반복
+   - string 타입 프로퍼티 생성 패턴이 여러 곳에서 반복
+
+**개선 제안:**
 ```kotlin
-private suspend fun saveAndEmitFailedHistory(
-    executionId: String,
-    query: String,
-    error: String,
-    startTime: Long
-): ExecutionHistory {
-    val failedHistory = ExecutionHistory.createFailed(
-        executionId, query, error, startTime,
-        logs = historyManager.getCurrentLogs()
-    )
-    historyManager.addHistory(failedHistory)
-    statePublisher.emitExecutionUpdate(failedHistory)
-    return failedHistory
-}
+// 헬퍼 함수 추가
+private fun createObjectSchema(
+    required: List<String>,
+    properties: Map<String, JsonObject>
+): JsonObject
+
+private fun createBooleanProperty(description: String): JsonObject
+private fun createStringProperty(description: String): JsonObject
 ```
 
-#### 1.2 재시도 시작 패턴 중복 (3회)
-**위치**: `OrchestrationCoordinator.kt` (111-114줄, 133-136줄, 472-475줄)
+---
 
-**해결 방안**: 헬퍼 메서드 추출
+### ✅ YAGNI (You Aren't Gonna Need It)
+
+**잘 된 점:**
+- 현재 필요한 스키마만 구현됨
+- 미래 확장을 위한 과도한 추상화 없음
+- `schema` 파라미터는 현재 사용하지 않지만 향후 사용 예정 (TODO로 명시)
+
+**주의사항:**
+- `schema` 파라미터가 현재 사용되지 않지만, 구조화된 출력 구현을 위해 필요 (YAGNI 위반 아님)
+
+---
+
+### ✅ OOP (Object-Oriented Programming)
+
+**잘 된 점:**
+- **SRP (Single Responsibility Principle)**: 
+  - `JsonSchemaBuilder`: 스키마 생성만 담당
+  - `OllamaLLMClient`: LLM 통신만 담당
+  - `LLMPromptBuilder`: 프롬프트 생성만 담당
+
+- **캡슐화**: 
+  - `buildExecutionNodeSchema`는 private으로 내부 구현 숨김
+  - `JsonSchemaBuilder`는 `internal object`로 패키지 내부에서만 사용
+
+- **DIP (Dependency Inversion Principle)**:
+  - `LLMClient` 인터페이스를 통해 추상화
+  - `JsonSchemaBuilder`는 프로바이더 독립적
+
+**개선 가능:**
+- `JsonSchemaBuilder`가 `object`로 되어 있어 테스트하기 어려움 (의존성 주입 불가)
+  - 하지만 현재는 상태가 없으므로 `object`가 적절할 수 있음
+
+---
+
+## 구체적인 개선 제안
+
+### 1. JsonSchemaBuilder DRY 개선
+
+**현재 문제:**
 ```kotlin
-private suspend fun prepareRetry(
-    executionId: String,
-    query: String
-): ExecutionHistory {
-    val newRunningHistory = ExecutionHistory.createRunning(
-        executionId, query, System.currentTimeMillis()
-    )
-    newRunningHistory.logs.addAll(historyManager.getCurrentLogs())
-    historyManager.setCurrentExecution(newRunningHistory)
-    statePublisher.emitExecutionUpdate(newRunningHistory)
-    return newRunningHistory
-}
-```
-
-#### 1.3 로그 emit 패턴 중복
-**위치**: 여러 곳에서 반복
-
-**해결 방안**: `ExecutionHistoryManager`에 통합
-```kotlin
-fun emitCurrentExecution() {
-    currentExecution?.let { statePublisher.emitExecutionUpdateAsync(it) }
-}
-```
-
-### 2. KISS 위반: 복잡한 로직
-
-#### 2.1 `executeOrchestration` 메서드가 너무 복잡함 (200줄 이상)
-**문제점**:
-- 중첩된 조건문
-- 재시도 로직이 메인 로직과 혼재
-- 평가 결과 처리 로직이 복잡함
-
-**해결 방안**: 메서드 분리
-```kotlin
-suspend fun executeOrchestration(query: String): ExecutionResult {
-    // 초기화
-    val context = initializeExecution(query)
-    
-    // 재시도 루프
-    while (context.shouldRetry()) {
-        try {
-            val result = executeAttempt(context)
-            if (shouldComplete(result, context)) {
-                return completeExecution(result, context)
-            }
-            prepareRetry(context, result)
-        } catch (e: Exception) {
-            if (!handleException(e, context)) {
-                return failExecution(context, e)
-            }
-        }
-    }
-    
-    return failExecution(context, Exception("최대 재시도 횟수 도달"))
-}
-```
-
-#### 2.2 평가 결과 처리 로직 중복 및 복잡
-**문제점**: 
-- 93-157줄: `needsRetry` 체크가 두 번 나타남
-- 로직이 중복되어 혼란
-
-**해결 방안**: 단순화
-```kotlin
-private suspend fun handleEvaluationResult(
-    evaluation: ResultEvaluation,
-    result: ExecutionResult,
-    context: ExecutionContext
-): ExecutionResult? {
-    if (evaluation.isSatisfactory && !evaluation.needsRetry) {
-        return result // 성공
-    }
-    
-    if (evaluation.needsRetry && context.canRetry()) {
-        prepareRetry(context, result)
-        return null // 재시도 계속
-    }
-    
-    return result // 최종 실패
-}
-```
-
-### 3. YAGNI 위반: 사용되지 않는 코드
-
-#### 3.1 `buildFeasibilityCheckPrompt` 미사용
-**위치**: `LLMPromptBuilder.kt` (73-100줄)
-- Feasibility 체크가 제거되어 더 이상 사용되지 않음
-- `OllamaLLMClient.kt`에서 호출되지만 실제로는 호출되지 않음
-
-**해결 방안**: 제거
-- `LLMPromptBuilder.buildFeasibilityCheckPrompt()` 제거
-- `OllamaLLMClient.validateQueryFeasibility()` 제거 (또는 사용처 확인)
-
-#### 3.2 `FallbackTreeFactory` 미사용
-**위치**: `FallbackTreeFactory.kt`
-- 정의되어 있으나 사용되지 않음
-
-**해결 방안**: 제거 또는 사용처 추가
-
-### 4. OOP 위반: 책임 분산
-
-#### 4.1 ExecutionHistory 생성/저장/emit 패턴이 여러 곳에 분산
-**문제점**: 상태 전이 로직이 `OrchestrationCoordinator`에 집중
-
-**해결 방안**: `ExecutionHistoryManager`에 통합
-```kotlin
-class ExecutionHistoryManager {
-    suspend fun saveAndEmitFailed(
-        executionId: String,
-        query: String,
-        error: String,
-        startTime: Long,
-        statePublisher: ExecutionStatePublisher
-    ): ExecutionHistory {
-        val failedHistory = ExecutionHistory.createFailed(
-            executionId, query, error, startTime,
-            logs = getCurrentLogs()
+// 중복되는 패턴이 여러 함수에 반복됨
+fun buildResultEvaluationSchema(): JsonObject {
+    return JsonObject(
+        mapOf(
+            "type" to JsonPrimitive("object"),
+            "required" to JsonArray(listOf(...).map { JsonPrimitive(it) }),
+            "properties" to JsonObject(mapOf(...))
         )
-        addHistory(failedHistory)
-        statePublisher.emitExecutionUpdate(failedHistory)
-        return failedHistory
+    )
+}
+```
+
+**개선안:**
+```kotlin
+internal object JsonSchemaBuilder {
+    // 헬퍼 함수로 중복 제거
+    private fun createObjectSchema(
+        required: List<String>,
+        properties: Map<String, JsonObject>
+    ): JsonObject {
+        return JsonObject(
+            mapOf(
+                "type" to JsonPrimitive("object"),
+                "required" to JsonArray(required.map { JsonPrimitive(it) }),
+                "properties" to JsonObject(properties)
+            )
+        )
     }
     
-    suspend fun prepareRetry(
-        executionId: String,
-        query: String,
-        statePublisher: ExecutionStatePublisher
-    ): ExecutionHistory {
-        val newRunningHistory = ExecutionHistory.createRunning(
-            executionId, query, System.currentTimeMillis()
+    private fun createBooleanProperty(description: String): JsonObject {
+        return JsonObject(mapOf(
+            "type" to JsonPrimitive("boolean"),
+            "description" to JsonPrimitive(description)
+        ))
+    }
+    
+    private fun createStringProperty(description: String): JsonObject {
+        return JsonObject(mapOf(
+            "type" to JsonPrimitive("string"),
+            "description" to JsonPrimitive(description)
+        ))
+    }
+    
+    // 개선된 함수
+    fun buildResultEvaluationSchema(): JsonObject {
+        return createObjectSchema(
+            required = listOf("isSatisfactory", "reason", "needsRetry"),
+            properties = mapOf(
+                "isSatisfactory" to createBooleanProperty("요구사항 충족 여부"),
+                "reason" to createStringProperty("평가 이유"),
+                "needsRetry" to createBooleanProperty("재처리 필요 여부")
+            )
         )
-        newRunningHistory.logs.addAll(getCurrentLogs())
-        setCurrentExecution(newRunningHistory)
-        statePublisher.emitExecutionUpdate(newRunningHistory)
-        return newRunningHistory
     }
 }
 ```
 
-## 📋 우선순위별 개선 사항
+### 2. OllamaLLMClient의 재시도 로직
 
-### 높은 우선순위 (즉시 수정 권장)
-1. ✅ 실패 이력 저장 패턴 중복 제거 (DRY)
-2. ✅ 재시도 시작 패턴 중복 제거 (DRY)
-3. ✅ `buildFeasibilityCheckPrompt` 제거 (YAGNI)
-4. ✅ `FallbackTreeFactory` 제거 또는 사용처 추가 (YAGNI)
+**현재 상태:** ✅ 적절함
+- 재시도 로직이 명확하고 단순함
+- 에러 정보를 프롬프트에 포함하여 개선
 
-### 중간 우선순위 (점진적 개선)
-5. ⚠️ `executeOrchestration` 메서드 분리 (KISS)
-6. ⚠️ 평가 결과 처리 로직 단순화 (KISS)
-7. ⚠️ ExecutionHistory 관리 로직 통합 (OOP)
+### 3. LLMPromptBuilder의 경로 처리
 
-### 낮은 우선순위 (리팩토링 시 고려)
-8. 💡 로그 emit 패턴 통합 (DRY)
-9. 💡 상태 전이 로직 캡슐화 (OOP)
+**현재 상태:** ✅ 적절함
+- 경로 처리 규칙이 명확하게 추가됨
+- 예시가 generic하게 변경되어 하드코딩 제거
+
+---
+
+## 우선순위별 개선 사항
+
+### 🔴 High Priority (커밋 전 개선 권장)
+1. **JsonSchemaBuilder DRY 개선** - 중복 코드 제거로 유지보수성 향상
+
+### 🟡 Medium Priority (향후 개선)
+1. `schema` 파라미터 실제 적용 (LLMParams.Schema.JSON 사용법 확인)
+2. `JsonSchemaBuilder` 테스트 코드 추가
+
+### 🟢 Low Priority (선택사항)
+1. `JsonSchemaBuilder`를 클래스로 변경하여 의존성 주입 가능하게 (현재는 object로 충분)
+
+---
+
+## 결론
+
+**전체 평가:**
+- ✅ KISS: 대체로 단순하지만 JsonSchemaBuilder에 중복 있음
+- ❌ DRY: JsonSchemaBuilder에 중복 코드 다수
+- ✅ YAGNI: 불필요한 기능 없음
+- ✅ OOP: 원칙 준수 양호
+
+**권장사항:**
+- 커밋 전에 JsonSchemaBuilder의 DRY 개선을 권장합니다.
+- 하지만 현재 코드도 동작하므로, 우선 커밋하고 향후 리팩토링도 가능합니다.

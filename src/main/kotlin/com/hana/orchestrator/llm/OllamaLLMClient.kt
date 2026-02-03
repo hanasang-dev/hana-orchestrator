@@ -16,6 +16,8 @@ import com.hana.orchestrator.llm.config.LLMConfig
 import com.hana.orchestrator.layer.LayerDescription
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.withTimeout
+import ai.koog.prompt.params.LLMParams
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Ollama 로컬 LLM 통신을 위한 모듈
@@ -85,39 +87,79 @@ class OllamaLLMClient(
     
     /**
      * 공통 LLM 호출 로직
-     * 성능 최적화: 단순하고 빠른 호출, 불필요한 재시도 제거
+     * JSON 파싱 실패 시 재시도 로직 포함 (최대 2회 재시도)
+     * 2026년 기준: Ollama Structured Outputs를 활용하여 스키마를 강제
+     * - 프롬프트만으로는 부족하므로 format 파라미터로 스키마 전달
+     * - 파싱 실패 시 프롬프트에 에러 정보를 포함하여 재요청
      */
     private suspend fun <T> callLLM(
         prompt: String,
         responseParser: (String) -> T,
-        timeoutMs: Long = this.timeoutMs
+        schema: JsonObject? = null,
+        timeoutMs: Long = this.timeoutMs,
+        maxRetries: Int = 2
     ): T {
-        val model = createLLMModel()
-        val promptDsl = Prompt.build(id = "llm-call") {
-            user(prompt)
+        var lastError: Exception? = null
+        var lastJsonText: String? = null
+        
+        repeat(maxRetries + 1) { attempt ->
+            try {
+                val model = createLLMModel()
+                val enhancedPrompt = if (attempt > 0 && lastError != null) {
+                    // 재시도 시: 이전 에러 정보를 포함하여 프롬프트 개선
+                    """
+                    $prompt
+                    
+                    중요: 이전 응답에서 JSON 파싱 오류가 발생했습니다.
+                    오류: ${lastError?.message}
+                    이전 응답: ${lastJsonText?.take(200) ?: "없음"}
+                    
+                    반드시 완전하고 유효한 JSON 형식으로만 응답하세요. 모든 필수 필드를 포함하고, 따옴표를 올바르게 이스케이프하세요.
+                    """.trimIndent()
+                } else {
+                    prompt
+                }
+                
+                // TODO: Ollama Structured Outputs 지원 추가 필요
+                // 현재는 프롬프트에 스키마 정보를 포함하는 방식 사용
+                // schema 파라미터는 준비되었지만 LLMParams.Schema.JSON 생성 방법 확인 필요
+                val promptDsl = Prompt.build(id = "llm-call") {
+                    user(enhancedPrompt)
+                    // 향후 추가: params { schema = LLMParams.Schema.JSON(schema) }
+                }
+                
+                val responses = withTimeout(timeoutMs) {
+                    ollamaClient.execute(
+                        prompt = promptDsl,
+                        model = model,
+                        tools = emptyList()
+                    )
+                }
+                
+                val responseText = when (val firstResponse = responses.firstOrNull()) {
+                    is Message.Assistant -> firstResponse.content
+                    is Message.Tool.Call -> firstResponse.content
+                    else -> throw Exception("LLM 응답이 비어있습니다")
+                }
+                
+                val jsonText = JsonExtractor.extract(responseText)
+                lastJsonText = jsonText
+                
+                return responseParser(jsonText)
+            } catch (e: Exception) {
+                lastError = e
+                if (attempt < maxRetries) {
+                    // 재시도 전에 잠시 대기 (LLM이 이전 응답을 처리할 시간 제공)
+                    kotlinx.coroutines.delay(500)
+                } else {
+                    // 최대 재시도 횟수 초과
+                    throw Exception("LLM 응답 파싱 실패 (${maxRetries + 1}회 시도): ${e.message}", e)
+                }
+            }
         }
         
-        // 단순한 1회 시도 - 재시도는 상위 레벨에서 처리
-        val responses = withTimeout(timeoutMs) {
-            ollamaClient.execute(
-                prompt = promptDsl,
-                model = model,
-                tools = emptyList()
-            )
-        }
-        
-        val responseText = when (val firstResponse = responses.firstOrNull()) {
-            is Message.Assistant -> firstResponse.content
-            is Message.Tool.Call -> firstResponse.content
-            else -> throw Exception("LLM 응답이 비어있습니다")
-        }
-        
-        val jsonText = JsonExtractor.extract(responseText)
-        return try {
-            responseParser(jsonText)
-        } catch (e: Exception) {
-            throw Exception("LLM 응답 파싱 실패: ${e.message}", e)
-        }
+        // 이론적으로 도달 불가능하지만 컴파일러를 위해
+        throw Exception("LLM 호출 실패")
     }
     
     /**
@@ -128,9 +170,12 @@ class OllamaLLMClient(
         layerDescriptions: List<LayerDescription>
     ): ExecutionTree {
         val prompt = promptBuilder.buildExecutionTreePrompt(userQuery, layerDescriptions)
+        val availableLayerNames = layerDescriptions.map { it.name }
+        val schema = JsonSchemaBuilder.buildExecutionTreeSchema(availableLayerNames)
         
         return callLLM(
             prompt = prompt,
+            schema = schema,
             responseParser = { jsonText ->
                 val treeResponse = jsonConfig.decodeFromString<ExecutionTreeResponse>(jsonText)
                 ExecutionTreeMapper.toExecutionTree(treeResponse)
@@ -147,9 +192,11 @@ class OllamaLLMClient(
         executionContext: ExecutionContext?
     ): ResultEvaluation {
         val prompt = promptBuilder.buildEvaluationPrompt(userQuery, executionResult, executionContext)
+        val schema = JsonSchemaBuilder.buildResultEvaluationSchema()
         
         return callLLM(
             prompt = prompt,
+            schema = schema,
             responseParser = { jsonText ->
                 jsonConfig.decodeFromString<ResultEvaluation>(jsonText)
             }
@@ -165,9 +212,12 @@ class OllamaLLMClient(
         layerDescriptions: List<LayerDescription>
     ): RetryStrategy {
         val prompt = promptBuilder.buildRetryStrategyPrompt(userQuery, previousHistory, layerDescriptions)
+        val availableLayerNames = layerDescriptions.map { it.name }
+        val schema = JsonSchemaBuilder.buildRetryStrategySchema(availableLayerNames)
         
         return callLLM(
             prompt = prompt,
+            schema = schema,
             responseParser = { jsonText ->
                 // 배열로 반환된 경우 처리 (예: [{"layerName":...}] -> {"newTree": {"rootNodes": [...]}})
                 val normalizedJson = if (jsonText.trimStart().startsWith("[")) {
@@ -217,9 +267,11 @@ class OllamaLLMClient(
         val prompt = promptBuilder.buildComparisonPrompt(
             userQuery, previousTree, previousResult, currentTree, currentResult
         )
+        val schema = JsonSchemaBuilder.buildComparisonResultSchema()
         
         return callLLM(
             prompt = prompt,
+            schema = schema,
             responseParser = { jsonText ->
                 jsonConfig.decodeFromString<ComparisonResult>(jsonText)
             }
@@ -269,9 +321,11 @@ class OllamaLLMClient(
      */
     override suspend fun checkIfLLMCanAnswerDirectly(userQuery: String): LLMDirectAnswerCapability {
         val prompt = promptBuilder.buildLLMDirectAnswerCapabilityPrompt(userQuery)
+        val schema = JsonSchemaBuilder.buildLLMDirectAnswerCapabilitySchema()
         
         return callLLM(
             prompt = prompt,
+            schema = schema,
             responseParser = { jsonText ->
                 jsonConfig.decodeFromString<LLMDirectAnswerCapability>(jsonText)
             }

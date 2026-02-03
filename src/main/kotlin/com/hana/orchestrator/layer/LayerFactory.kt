@@ -61,13 +61,21 @@ object LayerFactory {
     }
     
     /**
+     * 파일 시스템 레이어 생성
+     */
+    fun createFileSystemLayer(): FileSystemLayer {
+        return FileSystemLayer()
+    }
+    
+    /**
      * 모든 기본 레이어 생성
      */
     fun createDefaultLayers(modelSelectionStrategy: com.hana.orchestrator.llm.strategy.ModelSelectionStrategy? = null): List<CommonLayerInterface> {
         val layers = mutableListOf<CommonLayerInterface>(
             createEchoLayer(),
             createTextTransformerLayer(),
-            createTextValidatorLayer()
+            createTextValidatorLayer(),
+            createFileSystemLayer()
         )
         
         // LLMLayer는 ModelSelectionStrategy가 필요하므로 선택적으로 추가
