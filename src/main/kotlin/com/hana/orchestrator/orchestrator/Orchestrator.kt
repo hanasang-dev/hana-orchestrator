@@ -41,7 +41,7 @@ class Orchestrator(
         modelSelectionStrategy = GeneratedModelSelectionStrategy(clientFactory = clientFactory)
         
         // 컴포넌트 초기화
-        layerManager = LayerManager()
+        layerManager = LayerManager(modelSelectionStrategy)
         historyManager = ExecutionHistoryManager()
         statePublisher = ExecutionStatePublisher()
         treeExecutor = TreeExecutor(layerManager, statePublisher, historyManager)
@@ -53,8 +53,6 @@ class Orchestrator(
             modelSelectionStrategy = modelSelectionStrategy
         )
         
-        // 기본 레이어 초기화는 suspend 함수이므로 init 블록에서는 할 수 없음
-        // 레이어 초기화는 첫 실행 시 자동으로 수행됨 (지연 초기화)
         logger.info("🚀 [Orchestrator] 초기화 시작...")
         logger.info("ℹ️ [Orchestrator] 레이어 초기화는 첫 실행 시 수행됩니다")
     }

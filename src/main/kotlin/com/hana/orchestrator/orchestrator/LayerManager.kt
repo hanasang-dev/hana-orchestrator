@@ -3,12 +3,16 @@ package com.hana.orchestrator.orchestrator
 import com.hana.orchestrator.layer.CommonLayerInterface
 import com.hana.orchestrator.layer.LayerDescription
 import com.hana.orchestrator.layer.LayerFactory
+import com.hana.orchestrator.layer.LayerInfoLayer
+import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 
 /**
  * 레이어 관리 책임
  * SRP: 레이어 등록, 조회, 설명 관리만 담당
  */
-class LayerManager {
+class LayerManager(
+    private val modelSelectionStrategy: ModelSelectionStrategy? = null
+) {
     private val layers = mutableListOf<CommonLayerInterface>()
     private val cachedDescriptions = mutableSetOf<LayerDescription>()
     private val layerNameMap = mutableMapOf<String, CommonLayerInterface>() // 이름 -> 레이어 매핑
@@ -20,7 +24,16 @@ class LayerManager {
      */
     private suspend fun ensureInitialized() {
         if (!isInitialized) {
-            val defaultLayers = LayerFactory.createDefaultLayers()
+            // LayerInfoLayer 먼저 등록 (다른 레이어 정보 조회용)
+            val layerInfoLayer = LayerInfoLayer()
+            layerInfoLayer.setLayerManager(this)
+            val layerInfoDesc = layerInfoLayer.describe()
+            layerNameMap[layerInfoDesc.name] = layerInfoLayer
+            layers.add(layerInfoLayer)
+            logger.debug("  - 레이어 인스턴스 생성됨: LayerInfoLayer")
+            
+            // 기본 레이어 등록
+            val defaultLayers = LayerFactory.createDefaultLayers(modelSelectionStrategy)
             logger.info("🔧 [LayerManager] 기본 레이어 초기화: ${defaultLayers.size}개 레이어 등록")
             defaultLayers.forEach { layer ->
                 logger.debug("  - 레이어 인스턴스 생성됨: ${layer::class.simpleName}")

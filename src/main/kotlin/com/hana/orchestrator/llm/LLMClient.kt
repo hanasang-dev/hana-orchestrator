@@ -82,6 +82,20 @@ interface LLMClient {
     ): Map<String, Any>
     
     /**
+     * 레이어로 실행 불가능한 요청에 대해 LLM이 직접 답변할 수 있는지 확인
+     * 간단한 작업: 짧은 프롬프트, 빠른 응답
+     */
+    @LLMTask(complexity = LLMTaskComplexity.SIMPLE)
+    suspend fun checkIfLLMCanAnswerDirectly(userQuery: String): LLMDirectAnswerCapability
+    
+    /**
+     * LLM이 직접 답변 생성 (레이어 없이)
+     * 중간 작업: 일반적인 질문에 대한 답변 생성
+     */
+    @LLMTask(complexity = LLMTaskComplexity.MEDIUM)
+    suspend fun generateDirectAnswer(userQuery: String): String
+    
+    /**
      * 리소스 정리
      */
     suspend fun close()

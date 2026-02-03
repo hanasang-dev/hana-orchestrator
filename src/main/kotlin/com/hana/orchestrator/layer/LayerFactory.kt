@@ -61,14 +61,28 @@ object LayerFactory {
     }
     
     /**
+     * LLM 레이어 생성
+     */
+    fun createLLMLayer(modelSelectionStrategy: com.hana.orchestrator.llm.strategy.ModelSelectionStrategy): LLMLayer {
+        return LLMLayer(modelSelectionStrategy)
+    }
+    
+    /**
      * 모든 기본 레이어 생성
      */
-    fun createDefaultLayers(): List<CommonLayerInterface> {
-        return listOf(
+    fun createDefaultLayers(modelSelectionStrategy: com.hana.orchestrator.llm.strategy.ModelSelectionStrategy? = null): List<CommonLayerInterface> {
+        val layers = mutableListOf<CommonLayerInterface>(
             createEchoLayer(),
             createTextGeneratorLayer(),
             createTextTransformerLayer(),
             createTextValidatorLayer()
         )
+        
+        // LLMLayer는 ModelSelectionStrategy가 필요하므로 선택적으로 추가
+        modelSelectionStrategy?.let {
+            layers.add(createLLMLayer(it))
+        }
+        
+        return layers
     }
 }

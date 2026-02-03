@@ -52,3 +52,12 @@ data class QueryFeasibility(
     val reason: String = "",  // 기본값 제공 (LLM이 null이나 누락할 수 있음)
     val suggestion: String? = null
 )
+
+/**
+ * LLM 직접 답변 가능 여부 확인 결과
+ */
+@Serializable
+data class LLMDirectAnswerCapability(
+    val canAnswer: Boolean,
+    val reason: String = ""
+)

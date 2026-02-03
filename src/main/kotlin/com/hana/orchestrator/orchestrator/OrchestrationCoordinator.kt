@@ -55,7 +55,10 @@ class OrchestrationCoordinator(
                 logger.info("🔄 [OrchestrationCoordinator] 실행 시도 #$attemptCount")
                 
                 try {
-                    // LLM으로 트리 생성
+                    // 매번 feasibility check 수행 (LLM 레이어 포함하여 모든 레이어 고려)
+                    val feasibility = validateFeasibility(query, allDescriptions)
+                    
+                    // LLM으로 트리 생성 (모든 레이어 포함, LLM이 자동으로 선택)
                     val rawTree = if (attemptCount == 1) {
                         createInitialTree(query, allDescriptions, executionId, startTime)
                     } else {
@@ -201,7 +204,41 @@ class OrchestrationCoordinator(
     }
     
     /**
+     * 요구사항 실행 가능성 검증
+     * 참고용으로만 사용 (트리 생성에는 영향 없음, LLM이 모든 레이어를 보고 선택)
+     */
+    private suspend fun validateFeasibility(
+        query: String,
+        allDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
+    ): QueryFeasibility {
+        logger.info("🔎 [OrchestrationCoordinator] 요구사항 실행 가능성 검증 중...")
+        
+        val feasibilityStartTime = System.currentTimeMillis()
+        val feasibility = modelSelectionStrategy.selectClientForFeasibilityCheck()
+            .useSuspend { client ->
+                client.validateQueryFeasibility(query, allDescriptions)
+            }
+        
+        val feasibilityDuration = System.currentTimeMillis() - feasibilityStartTime
+        logger.perf("⏱️ [PERF] 요구사항 검증 완료: ${feasibilityDuration}ms")
+        
+        // 로그 타이밍 문제 해결: perf 로그 후 즉시 UI 업데이트
+        historyManager.getCurrentExecution()?.let { currentExecution ->
+            statePublisher.emitExecutionUpdateAsync(currentExecution)
+        }
+        
+        if (feasibility.feasible) {
+            logger.info("✅ [OrchestrationCoordinator] 요구사항 실행 가능: ${feasibility.reason}")
+        } else {
+            logger.info("ℹ️ [OrchestrationCoordinator] 레이어로 실행 불가능 (LLM 레이어 사용 가능): ${feasibility.reason}")
+        }
+        
+        return feasibility
+    }
+    
+    /**
      * 초기 트리 생성
+     * LLM이 모든 레이어(LLM 레이어 포함)를 보고 자동으로 선택
      */
     private suspend fun createInitialTree(
         query: String,
@@ -209,20 +246,6 @@ class OrchestrationCoordinator(
         executionId: String,
         startTime: Long
     ): ExecutionTree {
-        logger.info("🔍 [OrchestrationCoordinator] 사용자 쿼리 수신: $query")
-        
-        // 요구사항 실행 가능성 사전 검증
-        val feasibility = validateFeasibility(query, allDescriptions)
-        if (!feasibility.feasible) {
-            handleFeasibilityFailure(feasibility, query, executionId, startTime)
-            val reason = if (feasibility.reason.isBlank()) {
-                "요구사항을 실행할 수 없습니다"
-            } else {
-                feasibility.reason
-            }
-            throw Exception(reason)
-        }
-        
         logger.info("🌳 [OrchestrationCoordinator] 실행 트리 생성 시작...")
         
         val treeStartTime = System.currentTimeMillis()
@@ -286,36 +309,6 @@ class OrchestrationCoordinator(
         logger.info("✅ [OrchestrationCoordinator] 재처리 방안 수신: ${retryStrategy.reason}")
         
         return retryStrategy.newTree ?: throw Exception("재처리 트리가 null입니다")
-    }
-    
-    /**
-     * 요구사항 실행 가능성 검증
-     */
-    private suspend fun validateFeasibility(
-        query: String,
-        allDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
-    ): QueryFeasibility {
-        logger.info("🔎 [OrchestrationCoordinator] 요구사항 실행 가능성 검증 중...")
-        
-        val feasibilityStartTime = System.currentTimeMillis()
-        val feasibility = modelSelectionStrategy.selectClientForFeasibilityCheck()
-            .useSuspend { client ->
-                client.validateQueryFeasibility(query, allDescriptions)
-            }
-        
-        val feasibilityDuration = System.currentTimeMillis() - feasibilityStartTime
-        logger.perf("⏱️ [PERF] 요구사항 검증 완료: ${feasibilityDuration}ms")
-        
-        // 로그 타이밍 문제 해결: perf 로그 후 즉시 UI 업데이트
-        historyManager.getCurrentExecution()?.let { currentExecution ->
-            statePublisher.emitExecutionUpdateAsync(currentExecution)
-        }
-        
-        if (feasibility.feasible) {
-            logger.info("✅ [OrchestrationCoordinator] 요구사항 실행 가능: ${feasibility.reason}")
-        }
-        
-        return feasibility
     }
     
     /**
@@ -531,38 +524,6 @@ class OrchestrationCoordinator(
     }
     
     // Helper methods for error handling
-    private suspend fun handleFeasibilityFailure(
-        feasibility: QueryFeasibility,
-        query: String,
-        executionId: String,
-        startTime: Long
-    ) {
-        val reason = if (feasibility.reason.isBlank()) {
-            "요구사항을 실행할 수 없습니다"
-        } else {
-            feasibility.reason
-        }
-        logger.error("❌ [OrchestrationCoordinator] 요구사항 실행 불가능: $reason")
-        
-        feasibility.suggestion?.let {
-            logger.info("💡 [OrchestrationCoordinator] 제안: $it")
-        }
-        
-        val errorMessage = if (feasibility.suggestion != null) {
-            "$reason\n\n제안: ${feasibility.suggestion}"
-        } else {
-            reason
-        }
-        
-        val failedHistory = ExecutionHistory.createFailed(
-            executionId, query,
-            errorMessage,
-            startTime,
-            logs = historyManager.getCurrentLogs()
-        )
-        historyManager.addHistory(failedHistory)
-        statePublisher.emitExecutionUpdate(failedHistory)
-    }
     
     private suspend fun handleTreeCreationFailure(
         e: Exception,
@@ -621,4 +582,5 @@ class OrchestrationCoordinator(
         historyManager.addHistory(finalHistory)
         statePublisher.emitExecutionUpdate(finalHistory)
     }
+    
 }

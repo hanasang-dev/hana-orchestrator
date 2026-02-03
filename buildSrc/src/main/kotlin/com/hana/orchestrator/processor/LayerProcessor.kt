@@ -55,8 +55,28 @@ class LayerProcessor(
             .removePrefix("-")
             .ifEmpty { className.lowercase() }
         
-        // 레이어 설명: 클래스명 기반 자동 생성
-        val layerDescription = "${className.removeSuffix("Layer")} 레이어"
+        // 레이어 설명: KDoc 전체 추출 (구조화된 형식 유지)
+        val docString = classDecl.docString
+        val layerDescription = if (docString != null && docString.isNotBlank()) {
+            // KDoc 전체를 추출하되, 구조를 유지하면서 불필요한 부분만 제거
+            val trimmedDoc = docString.trim()
+            trimmedDoc
+                .lines()
+                .map { it.trim() }
+                .filter { 
+                    it.isNotEmpty() && 
+                    !it.startsWith("@") && // 어노테이션 태그 제외
+                    !it.startsWith("*") && // 마크다운 리스트 마커 제외 (내용은 유지)
+                    !it.matches(Regex("^\\s*-\\s*$")) // 빈 리스트 항목 제외
+                }
+                .joinToString("\n") // 줄바꿈 유지로 가독성 향상
+                .replace(Regex("\\n{3,}"), "\n\n") // 연속된 줄바꿈을 2개로 제한
+                .take(800) // 적절한 길이로 제한
+                .trim()
+                .ifEmpty { "${className.removeSuffix("Layer")} 레이어" }
+        } else {
+            "${className.removeSuffix("Layer")} 레이어"
+        }
         
         // 클래스에 선언된 함수만 가져오기 (상속 제외)
         // getAllFunctions()는 상속된 함수도 포함하므로, containingFile로 필터링
@@ -100,12 +120,26 @@ class LayerProcessor(
         // 함수명 자동 추출
         val funcName = func.simpleName.asString()
         
-        // 함수 설명: 함수명과 파라미터 정보 기반 자동 생성
-        val paramNames = func.parameters.mapNotNull { it.name?.asString() }
-        val funcDescription = when {
-            paramNames.isEmpty() -> funcName
-            paramNames.size == 1 -> "${funcName}(${paramNames.first()})"
-            else -> "${funcName}(${paramNames.joinToString(", ")})"
+        // 함수 설명: KDoc 전체 추출 (키워드에 의존하지 않고 전체 내용 포함)
+        val funcDocString = func.docString
+        val funcDescription = if (funcDocString != null && funcDocString.isNotBlank()) {
+            // KDoc 전체를 추출하되, 불필요한 공백과 마크다운 포맷팅 정리
+            val trimmedDoc = funcDocString.trim()
+            trimmedDoc
+                .lines()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("@") && !it.startsWith("param") && !it.startsWith("return") } // 어노테이션 태그 제외
+                .joinToString(" ")
+                .replace(Regex("\\s+"), " ") // 연속된 공백을 하나로
+                .take(200) // 함수 설명은 적절한 길이로 제한
+                .ifEmpty { funcName }
+        } else {
+            val paramNames = func.parameters.mapNotNull { it.name?.asString() }
+            when {
+                paramNames.isEmpty() -> funcName
+                paramNames.size == 1 -> "${funcName}(${paramNames.first()})"
+                else -> "${funcName}(${paramNames.joinToString(", ")})"
+            }
         }
         
         // 반환 타입 자동 추출

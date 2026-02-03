@@ -45,4 +45,14 @@ interface ModelSelectionStrategy {
      * 병렬 자식 노드 실행 시 각각 독립적인 클라이언트 인스턴스 반환
      */
     fun selectClientForParameterExtraction(): LLMClient
+    
+    /**
+     * checkIfLLMCanAnswerDirectly 작업용 클라이언트 선택
+     */
+    fun selectClientForCheckIfLLMCanAnswerDirectly(): LLMClient
+    
+    /**
+     * generateDirectAnswer 작업용 클라이언트 선택
+     */
+    fun selectClientForGenerateDirectAnswer(): LLMClient
 }

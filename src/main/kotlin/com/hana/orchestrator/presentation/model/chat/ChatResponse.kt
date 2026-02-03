@@ -4,5 +4,5 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class ChatResponse(
-    val response: List<String>
+    val results: List<String>
 )

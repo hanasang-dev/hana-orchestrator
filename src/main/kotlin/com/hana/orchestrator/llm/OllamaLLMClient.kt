@@ -186,7 +186,15 @@ class OllamaLLMClient(
         return callLLM(
             prompt = prompt,
             responseParser = { jsonText ->
-                val retryResponse = jsonConfig.decodeFromString<RetryStrategyResponse>(jsonText)
+                // 배열로 반환된 경우 처리 (예: [{"layerName":...}] -> {"newTree": {"rootNodes": [...]}})
+                val normalizedJson = if (jsonText.trimStart().startsWith("[")) {
+                    // 배열을 객체로 변환
+                    val arrayContent = jsonText.trim().removeSurrounding("[", "]")
+                    """{"shouldStop":false,"reason":"재처리 방안","newTree":{"rootNodes":[$arrayContent]}}"""
+                } else {
+                    jsonText
+                }
+                val retryResponse = jsonConfig.decodeFromString<RetryStrategyResponse>(normalizedJson)
                 parseRetryStrategy(retryResponse)
             }
         )
@@ -271,6 +279,48 @@ class OllamaLLMClient(
                 }
             }
         )
+    }
+    
+    /**
+     * 레이어로 실행 불가능한 요청에 대해 LLM이 직접 답변할 수 있는지 확인
+     */
+    override suspend fun checkIfLLMCanAnswerDirectly(userQuery: String): LLMDirectAnswerCapability {
+        val prompt = promptBuilder.buildLLMDirectAnswerCapabilityPrompt(userQuery)
+        
+        return callLLM(
+            prompt = prompt,
+            responseParser = { jsonText ->
+                jsonConfig.decodeFromString<LLMDirectAnswerCapability>(jsonText)
+            }
+        )
+    }
+    
+    /**
+     * LLM이 직접 답변 생성 (레이어 없이)
+     */
+    override suspend fun generateDirectAnswer(userQuery: String): String {
+        val prompt = promptBuilder.buildDirectAnswerPrompt(userQuery)
+        
+        val model = createLLMModel()
+        val promptDsl = Prompt.build(id = "direct-answer") {
+            user(prompt)
+        }
+        
+        val responses = withTimeout(timeoutMs) {
+            ollamaClient.execute(
+                prompt = promptDsl,
+                model = model,
+                tools = emptyList()
+            )
+        }
+        
+        val responseText = when (val firstResponse = responses.firstOrNull()) {
+            is Message.Assistant -> firstResponse.content
+            is Message.Tool.Call -> firstResponse.content
+            else -> throw Exception("LLM 응답이 비어있습니다")
+        }
+        
+        return responseText.trim()
     }
     
     override suspend fun close() {
