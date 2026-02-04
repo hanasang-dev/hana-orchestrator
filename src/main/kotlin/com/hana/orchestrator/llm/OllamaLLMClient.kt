@@ -7,10 +7,15 @@ import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.message.Message
+import com.hana.orchestrator.domain.entity.ExecutionNode
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionHistory
 import com.hana.orchestrator.data.model.response.ExecutionTreeResponse
 import com.hana.orchestrator.data.mapper.ExecutionTreeMapper
+import com.hana.orchestrator.context.AppContextService
+import com.hana.orchestrator.context.DefaultPromptComposer
+import com.hana.orchestrator.context.LLMTaskType
+import com.hana.orchestrator.context.PromptComposer
 import com.hana.orchestrator.llm.config.LLMConfig
 import com.hana.orchestrator.layer.LayerDescription
 import com.hana.orchestrator.orchestrator.createOrchestratorLogger
@@ -69,6 +74,7 @@ class OllamaLLMClient(
     
     // 프롬프트 생성기 (SRP: 프롬프트 생성 책임 분리)
     private val promptBuilder = LLMPromptBuilder()
+    private val promptComposer: PromptComposer = DefaultPromptComposer()
     
     /**
      * 공통 LLM 모델 생성
@@ -99,7 +105,8 @@ class OllamaLLMClient(
         responseParser: (String) -> T,
         schema: JsonObject? = null,
         timeoutMs: Long = this.timeoutMs,
-        maxRetries: Int = 2
+        maxRetries: Int = 2,
+        logRawJson: Boolean = false
     ): T {
         var lastError: Exception? = null
         var lastJsonText: String? = null
@@ -146,7 +153,10 @@ class OllamaLLMClient(
                 
                 val jsonText = JsonExtractor.extract(responseText)
                 lastJsonText = jsonText
-                
+                if (logRawJson) {
+                    logger.info("📋 [트리생성] LLM 원본 반환 (직접 출력):\n$jsonText")
+                }
+
                 return responseParser(jsonText)
             } catch (e: Exception) {
                 lastError = e
@@ -167,22 +177,59 @@ class OllamaLLMClient(
     /**
      * 사용자 질문과 레이어 정보를 바탕으로 ExecutionTree 구조의 실행 계획을 생성
      */
+    /** 트리 생성 전용 타임아웃(ms). 복잡한 프롬프트에서 LLM이 오래 걸릴 때 전체 요청이 멈춘 것처럼 보이지 않도록 제한. */
+    private val treeCreationTimeoutMs = minOf(timeoutMs, 60_000L)
+
+    /** 생성된 트리 구조를 로그로 남겨, 사용자 요구 대비 LLM이 뭘 반환했는지 확인 가능하게 함. */
+    private fun logCreatedTreeStructure(tree: ExecutionTree) {
+        val totalNodes = tree.allNodes().size
+        val chain = tree.rootNodes.joinToString(" → ") { root ->
+            sequence {
+                var n: ExecutionNode? = root
+                while (n != null) {
+                    yield("${n.layerName}.${n.function}")
+                    n = n.children.firstOrNull()
+                }
+            }.toList().joinToString(" → ")
+        }
+        logger.info("📋 [트리생성] LLM이 반환한 트리: 루트 ${tree.rootNodes.size}개, 총 노드 ${totalNodes}개 | 체인: $chain")
+    }
+
     override suspend fun createExecutionTree(
         userQuery: String,
-        layerDescriptions: List<LayerDescription>
+        layerDescriptions: List<LayerDescription>,
+        appContextService: AppContextService?
     ): ExecutionTree {
-        val prompt = promptBuilder.buildExecutionTreePrompt(userQuery, layerDescriptions)
+        val body = promptBuilder.buildExecutionTreePrompt(userQuery, layerDescriptions)
+        val prompt = if (appContextService != null) {
+            promptComposer.compose(LLMTaskType.CREATE_TREE, appContextService, body)
+        } else {
+            body
+        }
+        logger.info("📋 [트리생성] LLM 프롬프트 길이: ${prompt.length}자")
+        logger.info("📋 [트리생성] LLM 프롬프트:\n$prompt")
         val availableLayerNames = layerDescriptions.map { it.name }
         val schema = JsonSchemaBuilder.buildExecutionTreeSchema(availableLayerNames)
         
-        return callLLM(
-            prompt = prompt,
-            schema = schema,
-            responseParser = { jsonText ->
-                val treeResponse = jsonConfig.decodeFromString<ExecutionTreeResponse>(jsonText)
-                ExecutionTreeMapper.toExecutionTree(treeResponse)
-            }
-        )
+        logger.info("🔄 [트리생성] LLM 호출 시작 (타임아웃: ${treeCreationTimeoutMs}ms)")
+        return try {
+            val tree = callLLM(
+                prompt = prompt,
+                schema = schema,
+                responseParser = { jsonText ->
+                    val treeResponse = jsonConfig.decodeFromString<ExecutionTreeResponse>(jsonText)
+                    ExecutionTreeMapper.toExecutionTree(treeResponse)
+                },
+                timeoutMs = treeCreationTimeoutMs,
+                logRawJson = true
+            )
+            logger.info("✅ [트리생성] LLM 호출 완료")
+            logCreatedTreeStructure(tree)
+            tree
+        } catch (e: Exception) {
+            logger.error("❌ [트리생성] LLM 호출 실패: ${e.message}")
+            throw e
+        }
     }
     
     override suspend fun evaluateResult(

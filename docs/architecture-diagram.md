@@ -10,7 +10,7 @@
 ┌─────────────────┐
 │   HTTP Client   │  (사용자 또는 외부 시스템)
 └────────┬────────┘
-         │ POST /chat {"message": "안녕하세요"}
+         │ POST /chat {"message": "안녕하세요", "context": {"currentFile": "...", ...} (선택)}
          ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         Application.kt (Ktor Server)                    │
@@ -58,7 +58,7 @@
 
 [1] HTTP Request
     │
-    │ POST /chat {"message": "안녕하세요"}
+    │ POST /chat {"message": "안녕하세요", "context": {...} (선택)}
     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Application.kt                                                          │
@@ -76,11 +76,12 @@
 │                                                                          │
 │  [3] LLM에게 트리 생성 요청                                              │
 │      ┌────────────────────────────────────────────────────────────┐   │
-│      │ OllamaLLMClient.createExecutionTree(query, layerDescriptions)│   │
+│      │ OllamaLLMClient.createExecutionTree(..., appContextService) │   │
 │      │                                                              │   │
-│      │  • 프롬프트 생성:                                           │   │
-│      │    "사용자 요청: 안녕하세요"                                 │   │
-│      │    "사용 가능한 레이어: echo-layer, ..."                    │   │
+│      │  • 프롬프트 생성 (PromptComposer):                           │   │
+│      │    [영구 컨텍스트] (projectRules 등) + [휘발성 컨텍스트]      │   │
+│      │    (workingDirectory, projectRoot, currentFile 등) + 본문    │   │
+│      │    "사용자 요청: 안녕하세요" / "사용 가능한 레이어: ..."     │   │
 │      │                                                              │   │
 │      │  • LLM 호출 (Ollama qwen3:8b)                               │   │
 │      │    타임아웃: 30초                                            │   │
@@ -338,6 +339,20 @@ ExecutionTree
 └─────────────────────────────────────────────────────────┘
 ```
 
+### 3.5 컨텍스트 및 프롬프트 조합
+```
+┌─────────────────────────────────────────────────────────┐
+│  AppContextService / PromptComposer                     │
+├─────────────────────────────────────────────────────────┤
+│  • 요청 시: chatDto.context → 휘발성 갱신                 │
+│  • ensureVolatileServerWorkingDirectory: workingDirectory│
+│    projectRoot(미지정 시) = 서버 user.dir                │
+│  • refreshPersistentIfNeeded(projectRoot): .cursor/rules │
+│    또는 AGENTS.md → projectRules (영구)                  │
+│  • PromptComposer: [영구] + [휘발] + 본문 → 최종 프롬프트│
+└─────────────────────────────────────────────────────────┘
+```
+
 ### 4. CommonLayerInterface
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -368,7 +383,7 @@ User Query: "안녕하세요"
 ┌─────────────────────────────────────────────────────────┐
 │ 1. HTTP Request                                         │
 │    POST /chat                                            │
-│    Body: {"message": "안녕하세요"}                       │
+│    Body: {"message": "안녕하세요", "context": {...} (선택)}             │
 └─────────────────────────────────────────────────────────┘
     │
     ▼
@@ -381,7 +396,8 @@ User Query: "안녕하세요"
 │ 3. LLM 트리 생성                                        │
 │    Input:                                                │
 │      • query: "안녕하세요"                               │
-│      • layers: [LayerDescription(...)]                  │
+│      • layers: [LayerDescription(...)]                   │
+│      • appContext: 영구+휘발 스냅샷 (PromptComposer로 본문과 결합)     │
 │    Output:                                               │
 │      ExecutionTree {                                     │
 │        rootNode: {                                       │

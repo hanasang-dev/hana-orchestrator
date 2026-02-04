@@ -7,6 +7,7 @@
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background-attachment: fixed; /* 스크롤 시 배경 재그리기 방지 */
     min-height: 100vh;
     overflow-x: hidden;
     overflow-y: auto;
@@ -176,6 +177,8 @@ body {
         min-height: 0 !important;
         overflow-y: auto !important;
         overflow-x: hidden !important;
+        contain: layout style; /* 스크롤 시 리플로우 범위 제한 */
+        -webkit-overflow-scrolling: touch;
     }
 }
 

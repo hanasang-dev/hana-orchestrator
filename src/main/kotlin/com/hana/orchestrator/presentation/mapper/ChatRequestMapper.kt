@@ -8,6 +8,6 @@ import com.hana.orchestrator.domain.dto.ChatDto
  */
 object ChatRequestMapper {
     fun toDto(request: ChatRequest): ChatDto {
-        return ChatDto(message = request.message)
+        return ChatDto(message = request.message, context = request.context)
     }
 }

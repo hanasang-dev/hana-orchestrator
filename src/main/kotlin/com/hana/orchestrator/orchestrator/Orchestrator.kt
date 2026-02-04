@@ -8,7 +8,21 @@ import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 import com.hana.orchestrator.llm.strategy.GeneratedModelSelectionStrategy
 import com.hana.orchestrator.llm.factory.LLMClientFactory
 import com.hana.orchestrator.llm.factory.DefaultLLMClientFactory
+import com.hana.orchestrator.llm.useSuspend
+import com.hana.orchestrator.context.AppContextService
+import com.hana.orchestrator.domain.dto.ChatDto
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.serialization.Serializable
+
+/**
+ * 트리 생성 벤치마크 결과 (동일 프롬프트·모델 직접 호출 검증용)
+ */
+@Serializable
+data class TreeCreationBenchmarkResult(
+    val elapsedMs: Long,
+    val success: Boolean,
+    val error: String?
+)
 
 /**
  * 오케스트레이터 Facade
@@ -16,9 +30,10 @@ import kotlinx.coroutines.flow.SharedFlow
  * Facade 패턴: 복잡한 서브시스템을 단순한 인터페이스로 제공
  */
 class Orchestrator(
-    private val llmConfig: LLMConfig? = null
+    private val llmConfig: LLMConfig? = null,
+    private val appContextService: AppContextService
 ) : CommonLayerInterface {
-    
+
     // 컴포넌트들 (의존성 주입)
     private val layerManager: LayerManager
     private val historyManager: ExecutionHistoryManager
@@ -50,7 +65,8 @@ class Orchestrator(
             treeExecutor = treeExecutor,
             historyManager = historyManager,
             statePublisher = statePublisher,
-            modelSelectionStrategy = modelSelectionStrategy
+            modelSelectionStrategy = modelSelectionStrategy,
+            appContextService = appContextService
         )
         
         logger.info("🚀 [Orchestrator] 초기화 시작...")
@@ -103,8 +119,34 @@ class Orchestrator(
     /**
      * 오케스트레이션 실행 (도메인 모델 반환)
      */
-    suspend fun executeOrchestration(query: String): ExecutionResult {
-        return coordinator.executeOrchestration(query)
+    suspend fun executeOrchestration(chatDto: ChatDto): ExecutionResult {
+        return coordinator.executeOrchestration(chatDto)
+    }
+
+    /** query만 있을 때 호환용 */
+    suspend fun executeOrchestration(query: String): ExecutionResult =
+        executeOrchestration(ChatDto(message = query))
+
+    /**
+     * 트리 생성만 수행하여 소요 시간 측정 (동일 프롬프트·모델로 직접 호출 검증용)
+     * @return elapsedMs(소요 밀리초), success(성공 여부), error(실패 시 메시지)
+     */
+    suspend fun benchmarkTreeCreation(query: String): TreeCreationBenchmarkResult {
+        val allDescriptions = layerManager.getAllLayerDescriptions()
+        val start = System.currentTimeMillis()
+        return try {
+            modelSelectionStrategy.selectClientForTreeCreation()
+                .useSuspend { client ->
+                    client.createExecutionTree(query, allDescriptions)
+                }
+            val elapsedMs = System.currentTimeMillis() - start
+            logger.info("⏱️ [Benchmark] 트리 생성만 호출: ${elapsedMs}ms (query=\"$query\")")
+            TreeCreationBenchmarkResult(elapsedMs = elapsedMs, success = true, error = null)
+        } catch (e: Exception) {
+            val elapsedMs = System.currentTimeMillis() - start
+            logger.warn("⏱️ [Benchmark] 트리 생성 실패: ${e.message} (${elapsedMs}ms)")
+            TreeCreationBenchmarkResult(elapsedMs = elapsedMs, success = false, error = e.message)
+        }
     }
     
     // CommonLayerInterface 구현
@@ -128,7 +170,7 @@ class Orchestrator(
         // 레거시 호환성을 위해 String 반환 유지
         val query = args["query"] as? String
         if (query != null) {
-            val result = executeOrchestration(query)
+            val result = executeOrchestration(ChatDto(message = query))
             return result.result
         }
         

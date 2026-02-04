@@ -1,5 +1,6 @@
 package com.hana.orchestrator.llm
 
+import com.hana.orchestrator.context.AppContextService
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionHistory
 import com.hana.orchestrator.layer.LayerDescription
@@ -14,12 +15,13 @@ import com.hana.orchestrator.layer.LayerDescription
 interface LLMClient {
     /**
      * 사용자 질문과 레이어 정보를 바탕으로 ExecutionTree 구조의 실행 계획을 생성
-     * 복잡한 작업: 긴 프롬프트, 많은 컨텍스트
+     * 복잡한 작업: COMPLEX tier. 실제 모델은 설정(application.conf)에서 지정 (기본 gemma2:2b)
      */
     @LLMTask(complexity = LLMTaskComplexity.COMPLEX)
     suspend fun createExecutionTree(
         userQuery: String,
-        layerDescriptions: List<LayerDescription>
+        layerDescriptions: List<LayerDescription>,
+        appContextService: AppContextService? = null
     ): ExecutionTree
     
     /**

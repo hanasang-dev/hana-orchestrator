@@ -51,6 +51,12 @@ Hana Orchestrator는 **LLM 기반 오케스트레이션**을 통해 여러 레�
 - 상대 경로 사용 강제로 경로 해석 오류 방지
 - 자동 백업 기능으로 파일 수정 안전성 보장
 
+### 📌 컨텍스트 관리
+- **영구·휘발 컨텍스트**: 트리 생성/평가 시 LLM 프롬프트에 항상 주입 (영구 + 휘발 + 본문 순)
+- **휘발성**: 요청 시 클라이언트 `context` 반영, 서버가 `workingDirectory`·`projectRoot` 자동 설정
+- **영구**: `projectRoot` 변경 시 `.cursor/rules` 또는 `AGENTS.md` 로드해 `projectRules` 저장 (파일: `.hana/context/persistent-context.json`)
+- 상세: [컨텍스트 배치 설계](docs/context-placement-design.md), [컨텍스트 관리 설계](docs/context-management-design.md)
+
 ### 🎯 Structured Outputs 지원 (준비 중)
 - JSON Schema 기반 출력 형식 강제
 - 파싱 오류 감소 및 일관성 향상
@@ -225,10 +231,15 @@ ollama pull llama3.1:8b
 # Health check
 curl http://localhost:8080/health
 
-# Chat API 테스트
+# Chat API 테스트 (context는 선택)
 curl -X POST http://localhost:8080/chat \
   -H "Content-Type: application/json" \
   -d '{"message":"Hello World를 대문자로 변환해줘"}'
+
+# context 포함 (currentFile, selection 등; workingDirectory·projectRoot는 서버가 자동 설정)
+curl -X POST http://localhost:8080/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"현재 파일 내용 요약해줘","context":{"currentFile":"src/App.kt","selection":"fun main"}}'
 
 # 실행 이력 조회
 curl http://localhost:8080/executions
@@ -260,6 +271,7 @@ curl http://localhost:8080/llm-status
 ```
 hana-orchestrator/
 ├── src/main/kotlin/com/hana/orchestrator/
+│   ├── context/                    # 컨텍스트 관리 (영구/휘발, AppContextService, PromptComposer)
 │   ├── layer/                      # 레이어 인터페이스 및 구현
 │   │   ├── CommonLayerInterface.kt  # 핵심 인터페이스
 │   │   ├── RemoteLayer.kt          # 원격 레이어
@@ -308,6 +320,11 @@ hana-orchestrator/
 ```
 
 ## 최근 주요 변경사항
+
+### 컨텍스트 관리
+- **AppContextService**: 앱 단위 영구·휘발 컨텍스트 관리. `updateVolatileFromRequest`, `ensureVolatileServerWorkingDirectory`, `refreshPersistentIfNeeded` 제공.
+- **PromptComposer**: LLM 프롬프트 = 영구 블록 + 휘발 블록 + 본문. `ChatRequest`/`ChatDto`에 `context: Map<String, String>` 추가, 서버가 workingDirectory·projectRoot 자동 설정.
+- **FileBackedContextStore**: 영구 컨텍스트를 `.hana/context/persistent-context.json`에 저장.
 
 ### JSON Schema Builder 및 Structured Outputs 지원
 - **JsonSchemaBuilder 추가**: Ollama Structured Outputs를 위한 JSON Schema 생성

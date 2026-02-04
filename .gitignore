@@ -62,3 +62,6 @@ build/
 
 # Setup scripts
 setup.sh
+
+# Orchestrator runtime data (persistent context etc.)
+.hana/

@@ -1,5 +1,8 @@
 package com.hana.orchestrator.orchestrator
 
+import com.hana.orchestrator.context.AppContextService
+import com.hana.orchestrator.context.PersistentRefreshTrigger
+import com.hana.orchestrator.domain.dto.ChatDto
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionHistory
 import com.hana.orchestrator.domain.entity.ExecutionResult
@@ -24,7 +27,8 @@ class OrchestrationCoordinator(
     private val treeExecutor: TreeExecutor,
     private val historyManager: ExecutionHistoryManager,
     private val statePublisher: ExecutionStatePublisher,
-    private val modelSelectionStrategy: ModelSelectionStrategy
+    private val modelSelectionStrategy: ModelSelectionStrategy,
+    private val appContextService: AppContextService
 ) {
     private val maxAttempts = 5 // 최대 재시도 횟수 (안전장치)
     private val logger = createOrchestratorLogger(OrchestrationCoordinator::class.java, historyManager)
@@ -33,37 +37,39 @@ class OrchestrationCoordinator(
      * 오케스트레이션 실행 (도메인 모델 반환)
      * LLM 기반 자동 재처리 루프 포함
      */
-    suspend fun executeOrchestration(query: String): ExecutionResult {
+    suspend fun executeOrchestration(chatDto: ChatDto): ExecutionResult {
+        val query = chatDto.message
+        appContextService.updateVolatileFromRequest(chatDto.context)
+        appContextService.ensureVolatileServerWorkingDirectory()
+        appContextService.refreshPersistentIfNeeded(PersistentRefreshTrigger(appContextService.getVolatileStore().snapshot()["projectRoot"]))
+
         val allDescriptions = layerManager.getAllLayerDescriptions()
-        
+
         return if (query.isNotEmpty()) {
             val executionId = java.util.UUID.randomUUID().toString()
             val startTime = System.currentTimeMillis()
-            
+
             // 실행 이력 생성 및 Flow에 emit
             val runningHistory = ExecutionHistory.createRunning(executionId, query, startTime)
             historyManager.setCurrentExecution(runningHistory)
             historyManager.addLogToCurrent("🚀 실행 시작: $query")
             statePublisher.emitExecutionUpdate(runningHistory)
-            
+
             var previousHistory: ExecutionHistory? = null
             var previousTree: ExecutionTree? = null
             var previousExecutedWorkSummary: String? = null
             var attemptCount = 0
-            
+
             while (attemptCount < maxAttempts) {
                 attemptCount++
                 logger.info("🔄 [OrchestrationCoordinator] 실행 시도 #$attemptCount")
-                
+
                 try {
                     // 트리 생성: LLM이 모든 레이어(LLMLayer 포함)를 보고 적절한 실행 계획을 생성
-                    // LLMLayer가 있으면 사실상 모든 질문이 가능하므로, feasibility 체크는 의미가 없음
-                    // LLM이 트리 생성 시 적절한 레이어를 선택하도록 함
                     val rawTree: ExecutionTree
-                    
+
                     if (attemptCount == 1) {
-                        // 초기 트리 생성: LLM이 모든 레이어를 보고 적절한 실행 계획 생성
-                        rawTree = createInitialTree(query, allDescriptions, executionId, startTime)
+                        rawTree = createInitialTree(query, allDescriptions, executionId, startTime, appContextService)
                     } else {
                         // 재시도: 이전 실행 결과를 바탕으로 재처리 방안 생성 (이전에 실제로 수행한 작업 목록 전달)
                         rawTree = createRetryTree(query, previousHistory!!, allDescriptions, executionId, startTime, previousExecutedWorkSummary)
@@ -190,15 +196,16 @@ class OrchestrationCoordinator(
         query: String,
         allDescriptions: List<com.hana.orchestrator.layer.LayerDescription>,
         executionId: String,
-        startTime: Long
+        startTime: Long,
+        appContextService: AppContextService
     ): ExecutionTree {
         logger.info("🌳 [OrchestrationCoordinator] 실행 트리 생성 시작...")
-        
+
         val treeStartTime = System.currentTimeMillis()
         val tree = try {
             modelSelectionStrategy.selectClientForTreeCreation()
                 .useSuspend { client ->
-                    client.createExecutionTree(query, allDescriptions)
+                    client.createExecutionTree(query, allDescriptions, appContextService)
                 }
         } catch (treeException: Exception) {
             handleTreeCreationFailure(treeException, query, executionId, startTime)

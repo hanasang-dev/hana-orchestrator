@@ -51,11 +51,11 @@ data class LLMConfig(
     companion object {
         // 기본값 상수 (DRY: 중복 제거 및 일관성 유지)
         private const val DEFAULT_SIMPLE_MODEL = "gemma2:2b"
-        private const val DEFAULT_MEDIUM_MODEL = "llama3.1:8b"
-        private const val DEFAULT_COMPLEX_MODEL = "llama3.1:8b"
+        private const val DEFAULT_MEDIUM_MODEL = "gemma2:2b"
+        private const val DEFAULT_COMPLEX_MODEL = "gemma2:2b"
         private const val DEFAULT_SIMPLE_CONTEXT_LENGTH = 8_192L
-        private const val DEFAULT_MEDIUM_CONTEXT_LENGTH = 128_000L
-        private const val DEFAULT_COMPLEX_CONTEXT_LENGTH = 128_000L
+        private const val DEFAULT_MEDIUM_CONTEXT_LENGTH = 8_192L
+        private const val DEFAULT_COMPLEX_CONTEXT_LENGTH = 8_192L
         private const val DEFAULT_BASE_URL = "http://localhost:11434"
         private const val DEFAULT_TIMEOUT_MS = 120_000L
         

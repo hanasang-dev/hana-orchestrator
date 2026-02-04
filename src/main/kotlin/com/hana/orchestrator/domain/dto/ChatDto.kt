@@ -5,5 +5,6 @@ package com.hana.orchestrator.domain.dto
  * 외부 의존성 없음
  */
 data class ChatDto(
-    val message: String
+    val message: String,
+    val context: Map<String, String> = emptyMap()
 )

@@ -3,6 +3,11 @@ package com.hana.orchestrator.application.bootstrap
 import com.hana.orchestrator.application.lifecycle.ApplicationLifecycleManager
 import com.hana.orchestrator.application.port.PortManager
 import com.hana.orchestrator.application.server.ServerConfigurator
+import com.hana.orchestrator.context.ContextScope
+import com.hana.orchestrator.context.DefaultAppContextService
+import com.hana.orchestrator.context.FileBackedContextStore
+import com.hana.orchestrator.context.InMemoryContextStore
+import com.hana.orchestrator.context.PersistenceKind
 import com.hana.orchestrator.layer.EchoLayer
 import com.hana.orchestrator.orchestrator.Orchestrator
 import com.hana.orchestrator.orchestrator.createOrchestratorLogger
@@ -15,6 +20,7 @@ import com.hana.orchestrator.llm.LLMProvider
 import io.ktor.server.config.*
 import io.ktor.server.engine.EmbeddedServer
 import kotlinx.coroutines.*
+import java.io.File
 
 /**
  * 애플리케이션 초기화 및 시작
@@ -131,8 +137,15 @@ class ApplicationBootstrap {
         val serviceInfo = ServiceRegistry.registerService(port)
         logger.info("📝 Service registered: ${serviceInfo.id}")
         
-        // Orchestrator 초기화 (LLM 설정 전달)
-        val orchestrator = Orchestrator(llmConfig)
+        // 앱 컨텍스트: 영구는 JSON 파일, 휘발은 메모리. 기동 시 휘발성에 workingDirectory 설정
+        val contextDir = File(System.getProperty("user.dir") ?: ".", ".hana/context")
+        val persistentFile = File(contextDir, "persistent-context.json")
+        val persistentStore = FileBackedContextStore(ContextScope.App, PersistenceKind.Persistent, persistentFile)
+        val volatileStore = InMemoryContextStore(ContextScope.App, PersistenceKind.Volatile)
+        val appContextService = DefaultAppContextService(persistentStore, volatileStore)
+
+        // Orchestrator 초기화 (LLM 설정 + 앱 컨텍스트)
+        val orchestrator = Orchestrator(llmConfig, appContextService)
         
         // Application scope 생성
         val applicationScope = CoroutineScope(Dispatchers.IO + SupervisorJob())

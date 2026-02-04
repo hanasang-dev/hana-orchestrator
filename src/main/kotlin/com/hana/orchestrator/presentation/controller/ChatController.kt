@@ -33,7 +33,7 @@ class ChatController(
                 val chatDto = ChatRequestMapper.toDto(request)
                 
                 // Orchestrator 실행 (도메인 모델 반환)
-                val executionResult = orchestrator.executeOrchestration(chatDto.message)
+                val executionResult = orchestrator.executeOrchestration(chatDto)
                 
                 // Domain → Presentation 변환
                 val response = ExecutionResultMapper.toChatResponse(executionResult)
