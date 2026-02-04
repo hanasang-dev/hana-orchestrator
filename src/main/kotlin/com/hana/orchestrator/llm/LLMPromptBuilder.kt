@@ -125,18 +125,23 @@ ${buildNodeRequiredFields(availableLayerNames)}
 {"rootNodes":[{"layerName":"레이어이름","function":"함수이름","args":{"파라미터명":"값"},"parallel":false,"children":[{"layerName":"자식레이어이름","function":"자식함수이름","args":{"파라미터명":"값"},"parallel":false,"children":[]}]}]}""".trimIndent()
     }
     
-    /** 결과 평가 프롬프트. 요구사항과 실행 결과만으로 판단(레이어/작업 목록 미사용). */
-    fun buildEvaluationPrompt(userQuery: String, executionResult: String): String {
+    /** 결과 평가 프롬프트. 요구사항과 실행 결과(및 선택적 실행 요약)로 판단. */
+    fun buildEvaluationPrompt(userQuery: String, executionResult: String, executionSummary: String? = null): String {
+        val summaryBlock = if (executionSummary != null) {
+            """
+            실행 요약 (참고용, 판단은 요구사항과 실행 결과 기준으로 하세요): $executionSummary
+            """.trimIndent()
+        } else ""
         return """요구사항: "$userQuery"
-실행 결과: "$executionResult"
+실행 결과: "$executionResult"$summaryBlock
 
 결과가 요구사항을 충족하는지 평가하세요.
 
 평가 원칙:
-- 판단은 오직 실행 결과 텍스트만 근거로 하세요. 요구사항 문장으로 추론하지 마세요.
-- "일치"는 요구사항 문장과 결과 문장이 같다는 뜻이 아닙니다. 요구사항의 의도에 맞는 응답이면 부합입니다.
-- 요구사항이 답을 기대하는 형태이면, 실행 결과가 그에 대한 응답이면 부합입니다.
-- 요구사항이 실행을 기대하는 형태이면, 실행 결과에 그에 해당하는 내용이 없으면 미부합입니다.
+- 부합 = 요구사항의 의도(사용자가 바라는 출력·동작 결과)가 실행 결과에 나왔으면 됨. 요구사항 문장과 결과 문장이 같을 필요 없음.
+- 지시형 요청: 요청한 내용이 실행 결과에 포함·반영되었으면 부합.
+- 질문형 요청: 실행 결과가 그에 대한 답이면 부합.
+- 실행 결과에 요청한 내용이 없을 때만 미부합. 있으면 부합.
 
 반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요.
 

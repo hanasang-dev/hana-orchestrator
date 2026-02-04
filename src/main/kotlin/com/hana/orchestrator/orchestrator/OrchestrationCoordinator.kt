@@ -322,7 +322,17 @@ class OrchestrationCoordinator(
         return result
     }
     
-    /** 실행 결과가 요구사항을 충족하는지 LLM이 판단 (요구사항 + 실행 결과 텍스트만 전달) */
+    /** 평가 시 참고용 한 줄 실행 요약 (예: echo.echo → Hello) */
+    private fun buildExecutionSummary(result: ExecutionResult): String? {
+        val tree = result.executionTree ?: return null
+        val nodes = tree.allNodes()
+        if (nodes.isEmpty()) return null
+        val chain = nodes.joinToString(" → ") { "${it.layerName}.${it.function}" }
+        val resultPreview = result.result.take(80).let { if (result.result.length > 80) "$it..." else it }
+        return "$chain → 결과: $resultPreview"
+    }
+    
+    /** 실행 결과가 요구사항을 충족하는지 LLM이 판단 (요구사항 + 실행 결과 + 선택적 실행 요약) */
     private suspend fun evaluateResult(
         query: String,
         result: ExecutionResult,
@@ -331,8 +341,9 @@ class OrchestrationCoordinator(
     ): ResultEvaluation {
         logger.info("🤔 [OrchestrationCoordinator] 실행 결과 평가 중...")
         val evaluationStartTime = System.currentTimeMillis()
+        val executionSummary = buildExecutionSummary(result)
         val evaluation = modelSelectionStrategy.selectClientForEvaluation()
-            .useSuspend { client -> client.evaluateResult(query, result.result) }
+            .useSuspend { client -> client.evaluateResult(query, result.result, executionSummary) }
         
         val evaluationDuration = System.currentTimeMillis() - evaluationStartTime
         logger.perf("⏱️ [PERF] 결과 평가 완료: ${evaluationDuration}ms")

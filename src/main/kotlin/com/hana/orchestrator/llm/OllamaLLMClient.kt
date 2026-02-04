@@ -13,6 +13,7 @@ import com.hana.orchestrator.data.model.response.ExecutionTreeResponse
 import com.hana.orchestrator.data.mapper.ExecutionTreeMapper
 import com.hana.orchestrator.llm.config.LLMConfig
 import com.hana.orchestrator.layer.LayerDescription
+import com.hana.orchestrator.orchestrator.createOrchestratorLogger
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.withTimeout
 import ai.koog.prompt.params.LLMParams
@@ -34,6 +35,8 @@ class OllamaLLMClient(
     private val timeoutMs: Long = 120_000L,
     private val baseUrl: String = "http://localhost:11434"
 ) : LLMClient {
+    private val logger = createOrchestratorLogger(OllamaLLMClient::class.java, null)
+    
     /**
      * 설정 기반 생성자
      */
@@ -182,8 +185,13 @@ class OllamaLLMClient(
         )
     }
     
-    override suspend fun evaluateResult(userQuery: String, executionResult: String): ResultEvaluation {
-        val prompt = promptBuilder.buildEvaluationPrompt(userQuery, executionResult)
+    override suspend fun evaluateResult(
+        userQuery: String,
+        executionResult: String,
+        executionSummary: String?
+    ): ResultEvaluation {
+        val prompt = promptBuilder.buildEvaluationPrompt(userQuery, executionResult, executionSummary)
+        logger.info("📋 [평가] LLM에 넘기는 프롬프트:\n$prompt")
         val schema = JsonSchemaBuilder.buildResultEvaluationSchema()
         
         return callLLM(

@@ -295,7 +295,7 @@ function patchExecutionItem(item, exec, isCurrent) {
     const nodeStats = item.querySelector('.node-stats');
     if (nodeStats) nodeStats.innerHTML = formatNodeStats(exec);
     
-    if (isCurrent && exec.status === 'RUNNING') {
+    if (isCurrent && (exec.status === 'RUNNING' || exec.status === 'RETRYING')) {
         startElapsedTimeTimer(exec.id, exec.startTime);
     } else {
         stopElapsedTimeTimer(exec.id);
@@ -583,8 +583,8 @@ function renderExecution(exec, isCurrent) {
     
     const timeStr = new Date(exec.startTime).toLocaleTimeString('ko-KR');
     
-    // 실행 중이면 타이머 시작
-    if (isCurrent && exec.status === 'RUNNING') {
+    // 실행 중 또는 재시도 중이면 경과 타이머 시작
+    if (isCurrent && (exec.status === 'RUNNING' || exec.status === 'RETRYING')) {
         setTimeout(() => startElapsedTimeTimer(exec.id, exec.startTime), 0);
     } else {
         stopElapsedTimeTimer(exec.id);
@@ -615,7 +615,7 @@ function renderExecution(exec, isCurrent) {
                 ${exec.error ? `
                     <div class="execution-result" style="background: #f8d7da; color: #721c24;">
                         <strong>에러:</strong><br>
-                        ${exec.error}
+                        ${escapeHtml(exec.error)}
                     </div>
                 ` : ''}
                 <div class="execution-logs" id="logs-${exec.id}" style="display: none;"><strong>📋 실행 로그:</strong><div class="log-content" id="log-content-${exec.id}" style="padding: 0; margin: 4px 0 0 0;"></div></div>

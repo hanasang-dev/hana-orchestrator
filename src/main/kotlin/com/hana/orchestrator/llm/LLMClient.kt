@@ -23,10 +23,15 @@ interface LLMClient {
     ): ExecutionTree
     
     /**
-     * 실행 결과가 사용자 요구사항에 부합하는지 LLM이 판단 (요구사항과 실행 결과 텍스트만 사용)
+     * 실행 결과가 사용자 요구사항에 부합하는지 LLM이 판단.
+     * @param executionSummary 선택: 실행한 작업 한 줄 요약(예: "echo.echo → Hello"). 있으면 평가 시 참고용으로 전달.
      */
     @LLMTask(complexity = LLMTaskComplexity.MEDIUM)
-    suspend fun evaluateResult(userQuery: String, executionResult: String): ResultEvaluation
+    suspend fun evaluateResult(
+        userQuery: String,
+        executionResult: String,
+        executionSummary: String? = null
+    ): ResultEvaluation
     
     /**
      * 실패한 실행에 대한 재처리 방안을 LLM이 제시
