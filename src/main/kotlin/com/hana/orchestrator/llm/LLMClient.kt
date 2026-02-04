@@ -2,7 +2,6 @@ package com.hana.orchestrator.llm
 
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionHistory
-import com.hana.orchestrator.domain.entity.ExecutionContext
 import com.hana.orchestrator.layer.LayerDescription
 
 /**
@@ -24,15 +23,10 @@ interface LLMClient {
     ): ExecutionTree
     
     /**
-     * 실행 결과가 사용자 요구사항에 부합하는지 LLM이 판단
-     * 중간 작업: 중간 프롬프트
+     * 실행 결과가 사용자 요구사항에 부합하는지 LLM이 판단 (요구사항과 실행 결과 텍스트만 사용)
      */
     @LLMTask(complexity = LLMTaskComplexity.MEDIUM)
-    suspend fun evaluateResult(
-        userQuery: String,
-        executionResult: String,
-        executionContext: ExecutionContext?
-    ): ResultEvaluation
+    suspend fun evaluateResult(userQuery: String, executionResult: String): ResultEvaluation
     
     /**
      * 실패한 실행에 대한 재처리 방안을 LLM이 제시
@@ -42,7 +36,8 @@ interface LLMClient {
     suspend fun suggestRetryStrategy(
         userQuery: String,
         previousHistory: ExecutionHistory,
-        layerDescriptions: List<LayerDescription>
+        layerDescriptions: List<LayerDescription>,
+        previousExecutedWorkSummary: String? = null
     ): RetryStrategy
     
     /**

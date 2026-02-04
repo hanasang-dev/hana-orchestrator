@@ -66,7 +66,14 @@ object LayerFactory {
     fun createFileSystemLayer(): FileSystemLayer {
         return FileSystemLayer()
     }
-    
+
+    /**
+     * 빌드 레이어 생성 (Gradle compile/build/clean)
+     */
+    fun createBuildLayer(projectRoot: java.io.File? = null): BuildLayer {
+        return if (projectRoot != null) BuildLayer(projectRoot) else BuildLayer()
+    }
+
     /**
      * 모든 기본 레이어 생성
      */
@@ -75,7 +82,8 @@ object LayerFactory {
             createEchoLayer(),
             createTextTransformerLayer(),
             createTextValidatorLayer(),
-            createFileSystemLayer()
+            createFileSystemLayer(),
+            createBuildLayer()
         )
         
         // LLMLayer는 ModelSelectionStrategy가 필요하므로 선택적으로 추가

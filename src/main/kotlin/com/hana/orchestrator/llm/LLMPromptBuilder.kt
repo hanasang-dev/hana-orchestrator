@@ -84,25 +84,39 @@ internal class LLMPromptBuilder {
 사용 가능한 레이어:
 $layersInfo
 
-각 레이어의 목적(description)과 함수 설명을 정확히 읽고 분석하여 실행 계획을 생성하세요.
+의도 구분 (먼저 판단):
+- 요청이 답만 필요로 하는지, 실제 실행이 필요한지 구분하세요. 답만 필요하면 위 레이어 중 "사용자 질문에 직접 답변"하는 역할의 레이어·함수 하나만 선택하고, 실행 단계를 만들지 마세요. 실행이 필요하면 해당 실행에 맞는 레이어·함수를 선택하세요.
+- 답만 필요할 때는 경로·명령 등 실행용 인자를 지어내지 마세요. 답변만 반환하는 레이어는 요청 문장만 인자로 넘기면 됩니다.
+
+각 레이어의 목적(description)과 함수 설명을 정확히 읽고, 위 의도에 맞는 레이어와 함수만 선택하세요.
 
 $FOUR_STEP_PROCEDURE
-- 레이어 description이나 함수 설명에 명시되지 않은 기능을 요청이 요구하면 해당 레이어/함수를 선택하지 마세요
-- 요청의 요구사항을 정확히 수행할 수 있는 레이어와 함수만 선택하세요
-- 불필요한 레이어를 사용하지 마세요
+- 레이어 description이나 함수 설명에 명시되지 않은 기능을 요청이 요구하면 해당 레이어/함수를 선택하지 마세요.
+- 불필요한 레이어를 사용하지 마세요.
 
 선택 기준:
 - 레이어 description에 명시된 기능만 사용 가능합니다. 명시되지 않은 기능은 사용할 수 없습니다.
 - 함수 설명에 명시된 작업만 수행 가능합니다. 명시되지 않은 작업은 수행할 수 없습니다.
-- 요청의 요구사항을 정확히 수행할 수 있는 레이어와 함수만 선택하세요.
+
+중요 (여러 작업이 함께 있는 요청):
+- 요청에 서로 다른 작업이 여러 개 있으면, 각 작업에 맞는 단계를 모두 실행 계획에 넣으세요. 한 가지만 단일 노드로 두지 마세요.
+- 순차가 필요하면 루트의 children에 순서대로 넣거나, 루트를 첫 단계로 하고 children으로 이어 붙이세요.
+- 사용할 레이어·함수는 반드시 위에 나열된 사용 가능한 레이어 목록에서만 선택하세요.
+- 어떤 레이어를 쓸지는 위 레이어들의 description·함수 설명만 보고 요청에 맞게 판단하세요.
 
 실행 계획을 생성하고, 반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요.
+
+필수: rootNodes 배열에는 반드시 1개 이상의 노드가 있어야 합니다. 빈 배열(rootNodes:[])은 허용되지 않습니다. 답변·조회만 요청해도 실행 계획이 필요하므로, 요청에 맞는 레이어와 함수를 하나 이상 선택하세요.
 
 $JSON_RULES
 
 ${buildNodeRequiredFields(availableLayerNames)}
 
-중요: 예시는 참고용입니다. 실제 레이어 이름과 함수 이름은 위에 나열된 사용 가능한 레이어 목록에서 선택하세요.
+이전 노드 결과를 인자로 쓰기 (순차 흐름):
+- 자식 노드에서 부모 노드의 실행 결과를 인자로 쓰려면 해당 인자 값을 문자열 "{{parent}}"로 두세요.
+- 특정 노드의 결과를 쓰려면 "{{nodeId:노드id}}"를 사용하세요 (노드 id는 트리 생성 시 각 노드에 부여한 id).
+
+예시는 참고용이며, 레이어·함수 이름은 위 사용 가능한 레이어 목록에서만 선택하세요.
 
 예시 구조 (단일 노드):
 {"rootNodes":[{"layerName":"레이어이름","function":"함수이름","args":{"파라미터명":"값"},"parallel":false,"children":[]}]}
@@ -111,26 +125,18 @@ ${buildNodeRequiredFields(availableLayerNames)}
 {"rootNodes":[{"layerName":"레이어이름","function":"함수이름","args":{"파라미터명":"값"},"parallel":false,"children":[{"layerName":"자식레이어이름","function":"자식함수이름","args":{"파라미터명":"값"},"parallel":false,"children":[]}]}]}""".trimIndent()
     }
     
-    /**
-     * 결과 평가 프롬프트
-     * 
-     * @param executionContext 현재는 사용하지 않지만, LLMClient 인터페이스 일관성 및 향후 확장을 위해 유지
-     */
-    fun buildEvaluationPrompt(
-        userQuery: String,
-        executionResult: String,
-        @Suppress("UNUSED_PARAMETER") executionContext: com.hana.orchestrator.domain.entity.ExecutionContext?
-    ): String {
+    /** 결과 평가 프롬프트. 요구사항과 실행 결과만으로 판단(레이어/작업 목록 미사용). */
+    fun buildEvaluationPrompt(userQuery: String, executionResult: String): String {
         return """요구사항: "$userQuery"
 실행 결과: "$executionResult"
 
 결과가 요구사항을 충족하는지 평가하세요.
 
 평가 원칙:
-- 요구사항의 의도를 정확히 파악하세요
-- 결과가 요구사항의 의도를 충족하는지 판단하세요
-- 형식적인 차이나 표현 방식의 차이는 허용하세요
-- 요구사항의 핵심 의도가 충족되면 isSatisfactory=true입니다
+- 판단은 오직 실행 결과 텍스트만 근거로 하세요. 요구사항 문장으로 추론하지 마세요.
+- "일치"는 요구사항 문장과 결과 문장이 같다는 뜻이 아닙니다. 요구사항의 의도에 맞는 응답이면 부합입니다.
+- 요구사항이 답을 기대하는 형태이면, 실행 결과가 그에 대한 응답이면 부합입니다.
+- 요구사항이 실행을 기대하는 형태이면, 실행 결과에 그에 해당하는 내용이 없으면 미부합입니다.
 
 반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요.
 
@@ -153,19 +159,27 @@ $JSON_RULES
     
     /**
      * 재처리 방안 프롬프트
+     * @param previousExecutedWorkSummary 이전 실행에서 실제로 수행된 작업 목록(예: "echo.repeat, build.compileKotlin"). 실패 이유와 비교해 빠진 작업을 새 트리에 넣도록 LLM이 판단하는 데 씀.
      */
     fun buildRetryStrategyPrompt(
         userQuery: String,
         previousHistory: ExecutionHistory,
-        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
+        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>,
+        previousExecutedWorkSummary: String? = null
     ): String {
         val layersInfo = formatLayerDescriptionsCompact(layerDescriptions)
         val previousResult = previousHistory.result.result.take(200)
         val availableLayerNames = getAvailableLayerNames(layerDescriptions)
-        
+        val executedSection = if (!previousExecutedWorkSummary.isNullOrBlank()) {
+            """
+이전 실행에서 실제로 수행된 작업: $previousExecutedWorkSummary
+(실패 이유를 보면, 위 목록에 없던 작업이 요구사항에 필요할 수 있음. 새 트리에 그 작업을 수행할 단계를 반드시 포함하세요.)
+"""
+        } else ""
+
         return """요구사항: "$userQuery"
 이전 결과: "$previousResult"
-에러: ${previousHistory.result.error ?: "없음"}
+에러: ${previousHistory.result.error ?: "없음"}$executedSection
 
 레이어:
 $layersInfo

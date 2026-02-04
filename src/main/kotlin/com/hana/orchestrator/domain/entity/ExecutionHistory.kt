@@ -77,6 +77,29 @@ data class ExecutionHistory(
                 logs = logs
             )
         }
+
+        /**
+         * 재시도 예정 이력 생성 (UI에 "재시도 중" 표시용, FAILED로 끝난 게 아님)
+         */
+        fun createRetrying(
+            id: String,
+            query: String,
+            error: String?,
+            startTime: Long,
+            attemptNumber: Int,
+            logs: MutableList<String> = mutableListOf()
+        ): ExecutionHistory {
+            val retryingLogs = logs.toMutableList().apply { add("🔄 재시도 #$attemptNumber 준비 중...") }
+            return ExecutionHistory(
+                id = id,
+                query = query,
+                result = ExecutionResult(result = "", error = error),
+                startTime = startTime,
+                endTime = null,
+                status = ExecutionStatus.RETRYING,
+                logs = retryingLogs
+            )
+        }
         
         /**
          * ExecutionResult를 기반으로 상태 결정
@@ -111,6 +134,12 @@ data class ExecutionHistory(
      */
     val isFailed: Boolean
         get() = status == ExecutionStatus.FAILED
+
+    /**
+     * 재시도 중 여부 확인
+     */
+    val isRetrying: Boolean
+        get() = status == ExecutionStatus.RETRYING
     
     /**
      * 성공적으로 완료되었는지 확인 (실패가 아닌 완료)
@@ -122,5 +151,7 @@ data class ExecutionHistory(
 enum class ExecutionStatus {
     RUNNING,
     COMPLETED,
-    FAILED
+    FAILED,
+    /** 재시도 예정(아직 최종 실패 아님), UI는 계속 대기 */
+    RETRYING
 }

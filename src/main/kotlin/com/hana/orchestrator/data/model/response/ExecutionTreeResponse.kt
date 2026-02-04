@@ -1,6 +1,9 @@
 package com.hana.orchestrator.data.model.response
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 
 /**
  * LLM API 응답 모델 (Remote API)
@@ -30,7 +33,8 @@ data class ExecutionTreeResponse(
 data class ExecutionNodeResponse(
     val layerName: String,
     val function: String,
-    val args: Map<String, String> = emptyMap(),
+    /** LLM이 문자열·배열·숫자 등 혼합으로 보낼 수 있으므로 JsonElement로 받고, 매퍼에서 Map<String, Any>로 변환 */
+    val args: JsonElement = buildJsonObject { },
     val children: List<ExecutionNodeResponse> = emptyList(),
     val parallel: Boolean = false
 )

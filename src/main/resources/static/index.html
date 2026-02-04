@@ -1208,7 +1208,7 @@
             };
         }
         
-        // 실행 이력 UI 업데이트 (플리커링 방지: 기존 요소 재사용)
+        // 실행 이력 UI 업데이트 (깜빡임·스크롤 초기화 방지: 전체 교체 없이 항목별 패치/추가만)
         function updateExecutionsUI(data) {
             const executionsList = document.getElementById('executionsList');
             
@@ -1217,166 +1217,160 @@
                 return;
             }
             
-            // 펼쳐진 상태와 스크롤 위치 저장 (결과와 로그 각각)
-            const expandedStates = new Map();
-            const resultScrollPositions = new Map();
-            const logScrollPositions = new Map();
-            document.querySelectorAll('.execution-item').forEach(item => {
-                const execId = item.getAttribute('data-id');
-                const details = item.querySelector('.execution-details');
-                if (details && details.classList.contains('expanded')) {
-                    expandedStates.set(execId, true);
-                    // 실행 결과 스크롤 위치 저장
-                    const resultElement = item.querySelector('.execution-result');
-                    if (resultElement) {
-                        resultScrollPositions.set(execId, resultElement.scrollTop);
-                    }
-                    // 로그 스크롤 위치 저장
-                    const logContent = item.querySelector(`#log-content-${execId}`);
-                    if (logContent) {
-                        logScrollPositions.set(execId, logContent.scrollTop);
-                    }
-                }
+            const ordered = []; // current 먼저, 그다음 history (중복 제외)
+            if (data.current) ordered.push(data.current);
+            if (data.history) {
+                data.history.forEach(exec => {
+                    if (exec.id !== data.current?.id) ordered.push(exec);
+                });
+            }
+            
+            if (ordered.length === 0) {
+                executionsList.innerHTML = '<p>실행 이력이 없습니다.</p>';
+                if (window.executionDataCache) window.executionDataCache.clear();
+                return;
+            }
+            
+            const orderedIds = new Set(ordered.map(e => e.id));
+            const existingById = new Map();
+            executionsList.querySelectorAll('.execution-item').forEach(el => {
+                const id = el.getAttribute('data-id');
+                if (id) existingById.set(id, el);
             });
             
-            let html = '';
-            const renderedIds = new Set(); // 중복 방지를 위한 Set
-            
-            // 현재 실행 중인 작업
-            if (data.current) {
-                html += renderExecution(data.current, true);
-                renderedIds.add(data.current.id);
-            }
-            
-            // 이력 (현재 실행 중인 것과 중복되지 않는 것만)
-            if (data.history && data.history.length > 0) {
-                data.history.forEach(exec => {
-                    if (!renderedIds.has(exec.id)) {
-                        html += renderExecution(exec, false);
-                        renderedIds.add(exec.id);
+            for (let i = 0; i < ordered.length; i++) {
+                const exec = ordered[i];
+                const isCurrent = exec.id === data.current?.id;
+                
+                if (existingById.has(exec.id)) {
+                    patchExecutionItem(existingById.get(exec.id), exec, isCurrent);
+                    if (exec.logs && exec.logs.length > 0) {
+                        updateExecutionLogs(exec.id, exec.logs);
                     }
-                });
-            } else if (!data.current) {
-                html = '<p>실행 이력이 없습니다.</p>';
+                } else {
+                    const nextId = ordered[i + 1]?.id;
+                    const nextEl = nextId ? existingById.get(nextId) || null : null;
+                    const div = document.createElement('div');
+                    div.innerHTML = renderExecution(exec, isCurrent);
+                    const newItem = div.firstElementChild;
+                    if (newItem) {
+                        if (nextEl) executionsList.insertBefore(newItem, nextEl);
+                        else executionsList.appendChild(newItem);
+                        existingById.set(exec.id, newItem);
+                        attachExecutionItemListeners(newItem, exec.id);
+                    }
+                }
             }
             
-            executionsList.innerHTML = html;
+            // 데이터에 없는 항목은 DOM에서 제거
+            existingById.forEach((el, id) => {
+                if (!orderedIds.has(id)) el.remove();
+            });
             
-            // 펼쳐진 상태 복원 및 스크롤 위치 복원 (결과와 로그 각각)
-            setTimeout(() => {
-                expandedStates.forEach((isExpanded, execId) => {
-                    const item = document.querySelector(`[data-id="${execId}"]`);
-                    if (item) {
-                        const details = item.querySelector('.execution-details');
-                        const logsDiv = item.querySelector(`#logs-${execId}`);
-                        const logContent = item.querySelector(`#log-content-${execId}`);
-                        const resultElement = item.querySelector('.execution-result');
-                        
-                        if (details && isExpanded) {
-                            details.classList.add('expanded');
-                            if (logsDiv) {
-                                logsDiv.style.display = 'block';
-                            }
-                            
-                            // 실행 결과 스크롤 위치 복원
-                            if (resultElement && resultScrollPositions.has(execId)) {
-                                resultElement.scrollTop = resultScrollPositions.get(execId);
-                            }
-                            
-                            // 로그 업데이트
+            if (window.executionDataCache) {
+                ordered.forEach(exec => window.executionDataCache.set(exec.id, exec));
+            } else {
+                window.executionDataCache = new Map();
+                ordered.forEach(exec => window.executionDataCache.set(exec.id, exec));
+            }
+        }
+        
+        function patchExecutionItem(item, exec, isCurrent) {
+            const statusClass = (exec.status || '').toLowerCase();
+            const statusText = { 'running': '실행 중', 'completed': '완료', 'failed': '실패' }[exec.status] || exec.status;
+            const duration = exec.endTime
+                ? `${((exec.endTime - exec.startTime) / 1000).toFixed(2)}초`
+                : isCurrent ? `<span class="elapsed-time">⏱️ ${((Date.now() - exec.startTime) / 1000).toFixed(1)}초 경과</span>` : '';
+            const timeStr = new Date(exec.startTime).toLocaleTimeString('ko-KR');
+            
+            item.className = 'execution-item ' + statusClass;
+            item.setAttribute('data-start-time', exec.startTime);
+            
+            const meta = item.querySelector('.execution-meta');
+            if (meta) {
+                meta.innerHTML = `<span>${timeStr}</span>${duration ? `<span>${duration}</span>` : ''}<span class="status-badge status-${statusClass}">${statusText}</span>`;
+            }
+            const nodeStats = item.querySelector('.node-stats');
+            if (nodeStats) {
+                nodeStats.innerHTML = 
+                    (exec.nodeCount > 0 ? `<span class="node-stat">전체: <strong>${exec.nodeCount}</strong></span>` : '') +
+                    (exec.completedNodes > 0 ? `<span class="node-stat">✅ 성공: <strong>${exec.completedNodes}</strong></span>` : '') +
+                    (exec.failedNodes > 0 ? `<span class="node-stat">❌ 실패: <strong>${exec.failedNodes}</strong></span>` : '') +
+                    (exec.runningNodes > 0 ? `<span class="node-stat">🔄 실행중: <strong>${exec.runningNodes}</strong></span>` : '');
+            }
+            
+            if (isCurrent && exec.status === 'RUNNING') {
+                startElapsedTimeTimer(exec.id, exec.startTime);
+            } else {
+                stopElapsedTimeTimer(exec.id);
+            }
+            
+            const details = item.querySelector('.execution-details');
+            if (!details) return;
+            
+            let resultBlock = details.querySelector('.execution-result');
+            if (exec.error) {
+                if (!resultBlock) {
+                    resultBlock = document.createElement('div');
+                    resultBlock.className = 'execution-result';
+                    details.appendChild(resultBlock);
+                }
+                resultBlock.style.background = '#f8d7da';
+                resultBlock.style.color = '#721c24';
+                resultBlock.innerHTML = '<strong>에러:</strong><br>' + escapeHtml(exec.error);
+            } else if (exec.result && exec.result.trim() !== '') {
+                if (!resultBlock) {
+                    resultBlock = document.createElement('div');
+                    resultBlock.className = 'execution-result';
+                    details.appendChild(resultBlock);
+                }
+                resultBlock.style.background = '';
+                resultBlock.style.color = '';
+                resultBlock.innerHTML = '<strong>✅ 최종 결과:</strong><div class="result-content">' + escapeHtml(exec.result.trim()) + '</div>';
+            } else {
+                if (resultBlock) {
+                    resultBlock.innerHTML = '<span style="color: #999; font-style: italic; padding: 6px 12px;">결과가 아직 없습니다...</span>';
+                    resultBlock.style.background = '';
+                    resultBlock.style.color = '';
+                }
+            }
+            // 실행 트리 갱신 (패치 시 트리가 있으면 DOM에 반영)
+            if (exec.executionTree) {
+                let treeContainer = details.querySelector(`#tree-${exec.id}`);
+                if (!treeContainer) {
+                    treeContainer = document.createElement('div');
+                    treeContainer.id = `tree-${exec.id}`;
+                    treeContainer.className = 'execution-tree';
+                    details.insertBefore(treeContainer, details.firstChild);
+                }
+                treeContainer.innerHTML = renderExecutionTreeSection(exec.executionTree);
+            }
+        }
+        
+        function attachExecutionItemListeners(item, execId) {
+            const details = item.querySelector('.execution-details');
+            const logsDiv = item.querySelector(`#logs-${execId}`);
+            const logContent = item.querySelector(`#log-content-${execId}`);
+            const header = item.querySelector('.execution-header');
+            if (header) {
+                header.style.cursor = 'pointer';
+                header.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    if (details) {
+                        const isExpanded = details.classList.contains('expanded');
+                        details.classList.toggle('expanded');
+                        if (!isExpanded && logsDiv) {
+                            logsDiv.style.display = 'block';
                             const execData = findExecutionData(execId);
                             if (execData && execData.logs && execData.logs.length > 0) {
                                 updateExecutionLogs(execId, execData.logs);
-                                
-                                // 로그 스크롤 위치 복원
-                                if (logContent && logScrollPositions.has(execId)) {
-                                    const savedScroll = logScrollPositions.get(execId);
-                                    logContent.scrollTop = savedScroll;
-                                }
+                            } else if (logContent) {
+                                loadExecutionLogs(execId, logContent);
                             }
                         }
                     }
                 });
-            }, 0);
-            
-            // 로그 업데이트 (모든 항목에 대해 로그가 있으면 표시)
-            setTimeout(() => {
-                if (data.current && data.current.logs && data.current.logs.length > 0) {
-                    const logContent = document.querySelector(`#log-content-${data.current.id}`);
-                    if (logContent) {
-                        updateExecutionLogs(data.current.id, data.current.logs);
-                    }
-                }
-                if (data.history) {
-                    data.history.forEach(exec => {
-                        if (exec.logs && exec.logs.length > 0) {
-                            const logContent = document.querySelector(`#log-content-${exec.id}`);
-                            if (logContent) {
-                                updateExecutionLogs(exec.id, exec.logs);
-                            }
-                        }
-                    });
-                }
-            }, 100);
-            
-            // 접기/펼치기 이벤트 추가 (기존 이벤트 리스너 제거 후 재추가)
-            document.querySelectorAll('.execution-item').forEach(item => {
-                const execId = item.getAttribute('data-id');
-                const details = item.querySelector('.execution-details');
-                const logsDiv = item.querySelector(`#logs-${execId}`);
-                const logContent = item.querySelector(`#log-content-${execId}`);
-                
-                // 헤더 클릭 시 상세 정보 토글
-                const header = item.querySelector('.execution-header');
-                if (header) {
-                    header.style.cursor = 'pointer';
-                    // 기존 이벤트 리스너 제거 (중복 방지)
-                    const newHeader = header.cloneNode(true);
-                    header.parentNode.replaceChild(newHeader, header);
-                    
-                    newHeader.addEventListener('click', function(e) {
-                        e.stopPropagation();
-                        if (details) {
-                            const isExpanded = details.classList.contains('expanded');
-                            details.classList.toggle('expanded');
-                            
-                            // 펼칠 때 로그 표시
-                            if (!isExpanded) {
-                                if (logsDiv) {
-                                    logsDiv.style.display = 'block';
-                                }
-                                // 실행 데이터에서 로그 가져오기
-                                const execData = findExecutionData(execId);
-                                if (execData && execData.logs && execData.logs.length > 0) {
-                                    // 즉시 로그 표시
-                                    updateExecutionLogs(execId, execData.logs);
-                                } else if (logContent) {
-                                    // 캐시에 없으면 로드 시도
-                                    loadExecutionLogs(execId, logContent);
-                                }
-                            }
-                        }
-                    });
-                }
-            });
-            
-            // 실행 데이터 저장 (로그 업데이트용)
-            if (!window.executionDataCache) {
-                window.executionDataCache = new Map();
             }
-            if (data.current) {
-                window.executionDataCache.set(data.current.id, data.current);
-                // 현재 실행 중인 경우 로그 실시간 업데이트
-                if (data.current.logs && data.current.logs.length > 0) {
-                    setTimeout(() => updateExecutionLogs(data.current.id, data.current.logs), 100);
-                }
-            }
-            if (data.history) {
-                data.history.forEach(exec => {
-                    window.executionDataCache.set(exec.id, exec);
-                });
-            }
-            
         }
         
         // 실행 이력 로드 (폴링 방식 - 폴백용)
@@ -1711,6 +1705,25 @@
             return window.executionDataCache.get(execId) || null;
         }
         
+        /** 실행 트리 전체 섹션 HTML (API 응답 executionTree 기준). 패치 시 트리 갱신용 */
+        function renderExecutionTreeSection(executionTree) {
+            if (!executionTree) return '';
+            const roots = executionTree.rootNodes || (executionTree.rootNode ? [executionTree.rootNode] : []);
+            if (roots.length === 0) return '';
+            let html = '<strong>🌳 실행 트리:</strong>';
+            roots.forEach((rootNode, index) => {
+                const hasChildren = rootNode.children && rootNode.children.length > 0;
+                const isParallel = rootNode.parallel;
+                const internalType = hasChildren ? (isParallel ? ' (내부 병렬)' : ' (내부 순차)') : '';
+                const rootLabel = roots.length > 1 ? `🔹 루트 노드 #${index + 1}${internalType}` : `🔹 루트 노드${internalType}`;
+                html += `<div style="margin-top: ${index > 0 ? '15px' : '0'}; padding-left: 0;">
+                    <div style="color: #667eea; font-weight: 600; margin-bottom: 8px; font-size: 12px;">${rootLabel}</div>
+                    ${renderExecutionTree(rootNode, 0)}
+                </div>`;
+            });
+            return html;
+        }
+
         // 실행 트리 렌더링 함수
         function renderExecutionTree(node, depth) {
             if (!node) return '';

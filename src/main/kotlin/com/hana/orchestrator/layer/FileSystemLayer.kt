@@ -4,9 +4,10 @@ import java.io.File
 
 /**
  * 파일 시스템 레이어
- * 
- * 목적: 소스 코드 파일을 읽고 수정할 수 있는 기능 제공
- * 
+ *
+ * 목적: 소스 코드·설정 등 파일을 읽고, 내용을 수정·추가할 수 있는 기능 제공.
+ * (예: 변수·코드 추가, 기존 라인 수정, 새 파일 쓰기. readFile → 내용 생성/변경 → writeFile)
+ *
  * 실행 트리의 노드로 사용 가능하여 반복적으로 사용할 수 있습니다.
  * 예: 파일 읽기 → 분석 → 수정 → 다시 읽기 → 검증
  */
@@ -91,11 +92,11 @@ class FileSystemLayer : CommonLayerInterface {
                 return "ERROR: 파일 수정 실패 - 보호된 파일입니다: $path"
             }
             
-            // 2. 백업 생성
-            val backupPath = backupFile(path)
+            val file = File(path)
+            // 2. 기존 파일이 있을 때만 백업 (신규 파일이면 백업 생략 → 결과에 ERROR 안 넣어서 평가 LLM이 성공으로 인식)
+            val backupPath = if (file.exists()) backupFile(path) else "신규 파일"
             
             // 3. 파일 쓰기
-            val file = File(path)
             file.parentFile?.mkdirs()
             file.writeText(content)
             
@@ -175,9 +176,91 @@ class FileSystemLayer : CommonLayerInterface {
     }
     
     /**
+     * 파일 삭제
+     * 
+     * @param path 삭제할 파일 경로 (상대 경로 사용 필수)
+     *   - 올바른 예: "test_file.txt", "src/main/kotlin/App.kt", "./temp.txt"
+     *   - 잘못된 예: "/test_file.txt", "/path/to/file.txt" (절대 경로 사용 금지)
+     *   - 현재 작업 디렉토리 기준으로 상대 경로를 해석합니다
+     * @return 실행 결과 메시지
+     */
+    @LayerFunction
+    suspend fun deleteFile(path: String): String {
+        return try {
+            checkFileExistsAndNotProtected(path, "")?.let { return it }
+            val file = File(path)
+            val backupPath = backupFile(path)
+            val deleted = file.delete()
+            if (deleted) {
+                "SUCCESS: 파일 삭제 완료\n경로: $path\n백업: $backupPath"
+            } else {
+                "ERROR: 파일 삭제 실패: $path"
+            }
+        } catch (e: Exception) {
+            "ERROR: 파일 삭제 실패: ${e.message}"
+        }
+    }
+    
+    /**
+     * 파일 이동/이름 변경
+     * 
+     * @param sourcePath 원본 파일 경로 (상대 경로 사용 필수)
+     *   - 올바른 예: "old_file.txt", "src/main/kotlin/OldApp.kt"
+     *   - 잘못된 예: "/old_file.txt" (절대 경로 사용 금지)
+     * @param targetPath 대상 파일 경로 (상대 경로 사용 필수)
+     *   - 올바른 예: "new_file.txt", "src/main/kotlin/NewApp.kt"
+     *   - 잘못된 예: "/new_file.txt" (절대 경로 사용 금지)
+     *   - 현재 작업 디렉토리 기준으로 상대 경로를 해석합니다
+     * @return 실행 결과 메시지
+     */
+    @LayerFunction
+    suspend fun moveFile(sourcePath: String, targetPath: String): String {
+        return try {
+            checkFileExistsAndNotProtected(
+                sourcePath, "",
+                existsLabel = "원본 파일",
+                notFileLabel = "원본"
+            )?.let { return "ERROR: 파일 이동 실패 - ${it.removePrefix("ERROR: ")}" }
+            val sourceFile = File(sourcePath)
+            val targetFile = File(targetPath)
+            if (targetFile.exists() && !validateChanges(targetPath, "")) {
+                return "ERROR: 파일 이동 실패 - 대상 경로가 보호된 파일입니다: $targetPath"
+            }
+            val backupPath = backupFile(sourcePath)
+            targetFile.parentFile?.mkdirs()
+            sourceFile.copyTo(targetFile, overwrite = true)
+            sourceFile.delete()
+            "SUCCESS: 파일 이동 완료\n원본: $sourcePath\n대상: $targetPath\n백업: $backupPath"
+        } catch (e: Exception) {
+            "ERROR: 파일 이동 실패: ${e.message}"
+        }
+    }
+    
+    /**
+     * path가 존재하는 파일인지 검사. 보호된 파일이면 실패.
+     * @param existsLabel 존재하지 않을 때 메시지용 (예: "파일", "원본 파일")
+     * @param notFileLabel 파일이 아닐 때 메시지용 (예: "파일", "원본")
+     * @return null이면 통과, 아니면 반환할 에러 메시지
+     */
+    private suspend fun checkFileExistsAndNotProtected(
+        path: String,
+        content: String = "",
+        existsLabel: String = "파일",
+        notFileLabel: String = existsLabel
+    ): String? {
+        val file = File(path)
+        if (!file.exists()) return "ERROR: ${existsLabel}이 존재하지 않습니다: $path"
+        if (!file.isFile) return "ERROR: ${notFileLabel}이 파일이 아닙니다: $path"
+        if (!validateChanges(path, content)) return "ERROR: 보호된 파일입니다: $path"
+        return null
+    }
+
+    /**
      * 변경사항 검증
      * 보호된 파일 목록 확인
+     * @param content 향후 내용 기반 검증용. 현재는 경로만 검사.
      */
+    @Suppress("UNUSED_PARAMETER")
     private suspend fun validateChanges(path: String, content: String): Boolean {
         val protectedFiles = listOf(
             "build.gradle.kts",
@@ -222,7 +305,16 @@ class FileSystemLayer : CommonLayerInterface {
                 val rootPath = (args["rootPath"] as? String) ?: "."
                 findFiles(pattern, rootPath)
             }
-            else -> "Unknown function: $function. Available: readFile, writeFile, listDirectory, backupFile, findFiles"
+            "deleteFile" -> {
+                val path = (args["path"] as? String) ?: ""
+                deleteFile(path)
+            }
+            "moveFile" -> {
+                val sourcePath = (args["sourcePath"] as? String) ?: ""
+                val targetPath = (args["targetPath"] as? String) ?: ""
+                moveFile(sourcePath, targetPath)
+            }
+            else -> "Unknown function: $function. Available: readFile, writeFile, listDirectory, backupFile, findFiles, deleteFile, moveFile"
         }
     }
 }

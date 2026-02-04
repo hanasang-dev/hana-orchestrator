@@ -9,7 +9,6 @@ import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.message.Message
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionHistory
-import com.hana.orchestrator.domain.entity.ExecutionContext
 import com.hana.orchestrator.data.model.response.ExecutionTreeResponse
 import com.hana.orchestrator.data.mapper.ExecutionTreeMapper
 import com.hana.orchestrator.llm.config.LLMConfig
@@ -183,15 +182,8 @@ class OllamaLLMClient(
         )
     }
     
-    /**
-     * 실행 결과가 사용자 요구사항에 부합하는지 LLM이 판단
-     */
-    override suspend fun evaluateResult(
-        userQuery: String,
-        executionResult: String,
-        executionContext: ExecutionContext?
-    ): ResultEvaluation {
-        val prompt = promptBuilder.buildEvaluationPrompt(userQuery, executionResult, executionContext)
+    override suspend fun evaluateResult(userQuery: String, executionResult: String): ResultEvaluation {
+        val prompt = promptBuilder.buildEvaluationPrompt(userQuery, executionResult)
         val schema = JsonSchemaBuilder.buildResultEvaluationSchema()
         
         return callLLM(
@@ -209,9 +201,10 @@ class OllamaLLMClient(
     override suspend fun suggestRetryStrategy(
         userQuery: String,
         previousHistory: ExecutionHistory,
-        layerDescriptions: List<LayerDescription>
+        layerDescriptions: List<LayerDescription>,
+        previousExecutedWorkSummary: String?
     ): RetryStrategy {
-        val prompt = promptBuilder.buildRetryStrategyPrompt(userQuery, previousHistory, layerDescriptions)
+        val prompt = promptBuilder.buildRetryStrategyPrompt(userQuery, previousHistory, layerDescriptions, previousExecutedWorkSummary)
         val availableLayerNames = layerDescriptions.map { it.name }
         val schema = JsonSchemaBuilder.buildRetryStrategySchema(availableLayerNames)
         

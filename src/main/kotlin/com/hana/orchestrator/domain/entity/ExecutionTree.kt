@@ -28,4 +28,13 @@ data class ExecutionTree(
      */
     val isSingleRoot: Boolean
         get() = rootNodes.size == 1
+
+    /**
+     * 트리에서 모든 노드를 실행 순서대로 수집 (평가 시 실행된 작업 요약용)
+     */
+    fun allNodes(): List<ExecutionNode> {
+        fun fromNode(node: ExecutionNode): List<ExecutionNode> =
+            listOf(node) + node.children.flatMap { fromNode(it) }
+        return rootNodes.flatMap { fromNode(it) }
+    }
 }

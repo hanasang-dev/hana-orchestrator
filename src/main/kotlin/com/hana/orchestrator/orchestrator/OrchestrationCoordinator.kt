@@ -3,6 +3,7 @@ package com.hana.orchestrator.orchestrator
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionHistory
 import com.hana.orchestrator.domain.entity.ExecutionResult
+import com.hana.orchestrator.llm.ResultEvaluation
 import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 import com.hana.orchestrator.llm.useSuspend
 
@@ -47,6 +48,7 @@ class OrchestrationCoordinator(
             
             var previousHistory: ExecutionHistory? = null
             var previousTree: ExecutionTree? = null
+            var previousExecutedWorkSummary: String? = null
             var attemptCount = 0
             
             while (attemptCount < maxAttempts) {
@@ -63,8 +65,8 @@ class OrchestrationCoordinator(
                         // 초기 트리 생성: LLM이 모든 레이어를 보고 적절한 실행 계획 생성
                         rawTree = createInitialTree(query, allDescriptions, executionId, startTime)
                     } else {
-                        // 재시도: 이전 실행 결과를 바탕으로 재처리 방안 생성
-                        rawTree = createRetryTree(query, previousHistory!!, allDescriptions, executionId, startTime)
+                        // 재시도: 이전 실행 결과를 바탕으로 재처리 방안 생성 (이전에 실제로 수행한 작업 목록 전달)
+                        rawTree = createRetryTree(query, previousHistory!!, allDescriptions, executionId, startTime, previousExecutedWorkSummary)
                     }
                     
                     // 트리 검증 및 실행
@@ -95,28 +97,26 @@ class OrchestrationCoordinator(
                             historyManager.clearCurrentExecution()
                             return result
                         }
-                        
-                        // 재처리 루프 계속
-                        previousHistory = saveAndEmitFailedHistory(
+                        // 재시도할 것이므로 FAILED가 아닌 RETRYING으로 emit → UI가 "재시도 중" 표시하고 계속 대기
+                        val failedHistory = ExecutionHistory.createFailed(
                             executionId, query,
                             "요구사항 미부합: ${evaluation.reason}",
-                            startTime
+                            startTime,
+                            logs = historyManager.getCurrentLogs()
                         )
-                        previousTree = rawTree
-                        prepareRetry(executionId, query)
-                        continue
-                    }
-                    
-                    // 평가 실패 또는 기타 경우
-                    // needsRetry가 true면 재처리 시도, false면 종료
-                    if (evaluation.needsRetry && attemptCount < maxAttempts) {
-                        // 재처리 필요: 실패 이력 저장 후 재시도
-                        previousHistory = saveAndEmitFailedHistory(
-                            executionId, query,
-                            "요구사항 미부합: ${evaluation.reason}",
-                            startTime
+                        historyManager.addHistory(failedHistory)
+                        statePublisher.emitExecutionUpdate(
+                            ExecutionHistory.createRetrying(
+                                executionId, query,
+                                "요구사항 미부합: ${evaluation.reason}",
+                                startTime,
+                                attemptNumber = attemptCount + 1,
+                                logs = historyManager.getCurrentLogs()
+                            )
                         )
+                        previousHistory = failedHistory
                         previousTree = rawTree
+                        previousExecutedWorkSummary = result.executionTree?.allNodes()?.joinToString(", ") { "${it.layerName}.${it.function}" }
                         prepareRetry(executionId, query)
                         continue
                     }
@@ -218,13 +218,15 @@ class OrchestrationCoordinator(
     
     /**
      * 재시도 트리 생성
+     * @param previousExecutedWorkSummary 이전 실행에서 실제로 수행된 작업(레이어.함수 목록). 재처리 시 "뭐가 빠졌는지" LLM이 판단하도록 전달.
      */
     private suspend fun createRetryTree(
         query: String,
         previousHistory: ExecutionHistory,
         allDescriptions: List<com.hana.orchestrator.layer.LayerDescription>,
         executionId: String,
-        startTime: Long
+        startTime: Long,
+        previousExecutedWorkSummary: String? = null
     ): ExecutionTree {
         logger.info("🔧 [OrchestrationCoordinator] 재처리 방안 요청 중...")
         // 로그 emit을 즉시 업데이트
@@ -236,7 +238,7 @@ class OrchestrationCoordinator(
         val retryStrategy = try {
             modelSelectionStrategy.selectClientForRetryStrategy()
                 .useSuspend { client ->
-                    client.suggestRetryStrategy(query, previousHistory, allDescriptions)
+                    client.suggestRetryStrategy(query, previousHistory, allDescriptions, previousExecutedWorkSummary)
                 }
         } catch (retryException: Exception) {
             handleRetryStrategyFailure(retryException, query, executionId, startTime)
@@ -320,22 +322,17 @@ class OrchestrationCoordinator(
         return result
     }
     
-    /**
-     * 실행 결과 평가
-     */
+    /** 실행 결과가 요구사항을 충족하는지 LLM이 판단 (요구사항 + 실행 결과 텍스트만 전달) */
     private suspend fun evaluateResult(
         query: String,
         result: ExecutionResult,
         executionId: String,
         startTime: Long
-    ): com.hana.orchestrator.llm.ResultEvaluation {
+    ): ResultEvaluation {
         logger.info("🤔 [OrchestrationCoordinator] 실행 결과 평가 중...")
-        
         val evaluationStartTime = System.currentTimeMillis()
         val evaluation = modelSelectionStrategy.selectClientForEvaluation()
-            .useSuspend { client ->
-                client.evaluateResult(query, result.result, result.context)
-            }
+            .useSuspend { client -> client.evaluateResult(query, result.result) }
         
         val evaluationDuration = System.currentTimeMillis() - evaluationStartTime
         logger.perf("⏱️ [PERF] 결과 평가 완료: ${evaluationDuration}ms")
@@ -394,7 +391,7 @@ class OrchestrationCoordinator(
         logger.info("✅ [OrchestrationCoordinator] 유의미한 차이 확인: ${comparison.reason}")
         return true
     }
-    
+
     /**
      * 실행 예외 처리
      */

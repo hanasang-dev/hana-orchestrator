@@ -151,7 +151,8 @@ class TreeExecutor(
             val execStartMsg = "${indent}▶️ [TreeExecutor] ${node.layerName}.${node.function} 실행 중...${if (isRemote) " (원격: $remoteUrl)" else ""}"
             logger.info(execStartMsg)
             val nodeStartTime = System.currentTimeMillis()
-            val execResult = layer.execute(node.function, node.args)
+            val resolvedArgs = resolveArgs(node.args, context, parentNodeId)
+            val execResult = layer.execute(node.function, resolvedArgs)
             val nodeDuration = System.currentTimeMillis() - nodeStartTime
             val execCompleteMsg = "${indent}✅ [TreeExecutor] ${node.layerName}.${node.function} 완료: ${execResult.take(50)}... (${nodeDuration}ms)"
             logger.info(execCompleteMsg)
@@ -250,5 +251,49 @@ class TreeExecutor(
         }
         
         return executionResult
+    }
+
+    /**
+     * args 내 {{parent}}, {{nodeId:id}} 플레이스홀더를 실행 컨텍스트 결과로 치환.
+     * 자식 노드가 부모/특정 노드 실행 결과를 인자로 쓸 수 있게 함 (예: readFile → llm.analyze(context={{parent}}) → writeFile(content={{parent}})).
+     */
+    private fun resolveArgs(
+        args: Map<String, Any>,
+        context: ExecutionContext,
+        parentNodeId: String?
+    ): Map<String, Any> {
+        return args.mapValues { (_, value) -> resolveValue(value, context, parentNodeId) }
+    }
+
+    private fun resolveValue(
+        value: Any?,
+        context: ExecutionContext,
+        parentNodeId: String?
+    ): Any {
+        return when (value) {
+            is String -> resolveStringPlaceholders(value, context, parentNodeId)
+            is Map<*, *> -> (value as Map<*, *>).mapKeys { it.key?.toString() ?: "" }
+                .mapValues { resolveValue(it.value, context, parentNodeId) }
+            is List<*> -> value.map { resolveValue(it, context, parentNodeId) }
+            else -> value ?: ""
+        }
+    }
+
+    private fun resolveStringPlaceholders(
+        s: String,
+        context: ExecutionContext,
+        parentNodeId: String?
+    ): String {
+        val parentResult = parentNodeId?.let { context.getResult(it)?.result }.orEmpty()
+        var out = if (parentResult.isEmpty()) {
+            s.replace("{{parent}}/", "").replace("{{parent}}", "")
+        } else {
+            s.replace("{{parent}}", parentResult)
+        }
+        val nodeIdRegex = Regex("""\{\{nodeId:([^}]+)\}\}""")
+        out = nodeIdRegex.replace(out) { mr ->
+            context.getResult(mr.groupValues[1])?.result.orEmpty()
+        }
+        return out
     }
 }
