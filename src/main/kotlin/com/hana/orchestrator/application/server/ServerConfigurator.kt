@@ -20,6 +20,7 @@ import io.ktor.server.websocket.*
 import io.ktor.util.pipeline.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.Json
+import java.io.File
 
 /**
  * Ktor 서버 설정 및 라우팅 구성
@@ -53,8 +54,15 @@ class ServerConfigurator(
             }
             
             routing {
-                // 정적 파일 서빙 (UI)
-                staticResources("/", "static", "index.html")
+                // 정적 파일 서빙 (UI). DEV_STATIC=1 이면 소스 디렉터리에서 직접 서빙 → 수정 후 새로고침만 하면 됨
+                val devStaticDir = System.getenv("DEV_STATIC")?.let {
+                    File(System.getenv("DEV_STATIC_DIR") ?: "src/main/resources/static").takeIf { d -> d.isDirectory }
+                }
+                if (devStaticDir != null) {
+                    staticFiles("/", devStaticDir, "index.html")
+                } else {
+                    staticResources("/", "static", "index.html")
+                }
                 
                 // 컨트롤러들 설정
                 HealthController(lifecycleManager).configureRoutes(this)
