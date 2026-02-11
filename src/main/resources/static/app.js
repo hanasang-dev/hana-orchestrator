@@ -20,6 +20,89 @@ function formatNodeStats(exec) {
         (exec.runningNodes > 0 ? `<span class="node-stat">🔄 실행중: <strong>${exec.runningNodes}</strong></span>` : '');
 }
 
+// 트리 시각화 관련 함수
+function showTreeVisualization(executionTree) {
+    if (!executionTree || !executionTree.rootNodes || executionTree.rootNodes.length === 0) {
+        alert('실행 트리 정보가 없습니다.');
+        return;
+    }
+
+    const mermaidCode = convertTreeToMermaid(executionTree);
+    const treeVisualization = document.getElementById('treeVisualization');
+    const treeModal = document.getElementById('treeModal');
+
+    // Mermaid 다이어그램 렌더링
+    treeVisualization.textContent = mermaidCode;
+    treeVisualization.removeAttribute('data-processed');
+
+    // 모달 표시
+    treeModal.style.display = 'flex';
+
+    // Mermaid 재렌더링
+    mermaid.init(undefined, treeVisualization);
+}
+
+function closeTreeModal() {
+    document.getElementById('treeModal').style.display = 'none';
+}
+
+function convertTreeToMermaid(executionTree) {
+    let mermaid = 'graph TD\n';
+    const nodeMap = new Map(); // id -> node
+    let nodeCounter = 0;
+
+    function getNodeId(node) {
+        if (!nodeMap.has(node.id)) {
+            nodeMap.set(node.id, `N${nodeCounter++}`);
+        }
+        return nodeMap.get(node.id);
+    }
+
+    function formatNodeLabel(node) {
+        const layer = node.layerName || 'unknown';
+        const func = node.function || 'unknown';
+        const argsStr = node.args ? Object.keys(node.args).slice(0, 2).join(', ') : '';
+        const argsSuffix = argsStr ? `\\n${argsStr}` : '';
+        return `${layer}.${func}${argsSuffix}`;
+    }
+
+    function processNode(node, parentId = null) {
+        const nodeId = getNodeId(node);
+        const label = formatNodeLabel(node);
+
+        // 노드 정의
+        mermaid += `    ${nodeId}["${label}"]\n`;
+
+        // 부모 연결
+        if (parentId) {
+            mermaid += `    ${parentId} --> ${nodeId}\n`;
+        }
+
+        // 자식 처리
+        if (node.children && node.children.length > 0) {
+            node.children.forEach(child => {
+                processNode(child, nodeId);
+            });
+        }
+    }
+
+    // 루트 노드들 처리
+    executionTree.rootNodes.forEach((rootNode, index) => {
+        processNode(rootNode);
+    });
+
+    // 병렬 실행 표시 (루트가 여러 개면)
+    if (executionTree.rootNodes.length > 1) {
+        mermaid += '\n    %% 병렬 실행\n';
+        const rootIds = executionTree.rootNodes.map(node => getNodeId(node));
+        rootIds.forEach(id => {
+            mermaid += `    style ${id} fill:#e3f2fd\n`;
+        });
+    }
+
+    return mermaid;
+}
+
 // 레이어 목록 로드
 async function loadLayers() {
     const layersList = document.getElementById('layersList');
@@ -173,6 +256,50 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
 
 let wsConnection = null;
 
+// 진행 상태 UI 업데이트
+function updateProgressUI(progress) {
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBar = document.getElementById('progressBar');
+    const progressMessage = document.getElementById('progressMessage');
+    const progressTime = document.getElementById('progressTime');
+
+    if (!progressContainer || !progressBar || !progressMessage || !progressTime) {
+        return;
+    }
+
+    // 진행 중일 때만 표시
+    if (progress.phase === 'COMPLETED' || progress.phase === 'FAILED') {
+        // 완료/실패 시 잠시 표시 후 숨김
+        setTimeout(() => {
+            progressContainer.style.display = 'none';
+        }, 2000);
+    } else {
+        progressContainer.style.display = 'block';
+    }
+
+    // 진행률 업데이트
+    progressBar.style.width = progress.progress + '%';
+
+    // 메시지 업데이트
+    progressMessage.textContent = progress.message;
+
+    // 경과 시간 업데이트
+    const elapsedSec = (progress.elapsedMs / 1000).toFixed(1);
+    progressTime.textContent = elapsedSec + '초';
+
+    // 페이즈별 색상 변경
+    const colors = {
+        'STARTING': 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)',
+        'TREE_CREATION': 'linear-gradient(90deg, #f093fb 0%, #f5576c 100%)',
+        'TREE_VALIDATION': 'linear-gradient(90deg, #4facfe 0%, #00f2fe 100%)',
+        'TREE_EXECUTION': 'linear-gradient(90deg, #43e97b 0%, #38f9d7 100%)',
+        'RESULT_EVALUATION': 'linear-gradient(90deg, #fa709a 0%, #fee140 100%)',
+        'COMPLETED': 'linear-gradient(90deg, #30cfd0 0%, #330867 100%)',
+        'FAILED': 'linear-gradient(90deg, #eb3349 0%, #f45c43 100%)'
+    };
+    progressBar.style.background = colors[progress.phase] || colors['STARTING'];
+}
+
 // WebSocket 연결 (실시간 업데이트)
 function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -191,7 +318,19 @@ function connectWebSocket() {
                 return;
             }
             const data = JSON.parse(event.data);
-            updateExecutionsUI(data);
+            console.log('WebSocket 데이터 수신:', data);
+
+            // 진행 상태 메시지인지 실행 이력 메시지인지 구분
+            if (data.executionId && data.phase && data.message) {
+                // 진행 상태 업데이트
+                updateProgressUI(data);
+            } else {
+                // 실행 이력 업데이트
+                if (data.history && data.history[0]) {
+                    console.log('첫 번째 실행 이력의 executionTree:', data.history[0].executionTree);
+                }
+                updateExecutionsUI(data);
+            }
         } catch (error) {
             console.error('WebSocket 메시지 파싱 오류:', error, '데이터:', event.data);
         }
@@ -290,7 +429,19 @@ function patchExecutionItem(item, exec, isCurrent) {
     
     const meta = item.querySelector('.execution-meta');
     if (meta) {
-        meta.innerHTML = `<span>${timeStr}</span>${duration ? `<span>${duration}</span>` : ''}<span class="status-badge status-${statusClass}">${statusText}</span>`;
+        meta.innerHTML = `<span>${timeStr}</span>${duration ? `<span>${duration}</span>` : ''}<span class="status-badge status-${statusClass}">${statusText}</span>${exec.executionTree ? `<button class="tree-view-btn" data-exec-id="${exec.id}" style="margin-left: 8px; padding: 4px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600;">🌳 트리 보기</button>` : ''}`;
+
+        // 버튼 이벤트 리스너 재연결
+        const treeViewBtn = meta.querySelector('.tree-view-btn');
+        if (treeViewBtn) {
+            treeViewBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                const execData = findExecutionData(exec.id);
+                if (execData && execData.executionTree) {
+                    showTreeVisualization(execData.executionTree);
+                }
+            });
+        }
     }
     const nodeStats = item.querySelector('.node-stats');
     if (nodeStats) nodeStats.innerHTML = formatNodeStats(exec);
@@ -364,6 +515,18 @@ function attachExecutionItemListeners(item, execId) {
                         loadExecutionLogs(execId, logContent);
                     }
                 }
+            }
+        });
+    }
+
+    // 트리 보기 버튼 이벤트 연결
+    const treeViewBtn = item.querySelector('.tree-view-btn');
+    if (treeViewBtn) {
+        treeViewBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const execData = findExecutionData(execId);
+            if (execData && execData.executionTree) {
+                showTreeVisualization(execData.executionTree);
             }
         });
     }
@@ -572,6 +735,7 @@ function initSectionResizers() {
 }
 
 function renderExecution(exec, isCurrent) {
+    console.log('renderExecution called:', exec.id, 'has executionTree:', !!exec.executionTree, exec.executionTree);
     const statusClass = (exec.status || '').toLowerCase();
     const statusText = getStatusLabel(exec.status);
     
@@ -601,6 +765,7 @@ function renderExecution(exec, isCurrent) {
                         <span>${timeStr}</span>
                         ${duration ? `<span>${duration}</span>` : ''}
                         <span class="status-badge status-${statusClass}">${statusText}</span>
+                        ${exec.executionTree ? `<button class="tree-view-btn" data-exec-id="${exec.id}" style="margin-left: 8px; padding: 4px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600;">🌳 트리 보기</button>` : `<!-- No tree: ${JSON.stringify(exec.executionTree)} -->`}
                     </div>
                     <div class="node-stats">${formatNodeStats(exec)}</div>
                 </div>
