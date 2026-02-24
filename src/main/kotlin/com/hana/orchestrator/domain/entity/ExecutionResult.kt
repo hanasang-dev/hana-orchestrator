@@ -1,5 +1,6 @@
 package com.hana.orchestrator.domain.entity
 
+import com.hana.orchestrator.llm.ReActStep
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 
@@ -13,7 +14,8 @@ data class ExecutionResult(
     val result: String,
     val error: String? = null,
     @Transient val executionTree: ExecutionTree? = null,
-    @Transient val context: ExecutionContext? = null
+    @Transient val context: ExecutionContext? = null,
+    @Transient val stepHistory: List<ReActStep> = emptyList()
 ) {
     /**
      * 실행이 성공했는지 확인

@@ -2,6 +2,7 @@ package com.hana.orchestrator.llm
 
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionHistory
+import com.hana.orchestrator.llm.ReActStep
 
 /**
  * LLM 프롬프트 생성기
@@ -346,6 +347,57 @@ $JSON_RULES
 위 요청에 대해 직접 답변해주세요. 정확하고 간결하게 답변하세요.
 
 답변:""".trimIndent()
+    }
+
+    /**
+     * ReAct 다음 액션 결정 프롬프트
+     * LLM이 스텝 히스토리를 보고 call_layer / call_parallel / finish 를 결정
+     */
+    fun buildReActPrompt(
+        query: String,
+        stepHistory: List<ReActStep>,
+        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
+    ): String {
+        val layersInfo = formatLayerDescriptionsCompact(layerDescriptions)
+        val historySection = if (stepHistory.isEmpty()) {
+            "아직 수행한 작업 없음"
+        } else {
+            stepHistory.joinToString("\n") { step ->
+                val argsStr = step.args.entries.joinToString(", ") { "${it.key}=${it.value}" }
+                "스텝 ${step.stepNumber}: ${step.layerName}.${step.function}($argsStr)\n  → 결과: ${step.result.take(300)}"
+            }
+        }
+
+        val alreadyDoneNote = if (stepHistory.isNotEmpty()) {
+            "\n중요: 위 '지금까지 수행한 작업'에 결과가 이미 있으면, 같은 작업을 반복하지 말고 즉시 finish를 선택하세요."
+        } else ""
+
+        return """목표: "$query"
+
+사용 가능한 레이어:
+$layersInfo
+
+지금까지 수행한 작업:
+$historySection
+$alreadyDoneNote
+
+결정 규칙 (반드시 순서대로 확인):
+1. 위 히스토리에 목표 달성에 필요한 정보가 이미 모두 있는가? → 있으면 즉시 finish
+2. 독립적으로 동시에 실행 가능한 작업이 2개 이상 남아있는가? → call_parallel
+3. 그 외 단일 작업이 필요한가? → call_layer
+
+$JSON_RULES
+
+반드시 다음 JSON 형식 중 하나로만 응답하세요. 다른 텍스트는 포함하지 마세요.
+
+단일 레이어 호출:
+{"action":"call_layer","layerName":"레이어이름","function":"함수이름","args":{"파라미터명":"값"},"reasoning":"이유"}
+
+병렬 호출 (독립적인 작업 여러 개를 동시에 실행):
+{"action":"call_parallel","calls":[{"layerName":"레이어1","function":"함수1","args":{"k":"v"}},{"layerName":"레이어2","function":"함수2","args":{}}],"reasoning":"이유"}
+
+목표 달성 (이미 필요한 정보를 모두 얻었을 때):
+{"action":"finish","result":"최종 결과 내용","reasoning":"완료 이유"}""".trimIndent()
     }
 
     fun buildTreeReviewPrompt(

@@ -1,6 +1,7 @@
 package com.hana.orchestrator.presentation.mapper
 
 import com.hana.orchestrator.domain.entity.ExecutionResult
+import com.hana.orchestrator.orchestrator.ReActTreeConverter
 import com.hana.orchestrator.presentation.model.chat.ChatResponse
 
 /**
@@ -8,8 +9,8 @@ import com.hana.orchestrator.presentation.model.chat.ChatResponse
  */
 object ExecutionResultMapper {
     fun toChatResponse(result: ExecutionResult): ChatResponse {
-        // 현재는 result만 사용
-        // 향후 확장: executionTree, context 정보를 포함한 상세 응답 추가 가능
-        return ChatResponse(listOf(result.result))
+        val tree = result.stepHistory.takeIf { it.isNotEmpty() }
+            ?.let { ReActTreeConverter.convert(it) }
+        return ChatResponse(results = listOf(result.result), tree = tree)
     }
 }

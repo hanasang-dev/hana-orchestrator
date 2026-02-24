@@ -54,4 +54,10 @@ interface ModelSelectionStrategy {
      * reviewTree 작업용 클라이언트 선택
      */
     fun selectClientForReviewTree(): LLMClient
+
+    /**
+     * decideNextAction (ReAct) 작업용 클라이언트 선택
+     * KSP 자동 생성 대상 아님 — 기본 구현 제공 (트리 생성용 클라이언트 재사용)
+     */
+    fun selectClientForReActDecision(): LLMClient = selectClientForTreeCreation()
 }

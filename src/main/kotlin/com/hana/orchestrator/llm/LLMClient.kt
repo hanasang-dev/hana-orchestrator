@@ -98,6 +98,16 @@ interface LLMClient {
     ): TreeReview
 
     /**
+     * ReAct 루프에서 다음 스텝 결정 (관찰 → 사고 → 행동)
+     * @LLMTask 미적용 — ModelSelectionStrategy의 default 메서드로 클라이언트 선택
+     */
+    suspend fun decideNextAction(
+        query: String,
+        stepHistory: List<ReActStep>,
+        layerDescriptions: List<LayerDescription>
+    ): ReActDecision
+
+    /**
      * 리소스 정리
      */
     suspend fun close()

@@ -28,6 +28,9 @@ let treeEditorQuery = '';       // 현재 편집 중인 쿼리
 let treeEditorLayers = [];      // 팔레트용 레이어 목록
 let selectedNodeId = null;      // 우클릭/선택된 노드 id
 let nodeCounter = 0;            // 신규 노드 id 채번
+
+let lastReActTree = null;       // 마지막 ReAct 실행 결과 트리 (저장용)
+let lastUserMessage = '';       // 마지막 사용자 메시지 (트리 저장 시 query로 사용)
 let hoveredEdgeId = null;       // 호버 중인 엣지 id
 let edgeHideTimeout = null;     // 엣지 X버튼 hide 딜레이 타이머
 let currentNodeResults = {};    // 현재 트리의 노드 실행 결과 (P3)
@@ -75,11 +78,9 @@ function closeTreeModal() {
 
 // P4: 빈 트리 편집기 열기
 function newEmptyTree() {
-    const query = prompt('새 트리 쿼리를 입력하세요 (실행 목적 설명):', '');
-    if (query === null) return;
     currentNodeResults = {};
-    treeEditorQuery = query;
-    document.getElementById('treeModalQuery').textContent = query || '새 트리';
+    treeEditorQuery = '';
+    document.getElementById('treeModalQuery').textContent = '새 트리';
     document.getElementById('reviewResult').textContent = '';
     document.getElementById('executeTreeBtn').disabled = false;
     document.getElementById('executeTreeBtn').style.opacity = '1';
@@ -572,6 +573,24 @@ function deleteSelectedNode() {
 }
 
 // ── 트리 저장 / 불러오기 ──
+async function saveReActTree() {
+    if (!lastReActTree) { alert('저장할 트리가 없습니다.'); return; }
+    const name = prompt('저장할 이름을 입력하세요:', lastUserMessage.slice(0, 30) || 'react-tree');
+    if (!name) return;
+    try {
+        const res = await fetch('/trees/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, query: lastUserMessage, tree: lastReActTree })
+        });
+        const data = await res.json();
+        if (data.success) alert(`✅ "${name}" 으로 저장되었습니다.`);
+        else alert('저장 실패: ' + (data.error || '알 수 없는 오류'));
+    } catch (e) {
+        alert('저장 실패: ' + e.message);
+    }
+}
+
 async function saveTree() {
     const tree = elementsToTree();
     if (!tree || tree.rootNodes.length === 0) { alert('저장할 트리가 없습니다.'); return; }
@@ -621,8 +640,10 @@ async function loadTree(name) {
         const saved = await res.json();
         treeEditorQuery = saved.query || '';
         document.getElementById('treeModalQuery').textContent = treeEditorQuery || '쿼리 정보 없음';
-        initCytoscape(saved.tree);
+        document.getElementById('reviewResult').textContent = '';
+        document.getElementById('treeModal').style.display = 'flex';
         closeLoadTreeModal();
+        setTimeout(() => { initCytoscape(saved.tree); buildLayerPalette(); }, 50);
     } catch (e) {
         alert('트리 로드 실패: ' + e.message);
     }
@@ -764,7 +785,9 @@ document.getElementById('chatForm').addEventListener('submit', async (e) => {
     const message = chatInput.value.trim();
     
     if (!message) return;
-    
+
+    lastUserMessage = message;
+
     // 사용자 메시지 표시
     chatMessages.innerHTML = `<div style="margin-bottom: 10px; padding: 8px 12px; background: #667eea; color: white; border-radius: 8px; text-align: right; max-width: 80%; margin-left: auto;">
         <strong>사용자:</strong> ${message}
@@ -807,7 +830,17 @@ document.getElementById('chatForm').addEventListener('submit', async (e) => {
             }
             chatStatus.textContent = '실행 완료';
             chatStatus.style.color = '#51cf66';
-            
+
+            // ReAct 트리 저장 버튼
+            const saveBtn = document.getElementById('saveReActTreeBtn');
+            if (result.tree && result.tree.rootNodes && result.tree.rootNodes.length > 0) {
+                lastReActTree = result.tree;
+                if (saveBtn) saveBtn.style.display = 'inline-block';
+            } else {
+                lastReActTree = null;
+                if (saveBtn) saveBtn.style.display = 'none';
+            }
+
             // 실행 이력 새로고침
             loadExecutions();
         }

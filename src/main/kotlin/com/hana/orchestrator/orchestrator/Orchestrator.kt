@@ -40,6 +40,7 @@ class Orchestrator(
     private val statePublisher: ExecutionStatePublisher
     private val treeExecutor: TreeExecutor
     private val coordinator: OrchestrationCoordinator
+    private val reactiveExecutor: ReactiveExecutor
 
     /** 파일 쓰기 승인 게이트 (WebSocket 컨트롤러에서 구독, ApprovalController에서 응답) */
     val approvalGate = ApprovalGate()
@@ -70,6 +71,12 @@ class Orchestrator(
             statePublisher = statePublisher,
             modelSelectionStrategy = modelSelectionStrategy,
             appContextService = appContextService
+        )
+        reactiveExecutor = ReactiveExecutor(
+            layerManager = layerManager,
+            historyManager = historyManager,
+            statePublisher = statePublisher,
+            modelSelectionStrategy = modelSelectionStrategy
         )
         
         logger.info("🚀 [Orchestrator] 초기화 시작...")
@@ -127,9 +134,58 @@ class Orchestrator(
     
     /**
      * 오케스트레이션 실행 (도메인 모델 반환)
+     * mode == "reactive" → ReactiveExecutor (ReAct 루프)
+     * mode == "tree" (기본) → OrchestrationCoordinator (트리 계획 실행)
      */
     suspend fun executeOrchestration(chatDto: ChatDto): ExecutionResult {
-        return coordinator.executeOrchestration(chatDto)
+        return if (chatDto.mode == "reactive") {
+            executeReactive(chatDto)
+        } else {
+            coordinator.executeOrchestration(chatDto)
+        }
+    }
+
+    /**
+     * Reactive(ReAct) 모드 실행: 공통 이력 관리 포함
+     */
+    private suspend fun executeReactive(chatDto: ChatDto): ExecutionResult {
+        val query = chatDto.message
+        appContextService.updateVolatileFromRequest(chatDto.context)
+        appContextService.ensureVolatileServerWorkingDirectory()
+
+        val executionId = java.util.UUID.randomUUID().toString()
+        val startTime = System.currentTimeMillis()
+
+        val runningHistory = com.hana.orchestrator.domain.entity.ExecutionHistory.createRunning(executionId, query, startTime)
+        historyManager.setCurrentExecution(runningHistory)
+        historyManager.addLogToCurrent("🚀 [Reactive] 실행 시작: $query")
+        statePublisher.emitExecutionUpdate(runningHistory)
+        statePublisher.emitProgressAsync(executionId, com.hana.orchestrator.presentation.model.execution.ExecutionPhase.STARTING, "🚀 ReAct 시작", 0, 0)
+
+        return try {
+            val result = reactiveExecutor.execute(query, executionId, startTime)
+            val history = if (result.error != null && result.result.isEmpty()) {
+                com.hana.orchestrator.domain.entity.ExecutionHistory.createFailed(
+                    executionId, query, result.error, startTime, logs = historyManager.getCurrentLogs()
+                )
+            } else {
+                com.hana.orchestrator.domain.entity.ExecutionHistory.createCompleted(
+                    executionId, query, result, startTime, logs = historyManager.getCurrentLogs()
+                )
+            }
+            historyManager.addHistory(history)
+            statePublisher.emitExecutionUpdate(history)
+            historyManager.clearCurrentExecution()
+            result
+        } catch (e: Exception) {
+            val failedHistory = com.hana.orchestrator.domain.entity.ExecutionHistory.createFailed(
+                executionId, query, e.message ?: "실행 실패", startTime, logs = historyManager.getCurrentLogs()
+            )
+            historyManager.addHistory(failedHistory)
+            statePublisher.emitExecutionUpdate(failedHistory)
+            historyManager.clearCurrentExecution()
+            com.hana.orchestrator.domain.entity.ExecutionResult(result = "", error = e.message)
+        }
     }
 
     /**

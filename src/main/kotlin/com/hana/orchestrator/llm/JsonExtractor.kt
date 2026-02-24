@@ -28,51 +28,19 @@ internal object JsonExtractor {
             }
         }
         
-        // 중괄호로 시작하는 JSON 찾기
+        // 중괄호로 시작하는 JSON 찾기 (문자열 리터럴 내부의 { } 는 무시)
         if (extractedJson == null) {
             val jsonStart = trimmed.indexOf('{')
             if (jsonStart >= 0) {
-                var braceCount = 0
-                var jsonEnd = jsonStart
-                for (i in jsonStart until trimmed.length) {
-                    when (trimmed[i]) {
-                        '{' -> braceCount++
-                        '}' -> {
-                            braceCount--
-                            if (braceCount == 0) {
-                                jsonEnd = i
-                                break
-                            }
-                        }
-                    }
-                }
-                if (jsonEnd > jsonStart && braceCount == 0) {
-                    extractedJson = trimmed.substring(jsonStart, jsonEnd + 1)
-                }
+                extractedJson = extractBalanced(trimmed, jsonStart, '{', '}')
             }
         }
-        
-        // 대괄호로 시작하는 JSON 배열 찾기
+
+        // 대괄호로 시작하는 JSON 배열 찾기 (문자열 리터럴 내부의 [ ] 는 무시)
         if (extractedJson == null) {
             val arrayStart = trimmed.indexOf('[')
             if (arrayStart >= 0) {
-                var bracketCount = 0
-                var arrayEnd = arrayStart
-                for (i in arrayStart until trimmed.length) {
-                    when (trimmed[i]) {
-                        '[' -> bracketCount++
-                        ']' -> {
-                            bracketCount--
-                            if (bracketCount == 0) {
-                                arrayEnd = i
-                                break
-                            }
-                        }
-                    }
-                }
-                if (arrayEnd > arrayStart && bracketCount == 0) {
-                    extractedJson = trimmed.substring(arrayStart, arrayEnd + 1)
-                }
+                extractedJson = extractBalanced(trimmed, arrayStart, '[', ']')
             }
         }
         
@@ -85,6 +53,31 @@ internal object JsonExtractor {
         return normalizeUnicodeEscapes(extractedJson)
     }
     
+    /**
+     * 문자열 리터럴을 인식하며 균형 잡힌 괄호 쌍을 추출
+     * open/close 내부의 "..." 문자열 안에 있는 괄호는 카운트하지 않음
+     */
+    private fun extractBalanced(text: String, startIdx: Int, open: Char, close: Char): String? {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in startIdx until text.length) {
+            val c = text[i]
+            if (escaped) { escaped = false; continue }
+            if (c == '\\' && inString) { escaped = true; continue }
+            if (c == '"') { inString = !inString; continue }
+            if (inString) continue
+            when (c) {
+                open -> depth++
+                close -> {
+                    depth--
+                    if (depth == 0) return text.substring(startIdx, i + 1)
+                }
+            }
+        }
+        return null
+    }
+
     /**
      * 유니코드 이스케이프를 일반 문자열로 변환
      * 예: \u{c548}\u{d55c} -> 안녕

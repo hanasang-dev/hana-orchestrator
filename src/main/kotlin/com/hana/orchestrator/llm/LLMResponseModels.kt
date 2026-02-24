@@ -70,3 +70,44 @@ data class TreeReview(
     val approved: Boolean,
     val reason: String
 )
+
+/**
+ * ReAct 루프의 단일 스텝 히스토리
+ */
+@Serializable
+data class ReActStep(
+    val stepNumber: Int,
+    val reasoning: String,
+    val layerName: String,
+    val function: String,
+    val args: Map<String, String> = emptyMap(),
+    val calls: List<LayerCall> = emptyList(),  // call_parallel 스텝일 때 채워짐
+    val result: String
+)
+
+/**
+ * call_parallel 액션에서 사용하는 단일 레이어 호출 명세
+ */
+@Serializable
+data class LayerCall(
+    val layerName: String,
+    val function: String,
+    val args: Map<String, String> = emptyMap()
+)
+
+/**
+ * LLM이 결정한 다음 ReAct 액션
+ * action == "call_layer"    : layerName/function/args 사용 (단일 순차 실행)
+ * action == "call_parallel" : calls 사용 (여러 레이어 동시 실행)
+ * action == "finish"        : result 사용 (최종 답변)
+ */
+@Serializable
+data class ReActDecision(
+    val action: String,                        // "call_layer" | "call_parallel" | "finish"
+    val layerName: String = "",                // call_layer 전용
+    val function: String = "",                 // call_layer 전용
+    val args: Map<String, String> = emptyMap(), // call_layer 전용
+    val calls: List<LayerCall> = emptyList(),   // call_parallel 전용
+    val result: String = "",                   // finish 전용 최종 결과
+    val reasoning: String = ""
+)

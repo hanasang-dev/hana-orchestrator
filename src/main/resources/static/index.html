@@ -49,6 +49,7 @@
                             required></textarea>
                     </form>
                     <div id="chatStatus" style="margin-top: 8px; font-size: 12px; color: #666;"></div>
+                    <button id="saveReActTreeBtn" onclick="saveReActTree()" style="display:none; margin-top: 8px; padding: 6px 14px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px;">💾 트리로 저장</button>
                     <!-- 진행 상태 표시 -->
                     <div id="progressContainer" style="display: none; margin-top: 12px; padding: 12px; background: #f0f4ff; border-radius: 8px; border: 2px solid #667eea;">
                         <div id="progressMessage" style="font-size: 13px; font-weight: 500; color: #667eea; margin-bottom: 8px;">준비 중...</div>
@@ -97,6 +98,7 @@
                     🚀 실행 이력
                     <button class="refresh-btn" onclick="loadExecutions()">새로고침</button>
                     <button class="refresh-btn" onclick="newEmptyTree()" style="background:#e8f5e9; color:#2e7d32; border:1px solid #a5d6a7;">✏️ 새 트리</button>
+                    <button class="refresh-btn" onclick="loadTreeModal()" style="background:#e3f2fd; color:#1565c0; border:1px solid #90caf9;">📂 불러오기</button>
                 </h2>
                 <div class="card-content">
                     <div id="executionsList">

@@ -419,6 +419,25 @@ class OllamaLLMClient(
         })
     }
 
+    /**
+     * ReAct 루프: 다음 액션 결정 (스텝 히스토리 + 레이어 목록 기반)
+     */
+    override suspend fun decideNextAction(
+        query: String,
+        stepHistory: List<ReActStep>,
+        layerDescriptions: List<LayerDescription>
+    ): ReActDecision {
+        val prompt = promptBuilder.buildReActPrompt(query, stepHistory, layerDescriptions)
+        logger.info("🤔 [ReAct] LLM 결정 요청 (스텝 ${stepHistory.size + 1})")
+        return callLLM(
+            prompt = prompt,
+            responseParser = { jsonText ->
+                jsonConfig.decodeFromString<ReActDecision>(jsonText)
+            },
+            logRawJson = true
+        )
+    }
+
     override suspend fun close() {
         // Ollama 클라이언트 리소스 정리
         ollamaClient.close()

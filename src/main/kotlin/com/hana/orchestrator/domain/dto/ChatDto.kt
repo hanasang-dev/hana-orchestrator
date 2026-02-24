@@ -6,5 +6,6 @@ package com.hana.orchestrator.domain.dto
  */
 data class ChatDto(
     val message: String,
-    val context: Map<String, String> = emptyMap()
+    val context: Map<String, String> = emptyMap(),
+    val mode: String = "reactive"   // "reactive" (기본) | "tree" (레거시)
 )
