@@ -90,7 +90,7 @@ class ExecutionTreeValidator(
      * 순환 참조 감지
      */
     private fun detectCycle(node: ExecutionNode, visited: MutableSet<String> = mutableSetOf()): Boolean {
-        val nodeKey = "${node.layerName}:${node.function}"
+        val nodeKey = node.id
         if (visited.contains(nodeKey)) {
             return true
         }
