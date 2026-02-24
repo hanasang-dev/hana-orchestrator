@@ -88,6 +88,16 @@ interface LLMClient {
     suspend fun generateDirectAnswer(userQuery: String): String
     
     /**
+     * 사용자가 수정한 실행 트리를 검토하여 원래 요구사항에 부합하는지 판단
+     */
+    @LLMTask(complexity = LLMTaskComplexity.SIMPLE)
+    suspend fun reviewTree(
+        userQuery: String,
+        tree: ExecutionTree,
+        layerDescriptions: List<LayerDescription>
+    ): TreeReview
+
+    /**
      * 리소스 정리
      */
     suspend fun close()

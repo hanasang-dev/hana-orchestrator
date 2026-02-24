@@ -347,4 +347,35 @@ $JSON_RULES
 
 답변:""".trimIndent()
     }
+
+    fun buildTreeReviewPrompt(
+        userQuery: String,
+        tree: com.hana.orchestrator.domain.entity.ExecutionTree,
+        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
+    ): String {
+        val treeStr = tree.rootNodes.joinToString("\n") { node ->
+            fun nodeToStr(n: com.hana.orchestrator.domain.entity.ExecutionNode, indent: Int): String {
+                val pad = "  ".repeat(indent)
+                val argsStr = n.args.entries.joinToString(", ") { "${it.key}=${it.value}" }
+                val self = "${pad}- ${n.layerName}.${n.function}($argsStr)"
+                return if (n.children.isEmpty()) self
+                else self + "\n" + n.children.joinToString("\n") { nodeToStr(it, indent + 1) }
+            }
+            nodeToStr(node, 0)
+        }
+        val availableLayers = layerDescriptions.joinToString(", ") { it.name }
+        return """사용자 요청: "$userQuery"
+
+사용 가능한 레이어: $availableLayers
+
+사용자가 구성한 실행 트리:
+$treeStr
+
+위 트리가 사용자 요청을 올바르게 수행할 수 있는지 검토하세요.
+- 레이어와 함수가 실제로 존재하는지 확인하세요
+- 트리의 실행 흐름이 요청을 처리하기에 적절한지 판단하세요
+
+반드시 다음 JSON 형식으로만 응답하세요:
+{"approved": true/false, "reason": "한 문장 이유"}""".trimIndent()
+    }
 }

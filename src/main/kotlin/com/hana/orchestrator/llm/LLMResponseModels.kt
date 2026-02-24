@@ -61,3 +61,12 @@ data class LLMDirectAnswerCapability(
     val canAnswer: Boolean,
     val reason: String = ""
 )
+
+/**
+ * 사용자가 수정한 트리에 대한 LLM 검토 결과
+ */
+@Serializable
+data class TreeReview(
+    val approved: Boolean,
+    val reason: String
+)

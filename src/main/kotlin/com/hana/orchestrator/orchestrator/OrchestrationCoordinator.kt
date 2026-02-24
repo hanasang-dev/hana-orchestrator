@@ -191,6 +191,35 @@ class OrchestrationCoordinator(
     }
     
     /**
+     * 사용자가 수정한 트리를 직접 실행 (트리 생성 단계 건너뜀)
+     */
+    suspend fun executeCustomTree(query: String, tree: ExecutionTree): ExecutionResult {
+        val allDescriptions = layerManager.getAllLayerDescriptions()
+        val executionId = java.util.UUID.randomUUID().toString()
+        val startTime = System.currentTimeMillis()
+
+        val runningHistory = ExecutionHistory.createRunning(executionId, query, startTime)
+        historyManager.setCurrentExecution(runningHistory)
+        historyManager.addLogToCurrent("🚀 커스텀 트리 실행 시작: $query")
+        statePublisher.emitExecutionUpdate(runningHistory)
+        statePublisher.emitProgressAsync(executionId, ExecutionPhase.TREE_EXECUTION, "⚡ 사용자 트리 실행 중...", 60, 0)
+
+        return try {
+            val result = validateAndExecuteTree(tree, query, allDescriptions, executionId, startTime)
+            val history = ExecutionHistory.createCompleted(executionId, query, result, startTime, logs = historyManager.getCurrentLogs())
+            historyManager.addHistory(history)
+            statePublisher.emitExecutionUpdate(history)
+            statePublisher.emitProgressAsync(executionId, ExecutionPhase.COMPLETED, "✅ 완료", 100, System.currentTimeMillis() - startTime)
+            historyManager.clearCurrentExecution()
+            result
+        } catch (e: Exception) {
+            saveAndEmitFailedHistory(executionId, query, e.message ?: "실행 실패", startTime)
+            historyManager.clearCurrentExecution()
+            ExecutionResult(result = "", error = e.message)
+        }
+    }
+
+    /**
      * 초기 트리 생성
      * LLM이 모든 레이어(LLM 레이어 포함)를 보고 자동으로 선택
      */

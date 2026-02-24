@@ -408,6 +408,17 @@ class OllamaLLMClient(
         return responseText.trim()
     }
     
+    override suspend fun reviewTree(
+        userQuery: String,
+        tree: ExecutionTree,
+        layerDescriptions: List<LayerDescription>
+    ): TreeReview {
+        val prompt = promptBuilder.buildTreeReviewPrompt(userQuery, tree, layerDescriptions)
+        return callLLM(prompt, { json ->
+            jsonConfig.decodeFromString<TreeReview>(json)
+        })
+    }
+
     override suspend fun close() {
         // Ollama 클라이언트 리소스 정리
         ollamaClient.close()

@@ -20,107 +20,325 @@ function formatNodeStats(exec) {
         (exec.runningNodes > 0 ? `<span class="node-stat">🔄 실행중: <strong>${exec.runningNodes}</strong></span>` : '');
 }
 
-// 트리 시각화 관련 함수
+// ─────────────────────────────────────────────
+// 트리 편집기 (Cytoscape.js)
+// ─────────────────────────────────────────────
+let cyInstance = null;          // Cytoscape 인스턴스
+let treeEditorQuery = '';       // 현재 편집 중인 쿼리
+let treeEditorLayers = [];      // 팔레트용 레이어 목록
+let selectedNodeId = null;      // 우클릭/선택된 노드 id
+let nodeCounter = 0;            // 신규 노드 id 채번
+
 function showTreeVisualization(executionTree) {
     if (!executionTree || !executionTree.rootNodes || executionTree.rootNodes.length === 0) {
         alert('실행 트리 정보가 없습니다.');
         return;
     }
+    // 현재 실행 데이터에서 쿼리 가져오기
+    const execData = findExecutionDataByTree(executionTree);
+    treeEditorQuery = execData ? execData.query : '';
+    document.getElementById('treeModalQuery').textContent = treeEditorQuery || '쿼리 정보 없음';
 
-    const mermaidCode = convertTreeToMermaid(executionTree);
-    const treeVisualization = document.getElementById('treeVisualization');
-    const treeModal = document.getElementById('treeModal');
+    // 검토 영역 초기화
+    document.getElementById('reviewResult').textContent = '';
+    document.getElementById('executeTreeBtn').disabled = true;
+    document.getElementById('executeTreeBtn').style.opacity = '0.5';
 
-    // Mermaid 다이어그램 렌더링
-    treeVisualization.textContent = mermaidCode;
-    treeVisualization.removeAttribute('data-processed');
+    document.getElementById('treeModal').style.display = 'flex';
 
-    // 모달 표시
-    treeModal.style.display = 'flex';
+    // Cytoscape 초기화 (모달이 flex된 후 렌더링)
+    setTimeout(() => initCytoscape(executionTree), 50);
+    buildLayerPalette();
+}
 
-    // Mermaid 재렌더링
-    mermaid.init(undefined, treeVisualization);
+function findExecutionDataByTree(executionTree) {
+    if (!window.executionDataCache) return null;
+    for (const exec of window.executionDataCache.values()) {
+        if (exec.executionTree && JSON.stringify(exec.executionTree.rootNodes) === JSON.stringify(executionTree.rootNodes)) {
+            return exec;
+        }
+    }
+    return null;
 }
 
 function closeTreeModal() {
     document.getElementById('treeModal').style.display = 'none';
+    document.getElementById('nodeContextMenu').style.display = 'none';
+    if (cyInstance) { cyInstance.destroy(); cyInstance = null; }
 }
 
-function convertTreeToMermaid(executionTree) {
-    let mermaid = 'graph TD\n';
-    const nodeMap = new Map(); // id -> node
-    let nodeCounter = 0;
+// ── Cytoscape 초기화 ──
+function initCytoscape(executionTree) {
+    if (cyInstance) { cyInstance.destroy(); cyInstance = null; }
 
-    function getNodeId(node) {
-        if (!nodeMap.has(node.id)) {
-            nodeMap.set(node.id, `N${nodeCounter++}`);
-        }
-        return nodeMap.get(node.id);
-    }
-
-    function formatNodeLabel(node) {
-        const layer = node.layerName || 'unknown';
-        const func = node.function || 'unknown';
-        const argsStr = node.args ? Object.keys(node.args).slice(0, 2).join(', ') : '';
-        const argsSuffix = argsStr ? `\\n${argsStr}` : '';
-        return `${layer}.${func}${argsSuffix}`;
-    }
-
-    function processNode(node, parentId = null) {
-        const nodeId = getNodeId(node);
-        const label = formatNodeLabel(node);
-
-        // 노드 정의
-        mermaid += `    ${nodeId}["${label}"]\n`;
-
-        // 부모 연결
-        if (parentId) {
-            mermaid += `    ${parentId} --> ${nodeId}\n`;
-        }
-
-        // 자식 처리
-        if (node.children && node.children.length > 0) {
-            node.children.forEach(child => {
-                processNode(child, nodeId);
-            });
-        }
-    }
-
-    // 루트 노드들 처리
-    executionTree.rootNodes.forEach((rootNode, index) => {
-        processNode(rootNode);
+    const elements = treeToElements(executionTree);
+    cyInstance = cytoscape({
+        container: document.getElementById('treeCanvas'),
+        elements,
+        style: cytoscapeStyle(),
+        layout: { name: 'dagre', rankDir: 'TB', nodeSep: 60, rankSep: 80, padding: 30 },
+        minZoom: 0.3,
+        maxZoom: 2.5,
+        userZoomingEnabled: true,
+        userPanningEnabled: true
     });
 
-    // 병렬 실행 표시 (루트가 여러 개면)
-    if (executionTree.rootNodes.length > 1) {
-        mermaid += '\n    %% 병렬 실행\n';
-        const rootIds = executionTree.rootNodes.map(node => getNodeId(node));
-        rootIds.forEach(id => {
-            mermaid += `    style ${id} fill:#e3f2fd\n`;
-        });
+    cyInstance.on('cxttap', 'node', e => {
+        selectedNodeId = e.target.id();
+        showContextMenu(e.originalEvent.clientX, e.originalEvent.clientY);
+    });
+
+    document.addEventListener('click', hideContextMenu, { once: false });
+}
+
+function cytoscapeStyle() {
+    return [
+        {
+            selector: 'node',
+            style: {
+                'background-color': '#667eea',
+                'label': 'data(label)',
+                'color': '#fff',
+                'text-valign': 'center',
+                'text-halign': 'center',
+                'font-size': '11px',
+                'font-weight': '600',
+                'text-wrap': 'wrap',
+                'text-max-width': '120px',
+                'width': 'label',
+                'height': 'label',
+                'padding': '10px',
+                'shape': 'roundrectangle',
+                'border-width': 2,
+                'border-color': '#5a67d8'
+            }
+        },
+        {
+            selector: 'node:selected',
+            style: { 'background-color': '#e03131', 'border-color': '#c92a2a' }
+        },
+        {
+            selector: 'node.new-node',
+            style: { 'background-color': '#2f9e44', 'border-color': '#2b8a3e' }
+        },
+        {
+            selector: 'edge',
+            style: {
+                'width': 2,
+                'line-color': '#adb5bd',
+                'target-arrow-color': '#adb5bd',
+                'target-arrow-shape': 'triangle',
+                'curve-style': 'bezier'
+            }
+        }
+    ];
+}
+
+// ExecutionTree → Cytoscape elements 변환
+function treeToElements(executionTree) {
+    const elements = [];
+    function walk(node, parentId) {
+        const nodeId = node.id || `node_${nodeCounter++}`;
+        const argsStr = node.args ? Object.entries(node.args).slice(0, 2).map(([k, v]) => `${k}=${v}`).join('\n') : '';
+        const label = `${node.layerName}.${node.function}${argsStr ? '\n' + argsStr : ''}`;
+        elements.push({ data: { id: nodeId, label, layerName: node.layerName, function: node.function, args: node.args || {} } });
+        if (parentId) elements.push({ data: { id: `${parentId}_${nodeId}`, source: parentId, target: nodeId } });
+        (node.children || []).forEach(child => walk(child, nodeId));
+    }
+    (executionTree.rootNodes || []).forEach(root => walk(root, null));
+    return elements;
+}
+
+// Cytoscape elements → ExecutionTreeResponse (백엔드 전송용)
+function elementsToTree() {
+    if (!cyInstance) return null;
+    const nodes = cyInstance.nodes();
+    const edges = cyInstance.edges();
+
+    // 부모 → 자식 관계 맵 구성
+    const childrenMap = new Map();
+    const hasParent = new Set();
+    edges.forEach(e => {
+        const src = e.data('source'), tgt = e.data('target');
+        if (!childrenMap.has(src)) childrenMap.set(src, []);
+        childrenMap.get(src).push(tgt);
+        hasParent.add(tgt);
+    });
+
+    // 루트 노드 = 부모 없는 노드
+    const rootIds = nodes.map(n => n.id()).filter(id => !hasParent.has(id));
+
+    function buildNode(nodeId) {
+        const n = cyInstance.getElementById(nodeId);
+        return {
+            id: nodeId,
+            layerName: n.data('layerName'),
+            function: n.data('function'),
+            args: n.data('args') || {},
+            children: (childrenMap.get(nodeId) || []).map(buildNode),
+            parallel: false
+        };
     }
 
-    return mermaid;
+    return { rootNodes: rootIds.map(buildNode), name: 'execution_plan' };
+}
+
+// ── 레이어 팔레트 ──
+function buildLayerPalette() {
+    const palette = document.getElementById('paletteContent');
+    palette.innerHTML = treeEditorLayers.length === 0
+        ? '<p style="font-size:12px;color:#aaa;">레이어 로딩 중...</p>'
+        : treeEditorLayers.map(layer => `
+            <div style="margin-bottom:10px;">
+                <div style="font-size:12px; font-weight:700; color:#495057; padding:4px 6px; background:#e9ecef; border-radius:4px; margin-bottom:4px;">${layer.name}</div>
+                ${layer.functions.map(fn => `
+                    <div class="palette-fn" data-layer="${layer.name}" data-fn="${fn}"
+                         style="padding:5px 8px; font-size:11px; color:#495057; cursor:pointer; border-radius:4px; margin-bottom:2px; border:1px solid transparent;"
+                         onmouseover="this.style.background='#e0f2fe';this.style.borderColor='#667eea'"
+                         onmouseout="this.style.background='';this.style.borderColor='transparent'"
+                         ondblclick="addNodeFromPalette(this.dataset.layer, this.dataset.fn)">
+                        ⚙ ${fn}
+                    </div>
+                `).join('')}
+            </div>
+        `).join('');
+}
+
+// 팔레트에서 노드 추가 (선택된 노드의 자식으로)
+function addNodeFromPalette(layerName, fnName) {
+    if (!cyInstance) return;
+    const newId = `node_${layerName}_${fnName}_${Date.now()}`;
+    const label = `${layerName}.${fnName}`;
+
+    cyInstance.add({ data: { id: newId, label, layerName, function: fnName, args: {} }, classes: 'new-node' });
+
+    if (selectedNodeId && cyInstance.getElementById(selectedNodeId).length > 0) {
+        cyInstance.add({ data: { id: `${selectedNodeId}_${newId}`, source: selectedNodeId, target: newId } });
+    }
+
+    cyInstance.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 60, rankSep: 80, padding: 30 }).run();
+}
+
+// ── 컨텍스트 메뉴 ──
+function showContextMenu(x, y) {
+    const menu = document.getElementById('nodeContextMenu');
+    menu.style.display = 'block';
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+}
+
+function hideContextMenu() {
+    document.getElementById('nodeContextMenu').style.display = 'none';
+}
+
+function deleteSelectedNode() {
+    if (!cyInstance || !selectedNodeId) return;
+    const node = cyInstance.getElementById(selectedNodeId);
+    // 해당 노드와 연결된 엣지도 함께 삭제
+    cyInstance.remove(node.connectedEdges());
+    cyInstance.remove(node);
+    selectedNodeId = null;
+    hideContextMenu();
+}
+
+// ── LLM 검토 ──
+async function reviewTree() {
+    const tree = elementsToTree();
+    if (!tree || tree.rootNodes.length === 0) { alert('트리가 비어있습니다.'); return; }
+
+    const reviewBtn = document.getElementById('reviewBtn');
+    const reviewResult = document.getElementById('reviewResult');
+    const executeBtn = document.getElementById('executeTreeBtn');
+
+    reviewBtn.disabled = true;
+    reviewBtn.textContent = '🔍 검토 중...';
+    reviewResult.textContent = '⏳ LLM이 트리를 검토하고 있습니다...';
+    reviewResult.style.color = '#667eea';
+    executeBtn.disabled = true;
+    executeBtn.style.opacity = '0.5';
+
+    try {
+        const res = await fetch(`${API_BASE}/tree/review`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: treeEditorQuery, tree })
+        });
+        const data = await res.json();
+        if (data.approved) {
+            reviewResult.textContent = `✅ ${data.reason}`;
+            reviewResult.style.color = '#2f9e44';
+            executeBtn.disabled = false;
+            executeBtn.style.opacity = '1';
+        } else {
+            reviewResult.textContent = `⚠️ ${data.reason}`;
+            reviewResult.style.color = '#e03131';
+        }
+    } catch (e) {
+        reviewResult.textContent = `오류: ${e.message}`;
+        reviewResult.style.color = '#e03131';
+    } finally {
+        reviewBtn.disabled = false;
+        reviewBtn.textContent = '🔍 LLM 검토';
+    }
+}
+
+// ── 트리 실행 ──
+async function executeEditedTree() {
+    const tree = elementsToTree();
+    if (!tree) return;
+
+    const executeBtn = document.getElementById('executeTreeBtn');
+    const reviewResult = document.getElementById('reviewResult');
+    executeBtn.disabled = true;
+    executeBtn.textContent = '⏳ 실행 중...';
+    reviewResult.textContent = '⚡ 실행 중입니다...';
+    reviewResult.style.color = '#667eea';
+
+    try {
+        const res = await fetch(`${API_BASE}/tree/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: treeEditorQuery, tree })
+        });
+        const data = await res.json();
+        if (data.error) {
+            reviewResult.textContent = `❌ 실행 오류: ${data.error}`;
+            reviewResult.style.color = '#e03131';
+        } else {
+            reviewResult.textContent = `✅ 실행 완료! 결과: ${(data.results || []).join(', ')}`;
+            reviewResult.style.color = '#2f9e44';
+            closeTreeModal();
+        }
+    } catch (e) {
+        reviewResult.textContent = `오류: ${e.message}`;
+        reviewResult.style.color = '#e03131';
+    } finally {
+        executeBtn.disabled = false;
+        executeBtn.textContent = '▶ 실행';
+    }
 }
 
 // 레이어 목록 로드
 async function loadLayers() {
     const layersList = document.getElementById('layersList');
     layersList.innerHTML = '<p>로딩 중...</p>';
-    
+
     try {
         const response = await fetch(`${API_BASE}/layers`);
         const layers = await response.json();
-        
+
         if (layers.error) {
             layersList.innerHTML = `<div class="message error">${layers.error}</div>`;
             return;
         }
-        
+
         if (layers.length === 0) {
             layersList.innerHTML = '<p>등록된 레이어가 없습니다.</p>';
             return;
         }
+
+        // 팔레트용 레이어 캐시
+        treeEditorLayers = layers;
         
         layersList.innerHTML = layers.map(layer => `
             <div class="layer-item">

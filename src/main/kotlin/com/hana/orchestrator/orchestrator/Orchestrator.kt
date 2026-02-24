@@ -129,6 +129,22 @@ class Orchestrator(
         return coordinator.executeOrchestration(chatDto)
     }
 
+    /**
+     * 사용자가 수정한 트리를 LLM이 검토
+     */
+    suspend fun reviewTree(query: String, tree: com.hana.orchestrator.domain.entity.ExecutionTree): com.hana.orchestrator.llm.TreeReview {
+        val allDescriptions = layerManager.getAllLayerDescriptions()
+        return modelSelectionStrategy.selectClientForReviewTree()
+            .useSuspend { client -> client.reviewTree(query, tree, allDescriptions) }
+    }
+
+    /**
+     * 사용자가 수정한 트리를 직접 실행 (트리 생성 단계 건너뜀)
+     */
+    suspend fun executeCustomTree(query: String, tree: com.hana.orchestrator.domain.entity.ExecutionTree): ExecutionResult {
+        return coordinator.executeCustomTree(query, tree)
+    }
+
     /** query만 있을 때 호환용 */
     suspend fun executeOrchestration(query: String): ExecutionResult =
         executeOrchestration(ChatDto(message = query))

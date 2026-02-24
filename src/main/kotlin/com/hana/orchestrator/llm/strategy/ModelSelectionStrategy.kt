@@ -49,4 +49,9 @@ interface ModelSelectionStrategy {
      * generateDirectAnswer 작업용 클라이언트 선택
      */
     fun selectClientForGenerateDirectAnswer(): LLMClient
+
+    /**
+     * reviewTree 작업용 클라이언트 선택
+     */
+    fun selectClientForReviewTree(): LLMClient
 }
