@@ -20,7 +20,8 @@ data class ExecutionState(
     val failedNodes: Int = 0,
     val runningNodes: Int = 0,
     val logs: List<String> = emptyList(),
-    val executionTree: ExecutionTreeResponse? = null
+    val executionTree: ExecutionTreeResponse? = null,
+    val nodeResults: Map<String, NodeResultState> = emptyMap()
 )
 
 @Serializable

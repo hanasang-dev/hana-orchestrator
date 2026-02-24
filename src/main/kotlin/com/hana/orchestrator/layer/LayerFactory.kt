@@ -76,6 +76,13 @@ object LayerFactory {
     }
 
     /**
+     * Git 레이어 생성 (branch/commit/stash/checkout/diff)
+     */
+    fun createGitLayer(projectRoot: java.io.File? = null): GitLayer {
+        return if (projectRoot != null) GitLayer(projectRoot) else GitLayer()
+    }
+
+    /**
      * 모든 기본 레이어 생성
      */
     fun createDefaultLayers(
@@ -87,7 +94,8 @@ object LayerFactory {
             createTextTransformerLayer(),
             createTextValidatorLayer(),
             createFileSystemLayer(approvalGate),
-            createBuildLayer()
+            createBuildLayer(),
+            createGitLayer()
         )
         
         // LLMLayer는 ModelSelectionStrategy가 필요하므로 선택적으로 추가

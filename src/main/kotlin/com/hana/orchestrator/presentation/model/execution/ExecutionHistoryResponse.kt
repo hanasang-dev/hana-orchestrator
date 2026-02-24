@@ -3,6 +3,14 @@ package com.hana.orchestrator.presentation.model.execution
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class NodeResultState(
+    val nodeId: String,
+    val status: String,
+    val result: String? = null,
+    val error: String? = null
+)
+
+@Serializable
 data class ExecutionTreeNodeResponse(
     val layerName: String,
     val function: String,

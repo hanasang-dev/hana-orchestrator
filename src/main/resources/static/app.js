@@ -30,12 +30,15 @@ let selectedNodeId = null;      // 우클릭/선택된 노드 id
 let nodeCounter = 0;            // 신규 노드 id 채번
 let hoveredEdgeId = null;       // 호버 중인 엣지 id
 let edgeHideTimeout = null;     // 엣지 X버튼 hide 딜레이 타이머
+let currentNodeResults = {};    // 현재 트리의 노드 실행 결과 (P3)
 
-function showTreeVisualization(executionTree) {
+function showTreeVisualization(executionTree, nodeResults) {
     if (!executionTree || !executionTree.rootNodes || executionTree.rootNodes.length === 0) {
         alert('실행 트리 정보가 없습니다.');
         return;
     }
+    currentNodeResults = nodeResults || {};
+
     // 현재 실행 데이터에서 쿼리 가져오기
     const execData = findExecutionDataByTree(executionTree);
     treeEditorQuery = execData ? execData.query : '';
@@ -70,6 +73,21 @@ function closeTreeModal() {
     if (cyInstance) { cyInstance.destroy(); cyInstance = null; }
 }
 
+// P4: 빈 트리 편집기 열기
+function newEmptyTree() {
+    const query = prompt('새 트리 쿼리를 입력하세요 (실행 목적 설명):', '');
+    if (query === null) return;
+    currentNodeResults = {};
+    treeEditorQuery = query;
+    document.getElementById('treeModalQuery').textContent = query || '새 트리';
+    document.getElementById('reviewResult').textContent = '';
+    document.getElementById('executeTreeBtn').disabled = false;
+    document.getElementById('executeTreeBtn').style.opacity = '1';
+    document.getElementById('treeModal').style.display = 'flex';
+    setTimeout(() => initCytoscape({ rootNodes: [], name: 'new_tree' }), 50);
+    buildLayerPalette();
+}
+
 // ── 노드 Args 편집기 ──
 function showNodeEditor(nodeId) {
     const node = cyInstance && cyInstance.getElementById(nodeId);
@@ -80,10 +98,26 @@ function showNodeEditor(nodeId) {
     const currentArgs = node.data('args') || {};
     const hasParent = cyInstance.edges().filter(e => e.data('target') === nodeId).length > 0;
 
+    document.getElementById('nodeEditorTitle').textContent = `${layerName}.${fnName}`;
+
+    // P3: 노드 실행 결과가 있으면 결과 표시 (args 편집기 대신)
+    const nr = currentNodeResults[nodeId];
+    if (nr) {
+        const statusIcon = { SUCCESS: '✅', FAILED: '❌', RUNNING: '⏳', SKIPPED: '⏭' }[nr.status] || '❓';
+        const fields = document.getElementById('nodeEditorFields');
+        fields.innerHTML = `
+            <div style="margin-bottom:6px; font-size:11px; font-weight:700; color:#495057;">${statusIcon} ${nr.status}</div>
+            ${nr.result ? `<div style="margin-bottom:6px;"><div style="font-size:10px; color:#868e96; margin-bottom:2px;">결과</div>
+                <pre style="font-size:11px; white-space:pre-wrap; word-break:break-all; background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px; padding:6px; margin:0; max-height:120px; overflow:auto;">${escapeHtml(nr.result)}</pre></div>` : ''}
+            ${nr.error ? `<div><div style="font-size:10px; color:#e03131; margin-bottom:2px;">에러</div>
+                <pre style="font-size:11px; white-space:pre-wrap; word-break:break-all; background:#fff5f5; border:1px solid #ffc9c9; border-radius:4px; padding:6px; margin:0; max-height:80px; overflow:auto;">${escapeHtml(nr.error)}</pre></div>` : ''}
+        `;
+        document.getElementById('nodeEditorPanel').style.display = 'block';
+        return;
+    }
+
     const layer = treeEditorLayers.find(l => l.name === layerName);
     const params = layer?.functionDetails?.[fnName]?.parameters || {};
-
-    document.getElementById('nodeEditorTitle').textContent = `${layerName}.${fnName}`;
 
     const fields = document.getElementById('nodeEditorFields');
     const paramEntries = Object.entries(params);
@@ -248,6 +282,23 @@ function initCytoscape(executionTree) {
     };
 
     document.addEventListener('click', hideContextMenu);
+
+    // 노드 실행 결과 색상 오버레이 (P3)
+    applyNodeResultStyles(currentNodeResults);
+}
+
+// 노드 실행 결과에 따른 Cytoscape 스타일 적용 (P3)
+function applyNodeResultStyles(nodeResults) {
+    if (!cyInstance || !nodeResults || Object.keys(nodeResults).length === 0) return;
+    const colorMap = { SUCCESS: '#4ade80', FAILED: '#f87171', RUNNING: '#60a5fa', SKIPPED: '#d1d5db' };
+    const borderMap = { SUCCESS: '#16a34a', FAILED: '#dc2626', RUNNING: '#2563eb', SKIPPED: '#9ca3af' };
+    cyInstance.nodes().forEach(node => {
+        const nr = nodeResults[node.id()];
+        if (!nr) return;
+        const bg = colorMap[nr.status] || '#667eea';
+        const border = borderMap[nr.status] || '#5a67d8';
+        node.style({ 'background-color': bg, 'border-color': border });
+    });
 }
 
 // 화면 좌표 → Cytoscape 모델 좌표
@@ -999,7 +1050,7 @@ function patchExecutionItem(item, exec, isCurrent) {
                 e.stopPropagation();
                 const execData = findExecutionData(exec.id);
                 if (execData && execData.executionTree) {
-                    showTreeVisualization(execData.executionTree);
+                    showTreeVisualization(execData.executionTree, execData.nodeResults);
                 }
             });
         }

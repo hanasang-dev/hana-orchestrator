@@ -7,8 +7,10 @@ import com.hana.orchestrator.domain.entity.ExecutionResult
  * 실행 이력 관리 책임
  * SRP: 실행 이력 저장, 조회만 담당
  */
-class ExecutionHistoryManager {
-    private val executionHistory = mutableListOf<ExecutionHistory>()
+class ExecutionHistoryManager(
+    private val historyRepository: HistoryRepository = HistoryRepository()
+) {
+    private val executionHistory = historyRepository.loadRecent().toMutableList()
     private var currentExecution: ExecutionHistory? = null
     
     /**
@@ -33,10 +35,13 @@ class ExecutionHistoryManager {
     }
     
     /**
-     * 실행 이력 추가
+     * 실행 이력 추가 (완료/실패 이력은 파일로도 저장)
      */
     fun addHistory(history: ExecutionHistory) {
         executionHistory.add(history)
+        if (!history.isRunning && !history.isRetrying) {
+            historyRepository.save(history)
+        }
     }
     
     /**
@@ -47,7 +52,7 @@ class ExecutionHistoryManager {
     }
     
     /**
-     * 실행 이력 업데이트 (같은 ID의 이력을 찾아서 교체)
+     * 실행 이력 업데이트 (같은 ID의 이력을 찾아서 교체, 완료/실패 시 파일 저장)
      */
     fun updateHistory(updatedHistory: ExecutionHistory) {
         val index = executionHistory.indexOfFirst { it.id == updatedHistory.id }
@@ -55,6 +60,9 @@ class ExecutionHistoryManager {
             executionHistory[index] = updatedHistory
         } else {
             executionHistory.add(updatedHistory)
+        }
+        if (!updatedHistory.isRunning && !updatedHistory.isRetrying) {
+            historyRepository.save(updatedHistory)
         }
     }
     
