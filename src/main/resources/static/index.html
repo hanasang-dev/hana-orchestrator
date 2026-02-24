@@ -130,7 +130,23 @@
                 <div style="flex:1; position:relative;">
                     <div id="treeCanvas" style="width:100%; height:100%;"></div>
                     <div style="position:absolute; bottom:10px; right:10px; font-size:11px; color:#aaa; background:rgba(255,255,255,0.9); padding:6px 10px; border-radius:6px; line-height:1.6;">
-                        우클릭: 노드 삭제 &nbsp;|&nbsp; 드래그: 이동 &nbsp;|&nbsp; 스크롤: 줌
+                        클릭: args 편집 &nbsp;|&nbsp; 우클릭: 삭제 &nbsp;|&nbsp; 드래그: 이동/리패런팅 &nbsp;|&nbsp; 스크롤: 줌
+                    </div>
+                    <!-- 엣지 호버 삭제 버튼 -->
+                    <div id="edgeDeleteBtn" style="display:none; position:absolute; z-index:20; transform:translate(-50%,-50%); pointer-events:auto;"
+                         onmouseenter="clearTimeout(edgeHideTimeout)"
+                         onmouseleave="document.getElementById('edgeDeleteBtn').style.display='none'; hoveredEdgeId=null;">
+                        <button onclick="deleteHoveredEdge()" title="연결 제거"
+                                style="width:22px; height:22px; border-radius:50%; background:#e03131; color:white; border:none; cursor:pointer; font-size:11px; line-height:1; padding:0; box-shadow:0 2px 6px rgba(0,0,0,0.25);">✕</button>
+                    </div>
+                    <!-- 노드 Args 편집기 (노드 클릭 시 표시) -->
+                    <div id="nodeEditorPanel" style="display:none; position:absolute; top:10px; right:10px; width:240px; max-height:calc(100% - 60px); overflow-y:auto; background:white; border:1px solid #dee2e6; border-radius:10px; box-shadow:0 4px 20px rgba(0,0,0,0.12); z-index:10; padding:14px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid #f1f3f5;">
+                            <span id="nodeEditorTitle" style="font-size:12px; font-weight:700; color:#333;"></span>
+                            <span onclick="closeNodeEditor()" style="cursor:pointer; color:#aaa; font-size:16px; line-height:1; padding:2px 4px;">✕</span>
+                        </div>
+                        <div id="nodeEditorFields"></div>
+                        <button onclick="applyNodeArgs()" style="width:100%; margin-top:10px; padding:7px; background:#667eea; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:600; font-size:12px;">✓ 적용</button>
                     </div>
                 </div>
             </div>
@@ -147,6 +163,8 @@
 
     <!-- 노드 우클릭 컨텍스트 메뉴 -->
     <div id="nodeContextMenu" style="display:none; position:fixed; background:white; border:1px solid #e0e0e0; border-radius:8px; padding:4px 0; box-shadow:0 4px 16px rgba(0,0,0,0.15); z-index:2000; min-width:140px;">
+        <div onclick="detachFromParent()" style="padding:8px 16px; cursor:pointer; font-size:13px; color:#495057;" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='white'">⛓ 부모 연결 끊기</div>
+        <div style="height:1px; background:#f1f3f5; margin:2px 0;"></div>
         <div onclick="deleteSelectedNode()" style="padding:8px 16px; cursor:pointer; font-size:13px; color:#e03131;" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background='white'">🗑️ 노드 삭제</div>
     </div>
 

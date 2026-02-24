@@ -363,19 +363,28 @@ $JSON_RULES
             }
             nodeToStr(node, 0)
         }
-        val availableLayers = layerDescriptions.joinToString(", ") { it.name }
+        val availableLayers = layerDescriptions.joinToString("\n") { desc ->
+            "- ${desc.name}: ${desc.functions.joinToString(", ")}"
+        }
         return """사용자 요청: "$userQuery"
 
-사용 가능한 레이어: $availableLayers
+사용 가능한 레이어 및 함수:
+$availableLayers
 
 사용자가 구성한 실행 트리:
 $treeStr
 
 위 트리가 사용자 요청을 올바르게 수행할 수 있는지 검토하세요.
-- 레이어와 함수가 실제로 존재하는지 확인하세요
-- 트리의 실행 흐름이 요청을 처리하기에 적절한지 판단하세요
 
-반드시 다음 JSON 형식으로만 응답하세요:
-{"approved": true/false, "reason": "한 문장 이유"}""".trimIndent()
+검토 기준:
+- 트리에 사용된 layerName과 function이 위 목록에 실제로 존재하는지 확인하세요
+- 트리의 실행 흐름이 사용자 요청을 처리하기에 논리적으로 적절한지 판단하세요
+- 레이어·함수가 존재하고 실행 흐름이 요청 의도에 부합하면 approved=true로 판단하세요
+- 반드시 한국어로 reason을 작성하세요
+
+반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요:
+{"approved": true, "reason": "한 문장 이유"}
+또는
+{"approved": false, "reason": "한 문장 이유"}""".trimIndent()
     }
 }

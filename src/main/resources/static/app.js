@@ -28,6 +28,8 @@ let treeEditorQuery = '';       // 현재 편집 중인 쿼리
 let treeEditorLayers = [];      // 팔레트용 레이어 목록
 let selectedNodeId = null;      // 우클릭/선택된 노드 id
 let nodeCounter = 0;            // 신규 노드 id 채번
+let hoveredEdgeId = null;       // 호버 중인 엣지 id
+let edgeHideTimeout = null;     // 엣지 X버튼 hide 딜레이 타이머
 
 function showTreeVisualization(executionTree) {
     if (!executionTree || !executionTree.rootNodes || executionTree.rootNodes.length === 0) {
@@ -64,7 +66,94 @@ function findExecutionDataByTree(executionTree) {
 function closeTreeModal() {
     document.getElementById('treeModal').style.display = 'none';
     document.getElementById('nodeContextMenu').style.display = 'none';
+    closeNodeEditor();
     if (cyInstance) { cyInstance.destroy(); cyInstance = null; }
+}
+
+// ── 노드 Args 편집기 ──
+function showNodeEditor(nodeId) {
+    const node = cyInstance && cyInstance.getElementById(nodeId);
+    if (!node || node.length === 0) return;
+
+    const layerName = node.data('layerName');
+    const fnName = node.data('function');
+    const currentArgs = node.data('args') || {};
+    const hasParent = cyInstance.edges().filter(e => e.data('target') === nodeId).length > 0;
+
+    const layer = treeEditorLayers.find(l => l.name === layerName);
+    const params = layer?.functionDetails?.[fnName]?.parameters || {};
+
+    document.getElementById('nodeEditorTitle').textContent = `${layerName}.${fnName}`;
+
+    const fields = document.getElementById('nodeEditorFields');
+    const paramEntries = Object.entries(params);
+    if (paramEntries.length === 0) {
+        fields.innerHTML = '<p style="font-size:11px; color:#aaa; margin:0;">파라미터 없음</p>';
+    } else {
+        fields.innerHTML = paramEntries.map(([pName, pInfo]) => {
+            const required = pInfo.required !== false;
+            const currentVal = currentArgs[pName] !== undefined ? currentArgs[pName] : '';
+            const parentBtn = hasParent
+                ? `<button type="button" onclick="document.getElementById('argInput_${pName}').value='{{parent}}'"
+                     title="부모 실행 결과를 이 인자로 사용"
+                     style="padding:4px 6px; font-size:10px; background:#f0f4ff; border:1px solid #667eea; border-radius:4px; cursor:pointer; color:#667eea; white-space:nowrap; flex-shrink:0;">↑부모</button>`
+                : '';
+            return `<div style="margin-bottom:10px;">
+                <label style="font-size:11px; font-weight:600; color:#495057; display:block; margin-bottom:3px;">
+                    ${pName}
+                    <span style="font-size:10px; color:${required ? '#e03131' : '#aaa'}; font-weight:400;"> ${required ? '필수' : '선택'} · ${pInfo.type}</span>
+                </label>
+                <div style="display:flex; gap:4px; align-items:center;">
+                    <input type="text" id="argInput_${pName}" value="${escapeHtml(String(currentVal))}"
+                           placeholder="${pInfo.defaultValue || ''}"
+                           style="flex:1; padding:5px 8px; font-size:12px; border:1px solid #dee2e6; border-radius:4px; outline:none; min-width:0;"
+                           onfocus="this.style.borderColor='#667eea'" onblur="this.style.borderColor='#dee2e6'">
+                    ${parentBtn}
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    document.getElementById('nodeEditorPanel').style.display = 'block';
+}
+
+function closeNodeEditor() {
+    document.getElementById('nodeEditorPanel').style.display = 'none';
+}
+
+// 선택된 노드를 부모에서 분리 (루트로 만들기)
+function detachFromParent() {
+    if (!selectedNodeId || !cyInstance) return;
+    const parentEdges = cyInstance.edges().filter(e => e.data('target') === selectedNodeId);
+    if (parentEdges.length === 0) { alert('이미 루트 노드입니다.'); return; }
+    parentEdges.remove();
+    cyInstance.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 60, rankSep: 80, padding: 30 }).run();
+    showNodeEditor(selectedNodeId); // 편집기 갱신 (↑부모 버튼 제거)
+    hideContextMenu();
+}
+
+function applyNodeArgs() {
+    if (!selectedNodeId || !cyInstance) return;
+    const node = cyInstance.getElementById(selectedNodeId);
+    if (!node || node.length === 0) return;
+
+    const layerName = node.data('layerName');
+    const fnName = node.data('function');
+    const layer = treeEditorLayers.find(l => l.name === layerName);
+    const params = layer?.functionDetails?.[fnName]?.parameters || {};
+
+    const newArgs = {};
+    Object.keys(params).forEach(pName => {
+        const input = document.getElementById(`argInput_${pName}`);
+        if (input && input.value.trim() !== '') newArgs[pName] = input.value.trim();
+    });
+
+    node.data('args', newArgs);
+    // 라벨 갱신: args 일부 표시
+    const argsStr = Object.entries(newArgs).slice(0, 2).map(([k, v]) => `${k}=${v}`).join('\n');
+    node.data('label', `${layerName}.${fnName}${argsStr ? '\n' + argsStr : ''}`);
+
+    closeNodeEditor();
 }
 
 // ── Cytoscape 초기화 ──
@@ -83,12 +172,182 @@ function initCytoscape(executionTree) {
         userPanningEnabled: true
     });
 
+    // 우클릭: 삭제 메뉴
     cyInstance.on('cxttap', 'node', e => {
         selectedNodeId = e.target.id();
         showContextMenu(e.originalEvent.clientX, e.originalEvent.clientY);
     });
 
-    document.addEventListener('click', hideContextMenu, { once: false });
+    // 클릭: 노드 선택 + args 편집기 표시
+    cyInstance.on('tap', 'node', e => {
+        selectedNodeId = e.target.id();
+        showNodeEditor(selectedNodeId);
+    });
+
+    // 빈 캔버스 클릭: 편집기 닫기
+    cyInstance.on('tap', e => {
+        if (e.target === cyInstance) closeNodeEditor();
+    });
+
+    // 노드 드래그: 다른 노드 위에 올리면 하이라이트
+    cyInstance.on('drag', 'node', e => {
+        const dragged = e.target;
+        cyInstance.nodes().removeClass('drop-target');
+        const over = findOverlappingNode(dragged);
+        if (over) over.addClass('drop-target');
+    });
+
+    // 노드 드래그 종료: 다른 노드 위에 놓으면 리패런팅
+    cyInstance.on('dragfree', 'node', e => {
+        const dragged = e.target;
+        cyInstance.nodes().removeClass('drop-target');
+        const over = findOverlappingNode(dragged);
+        if (over) reparentNode(dragged.id(), over.id());
+    });
+
+    // 엣지 호버: X 버튼 표시
+    cyInstance.on('mouseover', 'edge', e => {
+        clearTimeout(edgeHideTimeout);
+        hoveredEdgeId = e.target.id();
+        const src = cyInstance.getElementById(e.target.data('source'));
+        const tgt = cyInstance.getElementById(e.target.data('target'));
+        const mx = (src.renderedPosition('x') + tgt.renderedPosition('x')) / 2;
+        const my = (src.renderedPosition('y') + tgt.renderedPosition('y')) / 2;
+        const btn = document.getElementById('edgeDeleteBtn');
+        btn.style.left = mx + 'px';
+        btn.style.top = my + 'px';
+        btn.style.display = 'block';
+    });
+    cyInstance.on('mouseout', 'edge', () => {
+        edgeHideTimeout = setTimeout(() => {
+            document.getElementById('edgeDeleteBtn').style.display = 'none';
+            hoveredEdgeId = null;
+        }, 150);
+    });
+
+    // 팔레트 드롭 이벤트 설정
+    const canvas = document.getElementById('treeCanvas');
+    canvas.ondragover = e => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        // 드롭 위치 아래 노드 하이라이트
+        cyInstance.nodes().removeClass('drop-target');
+        const nodeUnder = getNodeAtScreenPos(e.clientX, e.clientY);
+        if (nodeUnder) nodeUnder.addClass('drop-target');
+    };
+    canvas.ondragleave = () => cyInstance.nodes().removeClass('drop-target');
+    canvas.ondrop = e => {
+        e.preventDefault();
+        cyInstance.nodes().removeClass('drop-target');
+        try {
+            const { layerName, fnName } = JSON.parse(e.dataTransfer.getData('text/plain'));
+            const nodeUnder = getNodeAtScreenPos(e.clientX, e.clientY);
+            const cyPos = screenToCyPos(e.clientX, e.clientY);
+            addNodeAtPos(layerName, fnName, cyPos, nodeUnder ? nodeUnder.id() : null);
+        } catch (_) {}
+    };
+
+    document.addEventListener('click', hideContextMenu);
+}
+
+// 화면 좌표 → Cytoscape 모델 좌표
+function screenToCyPos(clientX, clientY) {
+    const canvas = document.getElementById('treeCanvas');
+    const rect = canvas.getBoundingClientRect();
+    const pan = cyInstance.pan();
+    const zoom = cyInstance.zoom();
+    return {
+        x: (clientX - rect.left - pan.x) / zoom,
+        y: (clientY - rect.top - pan.y) / zoom
+    };
+}
+
+// 화면 좌표에 있는 노드 반환
+function getNodeAtScreenPos(clientX, clientY) {
+    const canvas = document.getElementById('treeCanvas');
+    const rect = canvas.getBoundingClientRect();
+    const rx = clientX - rect.left;
+    const ry = clientY - rect.top;
+    return cyInstance.nodes().filter(n => {
+        const pos = n.renderedPosition();
+        const w = n.renderedWidth() / 2 + 8;
+        const h = n.renderedHeight() / 2 + 8;
+        return Math.abs(pos.x - rx) < w && Math.abs(pos.y - ry) < h;
+    }).first().length > 0
+        ? cyInstance.nodes().filter(n => {
+            const pos = n.renderedPosition();
+            const w = n.renderedWidth() / 2 + 8;
+            const h = n.renderedHeight() / 2 + 8;
+            return Math.abs(pos.x - rx) < w && Math.abs(pos.y - ry) < h;
+        }).first()
+        : null;
+}
+
+// 드래그 중 겹치는 다른 노드 찾기
+function findOverlappingNode(draggedNode) {
+    const pos = draggedNode.renderedPosition();
+    const result = cyInstance.nodes().filter(n => {
+        if (n.id() === draggedNode.id()) return false;
+        const np = n.renderedPosition();
+        const w = n.renderedWidth() / 2 + 10;
+        const h = n.renderedHeight() / 2 + 10;
+        return Math.abs(np.x - pos.x) < w && Math.abs(np.y - pos.y) < h;
+    }).first();
+    return result.length > 0 ? result : null;
+}
+
+// 노드 리패런팅: draggedId를 newParentId의 자식으로 이동
+function reparentNode(draggedId, newParentId) {
+    if (draggedId === newParentId) return;
+
+    // newParent가 dragged의 직접 부모인 경우 → 방향 swap
+    const directParentEdge = cyInstance.edges().filter(e =>
+        e.data('source') === newParentId && e.data('target') === draggedId
+    );
+    if (directParentEdge.length > 0) {
+        // dragged에 자식이 있으면 swap 불가
+        const hasChildren = cyInstance.edges().filter(e => e.data('source') === draggedId).length > 0;
+        if (hasChildren) return;
+        directParentEdge.remove();
+        cyInstance.add({ data: { id: `${draggedId}_${newParentId}_${Date.now()}`, source: draggedId, target: newParentId } });
+        cyInstance.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 60, rankSep: 80, padding: 30 }).run();
+        return;
+    }
+
+    // 순환 방지: newParent가 dragged의 자손이면 중단
+    if (isDescendant(newParentId, draggedId)) return;
+
+    // 기존 부모 엣지 제거
+    cyInstance.edges().filter(e => e.data('target') === draggedId).remove();
+
+    // 새 부모 엣지 추가
+    cyInstance.add({ data: { id: `${newParentId}_${draggedId}_${Date.now()}`, source: newParentId, target: draggedId } });
+
+    // 레이아웃 재정렬
+    cyInstance.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 60, rankSep: 80, padding: 30 }).run();
+}
+
+// 호버 중인 엣지 삭제
+function deleteHoveredEdge() {
+    if (!hoveredEdgeId || !cyInstance) return;
+    cyInstance.getElementById(hoveredEdgeId).remove();
+    document.getElementById('edgeDeleteBtn').style.display = 'none';
+    hoveredEdgeId = null;
+}
+
+// nodeId가 ancestorId의 자손인지 확인 (순환 방지)
+function isDescendant(nodeId, ancestorId) {
+    const visited = new Set();
+    const queue = [ancestorId];
+    while (queue.length > 0) {
+        const cur = queue.shift();
+        if (cur === nodeId) return true;
+        if (visited.has(cur)) continue;
+        visited.add(cur);
+        cyInstance.edges().filter(e => e.data('source') === cur)
+            .forEach(e => queue.push(e.data('target')));
+    }
+    return false;
 }
 
 function cytoscapeStyle() {
@@ -120,6 +379,10 @@ function cytoscapeStyle() {
         {
             selector: 'node.new-node',
             style: { 'background-color': '#2f9e44', 'border-color': '#2b8a3e' }
+        },
+        {
+            selector: 'node.drop-target',
+            style: { 'background-color': '#f59f00', 'border-color': '#e67700', 'border-width': 3 }
         },
         {
             selector: 'edge',
@@ -193,9 +456,11 @@ function buildLayerPalette() {
                 <div style="font-size:12px; font-weight:700; color:#495057; padding:4px 6px; background:#e9ecef; border-radius:4px; margin-bottom:4px;">${layer.name}</div>
                 ${layer.functions.map(fn => `
                     <div class="palette-fn" data-layer="${layer.name}" data-fn="${fn}"
-                         style="padding:5px 8px; font-size:11px; color:#495057; cursor:pointer; border-radius:4px; margin-bottom:2px; border:1px solid transparent;"
+                         draggable="true"
+                         style="padding:5px 8px; font-size:11px; color:#495057; cursor:grab; border-radius:4px; margin-bottom:2px; border:1px solid transparent;"
                          onmouseover="this.style.background='#e0f2fe';this.style.borderColor='#667eea'"
                          onmouseout="this.style.background='';this.style.borderColor='transparent'"
+                         ondragstart="paletteDragStart(event, this.dataset.layer, this.dataset.fn)"
                          ondblclick="addNodeFromPalette(this.dataset.layer, this.dataset.fn)">
                         ⚙ ${fn}
                     </div>
@@ -204,19 +469,33 @@ function buildLayerPalette() {
         `).join('');
 }
 
-// 팔레트에서 노드 추가 (선택된 노드의 자식으로)
+function paletteDragStart(e, layerName, fnName) {
+    e.dataTransfer.setData('text/plain', JSON.stringify({ layerName, fnName }));
+    e.dataTransfer.effectAllowed = 'copy';
+}
+
+// 팔레트 드래그 또는 더블클릭으로 노드 추가
 function addNodeFromPalette(layerName, fnName) {
+    // 더블클릭: 선택된 노드의 자식으로, 없으면 루트로
+    addNodeAtPos(layerName, fnName, null, selectedNodeId);
+}
+
+// 지정 위치/부모에 노드 추가 (팔레트 드래그 + 더블클릭 공통)
+function addNodeAtPos(layerName, fnName, cyPos, parentId) {
     if (!cyInstance) return;
     const newId = `node_${layerName}_${fnName}_${Date.now()}`;
     const label = `${layerName}.${fnName}`;
+    const nodeData = { data: { id: newId, label, layerName, function: fnName, args: {} }, classes: 'new-node' };
+    if (cyPos) nodeData.position = cyPos;
 
-    cyInstance.add({ data: { id: newId, label, layerName, function: fnName, args: {} }, classes: 'new-node' });
-
-    if (selectedNodeId && cyInstance.getElementById(selectedNodeId).length > 0) {
-        cyInstance.add({ data: { id: `${selectedNodeId}_${newId}`, source: selectedNodeId, target: newId } });
+    cyInstance.add(nodeData);
+    if (parentId && cyInstance.getElementById(parentId).length > 0) {
+        cyInstance.add({ data: { id: `${parentId}_${newId}`, source: parentId, target: newId } });
     }
-
     cyInstance.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 60, rankSep: 80, padding: 30 }).run();
+    selectedNodeId = newId;
+    // 신규 노드: 바로 args 편집기 오픈
+    showNodeEditor(newId);
 }
 
 // ── 컨텍스트 메뉴 ──
