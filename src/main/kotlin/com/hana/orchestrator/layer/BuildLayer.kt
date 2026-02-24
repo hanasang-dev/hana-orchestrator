@@ -41,6 +41,53 @@ class BuildLayer(
     suspend fun clean(): String = runGradle("clean")
 
     /**
+     * 빌드 후 서버 재시작 (자기 개선 루프용)
+     * build() 완료 후 호출하면 새 JAR로 프로세스를 교체함.
+     * - shadow JAR(build/libs/ *-all.jar 패턴) 를 찾아 새 JVM 으로 기동
+     * - 현재 프로세스는 포트 해제 후 즉시 종료 (새 프로세스가 동일 포트 재취득)
+     */
+    @LayerFunction
+    suspend fun restart(): String = withContext(Dispatchers.IO) {
+        try {
+            val jar = File(projectRoot, "build/libs")
+                .listFiles { f -> f.name.endsWith("-all.jar") }
+                ?.maxByOrNull { it.lastModified() }
+                ?: return@withContext "ERROR: shadow JAR를 찾을 수 없습니다 (먼저 build 실행 필요)"
+
+            val javaExe = ProcessHandle.current().info().command().orElse("java")
+
+            // 재시작 스크립트: 현재 프로세스 종료 후 2초 뒤 새 프로세스 시작
+            val restartLog = File(projectRoot, ".hana/restart.log")
+            restartLog.parentFile.mkdirs()
+            val script = File(projectRoot, ".hana/restart.sh").apply {
+                writeText("""
+                    #!/bin/bash
+                    sleep 2
+                    exec "$javaExe" -jar "${jar.absolutePath}" --skip-cleanup >> "${restartLog.absolutePath}" 2>&1
+                """.trimIndent())
+                setExecutable(true)
+            }
+
+            // 백그라운드에서 스크립트 실행
+            ProcessBuilder("bash", script.absolutePath)
+                .directory(projectRoot)
+                .redirectOutput(restartLog)
+                .redirectError(restartLog)
+                .start()
+
+            // 300ms 후 현재 프로세스 종료 (포트 해제 → 새 프로세스가 포트 재취득)
+            Thread {
+                Thread.sleep(300)
+                Runtime.getRuntime().halt(0)
+            }.also { it.isDaemon = true }.start()
+
+            "SUCCESS: 재시작 예약됨 (${jar.name}). 약 3초 후 서버가 다시 시작됩니다."
+        } catch (e: Exception) {
+            "ERROR: 재시작 실패: ${e.message}"
+        }
+    }
+
+    /**
      * 임의 빌드 명령 실행 (Gradle 외 Maven, npm, cargo 등).
      *
      * @param executable 실행할 명령 (예: "gradlew", "mvn", "npm", "cargo"). 경로 포함 시 projectRoot 기준 상대 경로만 허용.
@@ -166,7 +213,8 @@ class BuildLayer(
                 }
                 runBuild(exe, list)
             }
-            else -> "Unknown function: $function. Available: compileKotlin, build, clean, runBuild"
+            "restart" -> restart()
+            else -> "Unknown function: $function. Available: compileKotlin, build, clean, runBuild, restart"
         }
     }
 }
