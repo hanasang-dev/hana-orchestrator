@@ -107,11 +107,11 @@ function showNodeEditor(nodeId) {
         const statusIcon = { SUCCESS: '✅', FAILED: '❌', RUNNING: '⏳', SKIPPED: '⏭' }[nr.status] || '❓';
         const fields = document.getElementById('nodeEditorFields');
         fields.innerHTML = `
-            <div style="margin-bottom:6px; font-size:11px; font-weight:700; color:#495057;">${statusIcon} ${nr.status}</div>
-            ${nr.result ? `<div style="margin-bottom:6px;"><div style="font-size:10px; color:#868e96; margin-bottom:2px;">결과</div>
-                <pre style="font-size:11px; white-space:pre-wrap; word-break:break-all; background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px; padding:6px; margin:0; max-height:120px; overflow:auto;">${escapeHtml(nr.result)}</pre></div>` : ''}
-            ${nr.error ? `<div><div style="font-size:10px; color:#e03131; margin-bottom:2px;">에러</div>
-                <pre style="font-size:11px; white-space:pre-wrap; word-break:break-all; background:#fff5f5; border:1px solid #ffc9c9; border-radius:4px; padding:6px; margin:0; max-height:80px; overflow:auto;">${escapeHtml(nr.error)}</pre></div>` : ''}
+            <div class="node-status-line">${statusIcon} ${nr.status}</div>
+            ${nr.result ? `<div class="node-result-block"><div class="node-result-label">결과</div>
+                <pre class="node-result-pre">${escapeHtml(nr.result)}</pre></div>` : ''}
+            ${nr.error ? `<div class="node-result-block"><div class="node-result-label" style="color:var(--danger);">에러</div>
+                <pre class="node-result-pre error">${escapeHtml(nr.error)}</pre></div>` : ''}
         `;
         document.getElementById('nodeEditorPanel').style.display = 'block';
         return;
@@ -123,26 +123,22 @@ function showNodeEditor(nodeId) {
     const fields = document.getElementById('nodeEditorFields');
     const paramEntries = Object.entries(params);
     if (paramEntries.length === 0) {
-        fields.innerHTML = '<p style="font-size:11px; color:#aaa; margin:0;">파라미터 없음</p>';
+        fields.innerHTML = '<p style="font-size:11px; color:var(--text-3); margin:0;">파라미터 없음</p>';
     } else {
         fields.innerHTML = paramEntries.map(([pName, pInfo]) => {
             const required = pInfo.required !== false;
             const currentVal = currentArgs[pName] !== undefined ? currentArgs[pName] : '';
             const parentBtn = hasParent
-                ? `<button type="button" onclick="document.getElementById('argInput_${pName}').value='{{parent}}'"
-                     title="부모 실행 결과를 이 인자로 사용"
-                     style="padding:4px 6px; font-size:10px; background:#f0f4ff; border:1px solid #667eea; border-radius:4px; cursor:pointer; color:#667eea; white-space:nowrap; flex-shrink:0;">↑부모</button>`
+                ? `<button type="button" class="btn-parent-use" onclick="document.getElementById('argInput_${pName}').value='{{parent}}'"
+                     title="부모 실행 결과를 이 인자로 사용">↑부모</button>`
                 : '';
-            return `<div style="margin-bottom:10px;">
-                <label style="font-size:11px; font-weight:600; color:#495057; display:block; margin-bottom:3px;">
-                    ${pName}
-                    <span style="font-size:10px; color:${required ? '#e03131' : '#aaa'}; font-weight:400;"> ${required ? '필수' : '선택'} · ${pInfo.type}</span>
+            return `<div class="node-field">
+                <label>${pName}
+                    <span class="field-meta ${required ? 'field-required' : 'field-optional'}">${required ? '필수' : '선택'} · ${pInfo.type}</span>
                 </label>
                 <div style="display:flex; gap:4px; align-items:center;">
                     <input type="text" id="argInput_${pName}" value="${escapeHtml(String(currentVal))}"
-                           placeholder="${pInfo.defaultValue || ''}"
-                           style="flex:1; padding:5px 8px; font-size:12px; border:1px solid #dee2e6; border-radius:4px; outline:none; min-width:0;"
-                           onfocus="this.style.borderColor='#667eea'" onblur="this.style.borderColor='#dee2e6'">
+                           placeholder="${pInfo.defaultValue || ''}">
                     ${parentBtn}
                 </div>
             </div>`;
@@ -502,16 +498,13 @@ function elementsToTree() {
 function buildLayerPalette() {
     const palette = document.getElementById('paletteContent');
     palette.innerHTML = treeEditorLayers.length === 0
-        ? '<p style="font-size:12px;color:#aaa;">레이어 로딩 중...</p>'
+        ? '<p style="font-size:12px;color:var(--text-3);">레이어 로딩 중...</p>'
         : treeEditorLayers.map(layer => `
             <div style="margin-bottom:10px;">
-                <div style="font-size:12px; font-weight:700; color:#495057; padding:4px 6px; background:#e9ecef; border-radius:4px; margin-bottom:4px;">${layer.name}</div>
+                <div class="palette-layer-header">${layer.name}</div>
                 ${layer.functions.map(fn => `
                     <div class="palette-fn" data-layer="${layer.name}" data-fn="${fn}"
                          draggable="true"
-                         style="padding:5px 8px; font-size:11px; color:#495057; cursor:grab; border-radius:4px; margin-bottom:2px; border:1px solid transparent;"
-                         onmouseover="this.style.background='#e0f2fe';this.style.borderColor='#667eea'"
-                         onmouseout="this.style.background='';this.style.borderColor='transparent'"
                          ondragstart="paletteDragStart(event, this.dataset.layer, this.dataset.fn)"
                          ondblclick="addNodeFromPalette(this.dataset.layer, this.dataset.fn)">
                         ⚙ ${fn}
@@ -575,8 +568,8 @@ function deleteSelectedNode() {
 // ── 트리 저장 / 불러오기 ──
 async function saveReActTree() {
     if (!lastReActTree) { alert('저장할 트리가 없습니다.'); return; }
-    const name = prompt('저장할 이름을 입력하세요:', lastUserMessage.slice(0, 30) || 'react-tree');
-    if (!name) return;
+    const nameInput = document.getElementById('saveReActTreeName');
+    const name = (nameInput?.value || '').trim() || lastUserMessage.slice(0, 30) || 'react-tree';
     try {
         const res = await fetch('/trees/save', {
             method: 'POST',
@@ -584,8 +577,15 @@ async function saveReActTree() {
             body: JSON.stringify({ name, query: lastUserMessage, tree: lastReActTree })
         });
         const data = await res.json();
-        if (data.success) alert(`✅ "${name}" 으로 저장되었습니다.`);
-        else alert('저장 실패: ' + (data.error || '알 수 없는 오류'));
+        if (data.success) {
+            const row = document.getElementById('saveReActTreeRow');
+            if (row) row.style.display = 'none';
+            lastReActTree = null;
+            const status = document.getElementById('chatStatus');
+            if (status) status.textContent = `✅ "${name}" 으로 저장됨`;
+        } else {
+            alert('저장 실패: ' + (data.error || '알 수 없는 오류'));
+        }
     } catch (e) {
         alert('저장 실패: ' + e.message);
     }
@@ -594,8 +594,8 @@ async function saveReActTree() {
 async function saveTree() {
     const tree = elementsToTree();
     if (!tree || tree.rootNodes.length === 0) { alert('저장할 트리가 없습니다.'); return; }
-    const name = prompt('저장할 이름을 입력하세요:', treeEditorQuery.slice(0, 30) || 'my-tree');
-    if (!name) return;
+    const nameInput = document.getElementById('treeNameInput');
+    const name = (nameInput?.value || '').trim() || treeEditorQuery.slice(0, 30) || 'my-tree';
     try {
         const res = await fetch('/trees/save', {
             method: 'POST',
@@ -603,8 +603,12 @@ async function saveTree() {
             body: JSON.stringify({ name, query: treeEditorQuery, tree })
         });
         const data = await res.json();
-        if (data.success) alert(`✅ "${name}" 으로 저장되었습니다.`);
-        else alert('저장 실패: ' + (data.error || '알 수 없는 오류'));
+        if (data.success) {
+            const reviewResult = document.getElementById('reviewResult');
+            if (reviewResult) reviewResult.textContent = `✅ "${name}" 으로 저장됨`;
+        } else {
+            alert('저장 실패: ' + (data.error || '알 수 없는 오류'));
+        }
     } catch (e) {
         alert('저장 실패: ' + e.message);
     }
@@ -819,14 +823,16 @@ document.getElementById('chatForm').addEventListener('submit', async (e) => {
             }
             chatStatus.textContent = '실행 완료';
 
-            // ReAct 트리 저장 버튼
-            const saveBtn = document.getElementById('saveReActTreeBtn');
+            // ReAct 트리 저장 인라인 행
+            const saveRow = document.getElementById('saveReActTreeRow');
+            const saveNameInput = document.getElementById('saveReActTreeName');
             if (result.tree && result.tree.rootNodes && result.tree.rootNodes.length > 0) {
                 lastReActTree = result.tree;
-                if (saveBtn) saveBtn.style.display = 'inline-block';
+                if (saveRow) saveRow.style.display = 'flex';
+                if (saveNameInput) saveNameInput.value = message.slice(0, 40);
             } else {
                 lastReActTree = null;
-                if (saveBtn) saveBtn.style.display = 'none';
+                if (saveRow) saveRow.style.display = 'none';
             }
 
             // 실행 이력 새로고침
@@ -1393,7 +1399,7 @@ function renderExecution(exec, isCurrent) {
                         <span>${timeStr}</span>
                         ${duration ? `<span>${duration}</span>` : ''}
                         <span class="status-badge status-${statusClass}">${statusText}</span>
-                        ${exec.executionTree ? `<button class="tree-view-btn" data-exec-id="${exec.id}" style="margin-left: 8px; padding: 4px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600;">🌳 트리 보기</button>` : `<!-- No tree: ${JSON.stringify(exec.executionTree)} -->`}
+                        ${exec.executionTree ? `<button class="tree-view-btn" data-exec-id="${exec.id}">🌳 트리 보기</button>` : ''}
                     </div>
                     <div class="node-stats">${formatNodeStats(exec)}</div>
                 </div>
@@ -1403,15 +1409,14 @@ function renderExecution(exec, isCurrent) {
                 ${exec.result && exec.result.trim() !== '' ? `
                     <div class="execution-result"><strong>✅ 최종 결과:</strong><div class="result-content">${escapeHtml(exec.result.trim())}</div></div>
                 ` : exec.error ? '' : `
-                    <div class="execution-result" style="color: #999; font-style: italic; padding: 6px 12px;">결과가 아직 없습니다...</div>
+                    <div class="execution-result pending-result">결과가 아직 없습니다...</div>
                 `}
                 ${exec.error ? `
-                    <div class="execution-result" style="background: #f8d7da; color: #721c24;">
-                        <strong>에러:</strong><br>
-                        ${escapeHtml(exec.error)}
+                    <div class="execution-result error-result">
+                        <strong>에러:</strong><br>${escapeHtml(exec.error)}
                     </div>
                 ` : ''}
-                <div class="execution-logs" id="logs-${exec.id}" style="display: none;"><strong>📋 실행 로그:</strong><div class="log-content" id="log-content-${exec.id}" style="padding: 0; margin: 4px 0 0 0;"></div></div>
+                <div class="execution-logs" id="logs-${exec.id}" style="display:none;"><strong>📋 실행 로그:</strong><div class="log-content" id="log-content-${exec.id}"></div></div>
             </div>
         </div>
     `;
@@ -1436,8 +1441,8 @@ function renderExecutionTreeSection(executionTree) {
         const isParallel = rootNode.parallel;
         const internalType = hasChildren ? (isParallel ? ' (내부 병렬)' : ' (내부 순차)') : '';
         const rootLabel = roots.length > 1 ? `🔹 루트 노드 #${index + 1}${internalType}` : `🔹 루트 노드${internalType}`;
-        html += `<div style="margin-top: ${index > 0 ? '15px' : '0'}; padding-left: 0;">
-            <div style="color: #667eea; font-weight: 600; margin-bottom: 8px; font-size: 12px;">${rootLabel}</div>
+        html += `<div class="tree-root-section">
+            <div class="tree-root-label">${rootLabel}</div>
             ${renderExecutionTree(rootNode, 0)}
         </div>`;
     });
@@ -1550,12 +1555,10 @@ async function loadLLMStatus() {
         const rightPanel = document.getElementById('rightPanel');
         
         if (status.allReady) {
-            const providers = [
-                `${status.simple.provider} (${status.simple.modelId})`,
-                `${status.medium.provider} (${status.medium.modelId})`,
-                `${status.complex.provider} (${status.complex.modelId})`
-            ];
-            statusText.innerHTML = `🤖 LLM: <span style="color: #28a745;">준비 완료</span> - ${providers.join(', ')}`;
+            const uniqueModels = [...new Set([
+                status.simple.modelId, status.medium.modelId, status.complex.modelId
+            ])];
+            statusText.innerHTML = `🤖 LLM: <span class="llm-ready">준비 완료</span> · ${uniqueModels.join(', ')}`;
             
             // LLM이 준비되었으면 일반 UI 표시
             llmNoticeCard?.classList.remove('show');
@@ -1567,7 +1570,7 @@ async function loadLLMStatus() {
             if (!status.medium.ready) notReady.push(`MEDIUM`);
             if (!status.complex.ready) notReady.push(`COMPLEX`);
             
-            statusText.innerHTML = `🤖 LLM: <span style="color: #ffc107;">부분 준비</span> - 미준비: ${notReady.join(', ')}`;
+            statusText.innerHTML = `🤖 LLM: <span class="llm-partial">부분 준비</span> - 미준비: ${notReady.join(', ')}`;
             
             // LLM이 준비되지 않았으면 안내 카드 표시
             llmNoticeCard?.classList.add('show');
@@ -1575,7 +1578,7 @@ async function loadLLMStatus() {
             if (rightPanel) rightPanel.classList.add('hidden');
         }
     } catch (error) {
-        document.getElementById('llmStatusText').innerHTML = `🤖 LLM: <span style="color: #999;">확인 불가</span>`;
+        document.getElementById('llmStatusText').innerHTML = `🤖 LLM: <span class="llm-unavailable">확인 불가</span>`;
         
         // 에러 시에도 안내 카드 표시
         const llmNoticeCard = document.getElementById('llmNoticeCard');
