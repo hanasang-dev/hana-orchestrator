@@ -789,47 +789,35 @@ document.getElementById('chatForm').addEventListener('submit', async (e) => {
     lastUserMessage = message;
 
     // 사용자 메시지 표시
-    chatMessages.innerHTML = `<div style="margin-bottom: 10px; padding: 8px 12px; background: #667eea; color: white; border-radius: 8px; text-align: right; max-width: 80%; margin-left: auto;">
-        <strong>사용자:</strong> ${message}
-    </div>`;
-    
+    chatMessages.innerHTML = `<div class="msg-user">${escapeHtml(message)}</div>`;
+
     chatInput.value = '';
     chatInput.disabled = true;
     chatStatus.textContent = '요청 처리 중...';
-    chatStatus.style.color = '#667eea';
-    
+
     try {
         const response = await fetch(`${API_BASE}/chat`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message })
         });
-        
+
         const result = await response.json();
-        
+
         if (result.error) {
-            chatMessages.innerHTML += `<div style="margin-top: 10px; padding: 8px 12px; background: #ff6b6b; color: white; border-radius: 8px;">
-                <strong>오류:</strong> ${result.error}
-            </div>`;
+            chatMessages.innerHTML += `<div class="msg-error"><strong>오류:</strong> ${escapeHtml(result.error)}</div>`;
             chatStatus.textContent = '실행 실패';
-            chatStatus.style.color = '#ff6b6b';
         } else {
             const results = result.results || [];
             if (results.length > 0) {
                 results.forEach((res, idx) => {
-                    chatMessages.innerHTML += `<div style="margin-top: 10px; padding: 8px 12px; background: #51cf66; color: white; border-radius: 8px;">
-                        <strong>결과 ${results.length > 1 ? idx + 1 : ''}:</strong> ${res}
-                    </div>`;
+                    const label = results.length > 1 ? `결과 ${idx + 1}: ` : '';
+                    chatMessages.innerHTML += `<div class="msg-result"><strong>${label}</strong>${escapeHtml(res)}</div>`;
                 });
             } else {
-                chatMessages.innerHTML += `<div style="margin-top: 10px; padding: 8px 12px; background: #51cf66; color: white; border-radius: 8px;">
-                    실행 완료 (결과 없음)
-                </div>`;
+                chatMessages.innerHTML += `<div class="msg-result">실행 완료 (결과 없음)</div>`;
             }
             chatStatus.textContent = '실행 완료';
-            chatStatus.style.color = '#51cf66';
 
             // ReAct 트리 저장 버튼
             const saveBtn = document.getElementById('saveReActTreeBtn');
@@ -845,16 +833,11 @@ document.getElementById('chatForm').addEventListener('submit', async (e) => {
             loadExecutions();
         }
     } catch (error) {
-        chatMessages.innerHTML += `<div style="margin-top: 10px; padding: 8px 12px; background: #ff6b6b; color: white; border-radius: 8px;">
-            <strong>오류:</strong> ${error.message}
-        </div>`;
+        chatMessages.innerHTML += `<div class="msg-error"><strong>오류:</strong> ${escapeHtml(error.message)}</div>`;
         chatStatus.textContent = '요청 실패';
-        chatStatus.style.color = '#ff6b6b';
     } finally {
         chatInput.disabled = false;
         chatInput.focus();
-        
-        // 메시지 영역 스크롤을 맨 아래로
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 });
