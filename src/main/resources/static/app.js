@@ -817,8 +817,11 @@ function connectWebSocket() {
             const data = JSON.parse(event.data);
             console.log('WebSocket 데이터 수신:', data);
 
-            // 진행 상태 메시지인지 실행 이력 메시지인지 구분
-            if (data.executionId && data.phase && data.message) {
+            // 메시지 타입 구분 (id+path+diff = ApprovalRequest 고유 필드 조합)
+            if (data.id && data.path && data.diff !== undefined) {
+                // 파일 수정 승인 요청
+                showApprovalPanel(data);
+            } else if (data.executionId && data.phase && data.message) {
                 // 진행 상태 업데이트
                 updateProgressUI(data);
             } else {
@@ -1454,6 +1457,43 @@ async function loadLLMStatus() {
         if (leftPanel) leftPanel.classList.add('hidden');
         if (rightPanel) rightPanel.classList.add('hidden');
     }
+}
+
+// ─────────────────────────────────────────────
+// 파일 수정 승인 패널
+// ─────────────────────────────────────────────
+let currentApprovalId = null;
+
+function showApprovalPanel(data) {
+    currentApprovalId = data.id;
+    document.getElementById('approvalPath').textContent = data.path;
+
+    const diffEl = document.getElementById('approvalDiff');
+    diffEl.innerHTML = (data.diff || '').split('\n').map(line => {
+        if (line.startsWith('+')) {
+            return `<span style="background:#d3f9d8; display:block; padding:0 2px;">${escapeHtml(line)}</span>`;
+        } else if (line.startsWith('-')) {
+            return `<span style="background:#ffe3e3; display:block; padding:0 2px;">${escapeHtml(line)}</span>`;
+        } else if (line.startsWith('@')) {
+            return `<span style="color:#868e96; display:block; padding:0 2px;">${escapeHtml(line)}</span>`;
+        } else {
+            return `<span style="display:block; padding:0 2px;">${escapeHtml(line)}</span>`;
+        }
+    }).join('');
+
+    document.getElementById('approvalModal').style.display = 'flex';
+}
+
+async function handleApproval(approved) {
+    if (!currentApprovalId) return;
+    const action = approved ? 'approve' : 'reject';
+    try {
+        await fetch(`${API_BASE}/approval/${currentApprovalId}/${action}`, { method: 'POST' });
+    } catch (e) {
+        console.error('Approval request failed:', e);
+    }
+    document.getElementById('approvalModal').style.display = 'none';
+    currentApprovalId = null;
 }
 
 // 초기 로드 시 LLM 상태 확인 후 UI 표시 결정

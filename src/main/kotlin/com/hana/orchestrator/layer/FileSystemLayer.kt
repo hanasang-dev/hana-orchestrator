@@ -1,5 +1,6 @@
 package com.hana.orchestrator.layer
 
+import com.hana.orchestrator.orchestrator.ApprovalGate
 import java.io.File
 
 /**
@@ -12,7 +13,7 @@ import java.io.File
  * 예: 파일 읽기 → 분석 → 수정 → 다시 읽기 → 검증
  */
 @Layer
-class FileSystemLayer : CommonLayerInterface {
+class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLayerInterface {
     
     private val backupDir = File(".hana/backups")
     
@@ -91,15 +92,25 @@ class FileSystemLayer : CommonLayerInterface {
             if (!validateChanges(path, content)) {
                 return "ERROR: 파일 수정 실패 - 보호된 파일입니다: $path"
             }
-            
+
             val file = File(path)
-            // 2. 기존 파일이 있을 때만 백업 (신규 파일이면 백업 생략 → 결과에 ERROR 안 넣어서 평가 LLM이 성공으로 인식)
+
+            // 2. 승인 게이트: 파일 쓰기 전 사용자 확인 대기 (approvalGate가 설정된 경우)
+            if (approvalGate != null) {
+                val oldContent = if (file.exists()) file.readText() else null
+                val approved = approvalGate.requestApproval(path, oldContent, content)
+                if (!approved) {
+                    return "REJECTED: 사용자가 파일 수정을 거절했습니다: $path"
+                }
+            }
+
+            // 3. 기존 파일이 있을 때만 백업 (신규 파일이면 백업 생략)
             val backupPath = if (file.exists()) backupFile(path) else "신규 파일"
-            
-            // 3. 파일 쓰기
+
+            // 4. 파일 쓰기
             file.parentFile?.mkdirs()
             file.writeText(content)
-            
+
             "SUCCESS: 파일 수정 완료\n경로: $path\n백업: $backupPath"
         } catch (e: Exception) {
             "ERROR: 파일 쓰기 실패: ${e.message}"

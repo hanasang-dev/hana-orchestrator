@@ -40,23 +40,26 @@ class Orchestrator(
     private val statePublisher: ExecutionStatePublisher
     private val treeExecutor: TreeExecutor
     private val coordinator: OrchestrationCoordinator
-    
+
+    /** 파일 쓰기 승인 게이트 (WebSocket 컨트롤러에서 구독, ApprovalController에서 응답) */
+    val approvalGate = ApprovalGate()
+
     // LLM 관련
     val config: LLMConfig // 외부에서 접근 가능하도록 public
     private val clientFactory: LLMClientFactory
     private val modelSelectionStrategy: ModelSelectionStrategy
-    
+
     // Logger
     private val logger = createOrchestratorLogger(Orchestrator::class.java, null)
-    
+
     init {
         // LLM 설정 초기화
         config = llmConfig ?: LLMConfig.fromEnvironment()
         clientFactory = DefaultLLMClientFactory(config)
         modelSelectionStrategy = GeneratedModelSelectionStrategy(clientFactory = clientFactory)
-        
+
         // 컴포넌트 초기화
-        layerManager = LayerManager(modelSelectionStrategy)
+        layerManager = LayerManager(modelSelectionStrategy, approvalGate)
         historyManager = ExecutionHistoryManager()
         statePublisher = ExecutionStatePublisher()
         treeExecutor = TreeExecutor(layerManager, statePublisher, historyManager)

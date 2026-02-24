@@ -11,7 +11,8 @@ import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
  * SRP: 레이어 등록, 조회, 설명 관리만 담당
  */
 class LayerManager(
-    private val modelSelectionStrategy: ModelSelectionStrategy? = null
+    private val modelSelectionStrategy: ModelSelectionStrategy? = null,
+    private val approvalGate: ApprovalGate? = null
 ) {
     private val layers = mutableListOf<CommonLayerInterface>()
     private val cachedDescriptions = mutableSetOf<LayerDescription>()
@@ -33,7 +34,7 @@ class LayerManager(
             logger.debug("  - 레이어 인스턴스 생성됨: LayerInfoLayer")
             
             // 기본 레이어 등록
-            val defaultLayers = LayerFactory.createDefaultLayers(modelSelectionStrategy)
+            val defaultLayers = LayerFactory.createDefaultLayers(modelSelectionStrategy, approvalGate)
             logger.info("🔧 [LayerManager] 기본 레이어 초기화: ${defaultLayers.size}개 레이어 등록")
             defaultLayers.forEach { layer ->
                 logger.debug("  - 레이어 인스턴스 생성됨: ${layer::class.simpleName}")

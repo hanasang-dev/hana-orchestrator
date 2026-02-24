@@ -1,9 +1,9 @@
 package com.hana.orchestrator.presentation.controller
 
+import com.hana.orchestrator.orchestrator.ApprovalGate
 import com.hana.orchestrator.orchestrator.Orchestrator
 import com.hana.orchestrator.orchestrator.createOrchestratorLogger
 import com.hana.orchestrator.presentation.mapper.ExecutionHistoryMapper.toExecutionState
-import com.hana.orchestrator.presentation.model.execution.ExecutionState
 import com.hana.orchestrator.presentation.model.execution.ExecutionUpdateMessage
 import com.hana.orchestrator.presentation.model.execution.ProgressUpdate
 import io.ktor.server.routing.*
@@ -12,8 +12,8 @@ import io.ktor.websocket.*
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 
@@ -25,9 +25,9 @@ class ExecutionWebSocketController(
     private val orchestrator: Orchestrator
 ) {
     private val logger = createOrchestratorLogger(ExecutionWebSocketController::class.java, null)
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val connections = mutableSetOf<DefaultWebSocketSession>()
-    
+
     fun configureRoutes(route: Route) {
         route.webSocket("/ws/executions") {
             val session = this
@@ -36,35 +36,38 @@ class ExecutionWebSocketController(
                 coroutineScope {
                     // 연결 시 현재 상태 전송
                     sendCurrentState(session)
-                    
-                    // Flow를 구독하여 실시간 업데이트 수신
+
+                    // 실행 상태 업데이트 구독
                     val updateJob = launch {
-                        orchestrator.executionUpdates.collectLatest { updatedHistory ->
-                            // 업데이트된 실행 상태를 모든 연결된 클라이언트에 전송
-                            broadcastStateUpdate()
+                        orchestrator.executionUpdates.collectLatest {
+                            broadcastToAll(json.encodeToString(createUpdateMessage()))
                         }
                     }
 
                     // 진행 상태 업데이트 구독
                     val progressJob = launch {
                         orchestrator.progressUpdates.collectLatest { progress ->
-                            // 진행 상태를 모든 연결된 클라이언트에 전송
-                            broadcastProgressUpdate(progress)
+                            broadcastToAll(json.encodeToString(progress))
                         }
                     }
-                    
+
+                    // 파일 수정 승인 요청 구독
+                    val approvalJob = launch {
+                        orchestrator.approvalGate.requests.collect { request ->
+                            broadcastToAll(json.encodeToString(request))
+                        }
+                    }
+
                     // 클라이언트로부터 메시지 수신 대기 (연결 유지)
                     for (frame in incoming) {
-                        if (frame is Frame.Text) {
-                            val text = frame.readText()
-                            // 클라이언트가 요청하면 현재 상태 전송
-                            if (text == "refresh") {
-                                sendCurrentState(session)
-                            }
+                        if (frame is Frame.Text && frame.readText() == "refresh") {
+                            sendCurrentState(session)
                         }
                     }
-                    
+
                     updateJob.cancel()
+                    progressJob.cancel()
+                    approvalJob.cancel()
                 }
             } catch (e: ClosedReceiveChannelException) {
                 // 연결 종료
@@ -75,54 +78,26 @@ class ExecutionWebSocketController(
             }
         }
     }
-    
+
     private suspend fun sendCurrentState(session: DefaultWebSocketSession) {
         try {
-            val message = createUpdateMessage()
-            session.send(json.encodeToString(message))
+            session.send(json.encodeToString(createUpdateMessage()))
         } catch (e: Exception) {
             logger.error("Error sending state: ${e.message}", e)
         }
     }
-    
-    /**
-     * 상태 업데이트를 모든 연결된 클라이언트에 브로드캐스트
-     */
-    private suspend fun broadcastStateUpdate() {
-        val message = json.encodeToString(createUpdateMessage())
-        val toRemove = mutableListOf<DefaultWebSocketSession>()
-        
-        for (connection in connections) {
-            try {
-                connection.send(message)
-            } catch (e: Exception) {
-                toRemove.add(connection)
-            }
-        }
-        connections.removeAll(toRemove)
-    }
-    
-    /**
-     * 현재 상태를 기반으로 업데이트 메시지 생성
-     */
-    private fun createUpdateMessage(): ExecutionUpdateMessage {
-        val limit = 50
-        val history = orchestrator.getExecutionHistory(limit)
-        val current = orchestrator.getCurrentExecution()
 
+    private fun createUpdateMessage(): ExecutionUpdateMessage {
+        val history = orchestrator.getExecutionHistory(50)
+        val current = orchestrator.getCurrentExecution()
         return ExecutionUpdateMessage(
             history = history.map { it.toExecutionState() },
             current = current?.toExecutionState()
         )
     }
 
-    /**
-     * 진행 상태를 모든 연결된 클라이언트에 브로드캐스트
-     */
-    private suspend fun broadcastProgressUpdate(progress: ProgressUpdate) {
-        val message = json.encodeToString(progress)
+    private suspend fun broadcastToAll(message: String) {
         val toRemove = mutableListOf<DefaultWebSocketSession>()
-
         for (connection in connections) {
             try {
                 connection.send(message)
@@ -133,4 +108,3 @@ class ExecutionWebSocketController(
         connections.removeAll(toRemove)
     }
 }
-

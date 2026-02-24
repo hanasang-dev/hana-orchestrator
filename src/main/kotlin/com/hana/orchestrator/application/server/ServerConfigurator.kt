@@ -2,6 +2,7 @@ package com.hana.orchestrator.application.server
 
 import com.hana.orchestrator.application.lifecycle.ApplicationLifecycleManager
 import com.hana.orchestrator.orchestrator.Orchestrator
+import com.hana.orchestrator.presentation.controller.ApprovalController
 import com.hana.orchestrator.presentation.controller.ChatController
 import com.hana.orchestrator.presentation.controller.HealthController
 import com.hana.orchestrator.presentation.controller.LayerController
@@ -72,6 +73,7 @@ class ServerConfigurator(
                 LayerController(orchestrator, lifecycleManager).configureRoutes(this)
                 ExecutionWebSocketController(orchestrator).configureRoutes(this)
                 TreeController(orchestrator).configureRoutes(this)
+                ApprovalController(orchestrator.approvalGate).configureRoutes(this)
             }
         }
     }
