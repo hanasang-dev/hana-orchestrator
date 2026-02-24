@@ -4,10 +4,17 @@ import kotlinx.serialization.Serializable
 
 /**
  * 오케스트레이션 시스템의 모든 레이어가 구현해야 할 기본 인터페이스
- * 
+ *
+ * 온톨로지적 성격:
+ * - **공유 어휘**: Layer, Function, Parameter, ExecutionNode 등 개념이 시스템 전반에서 동일한 의미로 사용됨.
+ * - **관계**: Layer-has-Function, Node-invokes-Layer/Function, Node-has-children 등 실행 구조가 명시적 관계로 정의됨.
+ * - **자기기술**: 각 레이어가 describe()로 자신의 "타입"(역할)과 "능력"(함수·파라미터)을 선언 → 동적으로 확장 가능한 개념 공간.
+ * - **단일 모델**: 레지스트리 + describe()가 "무엇이 존재하는지, 무엇을 할 수 있는지"에 대한 사실상의 온톨로지 역할을 함.
+ * 이름은 오케스트레이터이지만, 설계는 공유 도메인 모델(어휘·관계·자기기술)에 기반한 온톨로지에 가깝다.
+ *
  * 설계 원칙:
  * - 자기기술: 각 레이어가 자신의 기능을 스스로 설명
- * - 분산 가능: 로컬/원격 레이어 모두 지원  
+ * - 분산 가능: 로컬/원격 레이어 모두 지원
  * - 단순함: 복잡한 타입 구분 없이 문자열 기반 통신
  */
 interface CommonLayerInterface {

@@ -5,6 +5,7 @@ import com.hana.orchestrator.orchestrator.createOrchestratorLogger
 import com.hana.orchestrator.presentation.mapper.ExecutionHistoryMapper.toExecutionState
 import com.hana.orchestrator.presentation.model.execution.ExecutionState
 import com.hana.orchestrator.presentation.model.execution.ExecutionUpdateMessage
+import com.hana.orchestrator.presentation.model.execution.ProgressUpdate
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
@@ -41,6 +42,14 @@ class ExecutionWebSocketController(
                         orchestrator.executionUpdates.collectLatest { updatedHistory ->
                             // 업데이트된 실행 상태를 모든 연결된 클라이언트에 전송
                             broadcastStateUpdate()
+                        }
+                    }
+
+                    // 진행 상태 업데이트 구독
+                    val progressJob = launch {
+                        orchestrator.progressUpdates.collectLatest { progress ->
+                            // 진행 상태를 모든 연결된 클라이언트에 전송
+                            broadcastProgressUpdate(progress)
                         }
                     }
                     
@@ -100,11 +109,28 @@ class ExecutionWebSocketController(
         val limit = 50
         val history = orchestrator.getExecutionHistory(limit)
         val current = orchestrator.getCurrentExecution()
-        
+
         return ExecutionUpdateMessage(
             history = history.map { it.toExecutionState() },
             current = current?.toExecutionState()
         )
+    }
+
+    /**
+     * 진행 상태를 모든 연결된 클라이언트에 브로드캐스트
+     */
+    private suspend fun broadcastProgressUpdate(progress: ProgressUpdate) {
+        val message = json.encodeToString(progress)
+        val toRemove = mutableListOf<DefaultWebSocketSession>()
+
+        for (connection in connections) {
+            try {
+                connection.send(message)
+            } catch (e: Exception) {
+                toRemove.add(connection)
+            }
+        }
+        connections.removeAll(toRemove)
     }
 }
 

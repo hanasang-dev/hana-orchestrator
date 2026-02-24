@@ -94,7 +94,13 @@ class Orchestrator(
      */
     val executionUpdates: SharedFlow<ExecutionHistory>
         get() = statePublisher.executionUpdates
-    
+
+    /**
+     * 진행 상태 업데이트 Flow
+     */
+    val progressUpdates: SharedFlow<com.hana.orchestrator.presentation.model.execution.ProgressUpdate>
+        get() = statePublisher.progressUpdates
+
     /**
      * 레이어 등록
      */

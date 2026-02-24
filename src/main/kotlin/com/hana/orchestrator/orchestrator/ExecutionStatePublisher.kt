@@ -5,6 +5,8 @@ import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionContext
 import com.hana.orchestrator.domain.entity.ExecutionResult
 import com.hana.orchestrator.domain.entity.NodeExecutionResult
+import com.hana.orchestrator.presentation.model.execution.ProgressUpdate
+import com.hana.orchestrator.presentation.model.execution.ExecutionPhase
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -20,6 +22,10 @@ class ExecutionStatePublisher {
     // 실시간 업데이트를 위한 Flow
     private val _executionUpdates = MutableSharedFlow<ExecutionHistory>(replay = 1, extraBufferCapacity = 10)
     val executionUpdates: SharedFlow<ExecutionHistory> = _executionUpdates.asSharedFlow()
+
+    // 진행 상태 업데이트를 위한 Flow
+    private val _progressUpdates = MutableSharedFlow<ProgressUpdate>(replay = 1, extraBufferCapacity = 10)
+    val progressUpdates: SharedFlow<ProgressUpdate> = _progressUpdates.asSharedFlow()
     
     /**
      * 실행 상태 업데이트를 Flow에 emit
@@ -51,5 +57,29 @@ class ExecutionStatePublisher {
         )
         emitExecutionUpdate(updatedHistory)
         return updatedHistory
+    }
+
+    /**
+     * 진행 상태 업데이트 emit
+     */
+    suspend fun emitProgress(executionId: String, phase: ExecutionPhase, message: String, progress: Int, elapsedMs: Long) {
+        _progressUpdates.emit(
+            ProgressUpdate(
+                executionId = executionId,
+                phase = phase,
+                message = message,
+                progress = progress,
+                elapsedMs = elapsedMs
+            )
+        )
+    }
+
+    /**
+     * 비동기로 진행 상태 업데이트
+     */
+    fun emitProgressAsync(executionId: String, phase: ExecutionPhase, message: String, progress: Int, elapsedMs: Long) {
+        CoroutineScope(Dispatchers.Default).launch {
+            emitProgress(executionId, phase, message, progress, elapsedMs)
+        }
     }
 }

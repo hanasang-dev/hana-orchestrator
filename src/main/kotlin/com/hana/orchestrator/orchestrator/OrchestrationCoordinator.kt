@@ -9,6 +9,7 @@ import com.hana.orchestrator.domain.entity.ExecutionResult
 import com.hana.orchestrator.llm.ResultEvaluation
 import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 import com.hana.orchestrator.llm.useSuspend
+import com.hana.orchestrator.presentation.model.execution.ExecutionPhase
 
 /**
  * 재처리 방안 요청 실패 예외 (무한 루프 방지용)
@@ -54,6 +55,7 @@ class OrchestrationCoordinator(
             historyManager.setCurrentExecution(runningHistory)
             historyManager.addLogToCurrent("🚀 실행 시작: $query")
             statePublisher.emitExecutionUpdate(runningHistory)
+            statePublisher.emitProgressAsync(executionId, ExecutionPhase.STARTING, "🚀 실행 시작", 0, 0)
 
             var previousHistory: ExecutionHistory? = null
             var previousTree: ExecutionTree? = null
@@ -200,6 +202,7 @@ class OrchestrationCoordinator(
         appContextService: AppContextService
     ): ExecutionTree {
         logger.info("🌳 [OrchestrationCoordinator] 실행 트리 생성 시작...")
+        statePublisher.emitProgressAsync(executionId, ExecutionPhase.TREE_CREATION, "🌳 실행 계획 생성 중...", 10, System.currentTimeMillis() - startTime)
 
         val treeStartTime = System.currentTimeMillis()
         val tree = try {
@@ -211,15 +214,16 @@ class OrchestrationCoordinator(
             handleTreeCreationFailure(treeException, query, executionId, startTime)
             throw treeException
         }
-        
+
         val treeDuration = System.currentTimeMillis() - treeStartTime
         logger.perf("⏱️ [PERF] 트리 생성 완료: ${treeDuration}ms")
-        
+        statePublisher.emitProgressAsync(executionId, ExecutionPhase.TREE_VALIDATION, "✅ 실행 계획 완료", 40, System.currentTimeMillis() - startTime)
+
         // 로그 타이밍 문제 해결: perf 로그 후 즉시 UI 업데이트
         historyManager.getCurrentExecution()?.let { currentExecution ->
             statePublisher.emitExecutionUpdateAsync(currentExecution)
         }
-        
+
         return tree
     }
     
@@ -278,7 +282,8 @@ class OrchestrationCoordinator(
     ): ExecutionResult {
         val rootNodesInfo = rawTree.rootNodes.joinToString(", ") { "${it.layerName}.${it.function}" }
         logger.info("🌳 [OrchestrationCoordinator] 실행 트리: 루트 노드 ${rawTree.rootNodes.size}개 [$rootNodesInfo]")
-        
+        statePublisher.emitProgressAsync(executionId, ExecutionPhase.TREE_VALIDATION, "🔍 실행 계획 검증 중...", 50, System.currentTimeMillis() - startTime)
+
         // 트리 검증 및 자동 수정
         val validationStartTime = System.currentTimeMillis()
         val validator = ExecutionTreeValidator(allDescriptions)
@@ -311,13 +316,15 @@ class OrchestrationCoordinator(
         
         // 트리 실행
         logger.info("🚀 [OrchestrationCoordinator] 트리 실행 시작...")
-        
+        statePublisher.emitProgressAsync(executionId, ExecutionPhase.TREE_EXECUTION, "⚡ 작업 실행 중...", 60, System.currentTimeMillis() - startTime)
+
         val executionStartTime = System.currentTimeMillis()
         val executionContext = historyManager.getCurrentExecution()!!
         val result = treeExecutor.executeTree(treeToExecute, executionContext)
-        
+
         val executionDuration = System.currentTimeMillis() - executionStartTime
         logger.perf("⏱️ [PERF] 트리 실행 완료: ${executionDuration}ms")
+        statePublisher.emitProgressAsync(executionId, ExecutionPhase.RESULT_EVALUATION, "📊 결과 평가 중...", 80, System.currentTimeMillis() - startTime)
         
         // 로그 타이밍 문제 해결: perf 로그 후 즉시 UI 업데이트
         historyManager.getCurrentExecution()?.let { currentExecution ->
@@ -363,7 +370,11 @@ class OrchestrationCoordinator(
         val statusText = if (evaluation.isSatisfactory) "✅ 요구사항 부합" else "⚠️ 요구사항 미부합"
         val reasonText = evaluation.reason.take(100) // 너무 긴 이유는 자름
         logger.info("📊 [OrchestrationCoordinator] 평가 결과: $statusText - $reasonText")
-        
+
+        if (evaluation.isSatisfactory) {
+            statePublisher.emitProgressAsync(executionId, ExecutionPhase.COMPLETED, "✅ 완료", 100, System.currentTimeMillis() - startTime)
+        }
+
         return evaluation
     }
     

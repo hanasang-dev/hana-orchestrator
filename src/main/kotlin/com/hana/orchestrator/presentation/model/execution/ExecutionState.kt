@@ -28,3 +28,26 @@ data class ExecutionUpdateMessage(
     val history: List<ExecutionState>,
     val current: ExecutionState? = null
 )
+
+/**
+ * 실시간 진행 상태 표시용 모델
+ */
+@Serializable
+data class ProgressUpdate(
+    val executionId: String,
+    val phase: ExecutionPhase,
+    val message: String,
+    val progress: Int = 0,  // 0-100
+    val elapsedMs: Long = 0
+)
+
+@Serializable
+enum class ExecutionPhase {
+    STARTING,           // 시작
+    TREE_CREATION,      // 실행 트리 생성
+    TREE_VALIDATION,    // 트리 검증
+    TREE_EXECUTION,     // 트리 실행
+    RESULT_EVALUATION,  // 결과 평가
+    COMPLETED,          // 완료
+    FAILED              // 실패
+}
