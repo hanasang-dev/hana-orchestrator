@@ -520,6 +520,67 @@ function deleteSelectedNode() {
     hideContextMenu();
 }
 
+// ── 트리 저장 / 불러오기 ──
+async function saveTree() {
+    const tree = elementsToTree();
+    if (!tree || tree.rootNodes.length === 0) { alert('저장할 트리가 없습니다.'); return; }
+    const name = prompt('저장할 이름을 입력하세요:', treeEditorQuery.slice(0, 30) || 'my-tree');
+    if (!name) return;
+    try {
+        const res = await fetch('/trees/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, query: treeEditorQuery, tree })
+        });
+        const data = await res.json();
+        if (data.success) alert(`✅ "${name}" 으로 저장되었습니다.`);
+        else alert('저장 실패: ' + (data.error || '알 수 없는 오류'));
+    } catch (e) {
+        alert('저장 실패: ' + e.message);
+    }
+}
+
+async function loadTreeModal() {
+    const modal = document.getElementById('loadTreeModal');
+    const listEl = document.getElementById('savedTreeList');
+    modal.style.display = 'flex';
+    listEl.innerHTML = '<div style="padding:20px; color:#666; text-align:center;">⏳ 불러오는 중...</div>';
+    try {
+        const res = await fetch('/trees');
+        const trees = await res.json();
+        if (!trees.length) {
+            listEl.innerHTML = '<div style="padding:20px; color:#999; text-align:center;">저장된 트리가 없습니다.</div>';
+            return;
+        }
+        listEl.innerHTML = trees.map(t => `
+            <div onclick="loadTree('${t.name}')" style="padding:12px 16px; border:1px solid #e0e0e0; border-radius:8px; margin-bottom:8px; cursor:pointer; hover:background:#f5f5f5;">
+                <div style="font-weight:600; font-size:14px;">📄 ${t.name}</div>
+                <div style="font-size:12px; color:#666; margin-top:4px;">${t.query ? t.query.slice(0, 60) + (t.query.length > 60 ? '...' : '') : ''}</div>
+                <div style="font-size:11px; color:#999; margin-top:2px;">${new Date(t.savedAt).toLocaleString()}</div>
+            </div>
+        `).join('');
+    } catch (e) {
+        listEl.innerHTML = '<div style="padding:20px; color:#c00;">불러오기 실패: ' + e.message + '</div>';
+    }
+}
+
+async function loadTree(name) {
+    try {
+        const res = await fetch(`/trees/${name}`);
+        const saved = await res.json();
+        treeEditorQuery = saved.query || '';
+        document.getElementById('treeModalQuery').textContent = treeEditorQuery || '쿼리 정보 없음';
+        initCytoscape(saved.tree);
+        closeLoadTreeModal();
+    } catch (e) {
+        alert('트리 로드 실패: ' + e.message);
+    }
+}
+
+function closeLoadTreeModal() {
+    document.getElementById('loadTreeModal').style.display = 'none';
+}
+
 // ── LLM 검토 ──
 async function reviewTree() {
     const tree = elementsToTree();

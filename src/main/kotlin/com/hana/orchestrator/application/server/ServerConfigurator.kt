@@ -8,6 +8,7 @@ import com.hana.orchestrator.presentation.controller.HealthController
 import com.hana.orchestrator.presentation.controller.LayerController
 import com.hana.orchestrator.presentation.controller.ServiceController
 import com.hana.orchestrator.presentation.controller.ExecutionWebSocketController
+import com.hana.orchestrator.orchestrator.TreeRepository
 import com.hana.orchestrator.presentation.controller.TreeController
 import com.hana.orchestrator.service.ServiceInfo
 import io.ktor.serialization.kotlinx.json.*
@@ -72,7 +73,7 @@ class ServerConfigurator(
                 ChatController(orchestrator, lifecycleManager).configureRoutes(this)
                 LayerController(orchestrator, lifecycleManager).configureRoutes(this)
                 ExecutionWebSocketController(orchestrator).configureRoutes(this)
-                TreeController(orchestrator).configureRoutes(this)
+                TreeController(orchestrator, TreeRepository()).configureRoutes(this)
                 ApprovalController(orchestrator.approvalGate).configureRoutes(this)
             }
         }
