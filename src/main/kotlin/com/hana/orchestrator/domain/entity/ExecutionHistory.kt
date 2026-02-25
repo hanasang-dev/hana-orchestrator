@@ -1,5 +1,6 @@
 package com.hana.orchestrator.domain.entity
 
+import com.hana.orchestrator.presentation.model.execution.ExecutionTreeResponse
 import kotlinx.serialization.Serializable
 
 /**
@@ -15,7 +16,8 @@ data class ExecutionHistory(
     val startTime: Long,
     val endTime: Long? = null,
     val status: ExecutionStatus,
-    val logs: MutableList<String> = mutableListOf()
+    val logs: MutableList<String> = mutableListOf(),
+    val executionTree: ExecutionTreeResponse? = null   // ReAct 미니트리 체인 (직렬화 가능)
 ) {
     companion object {
         /**
@@ -42,7 +44,8 @@ data class ExecutionHistory(
             result: ExecutionResult,
             startTime: Long,
             endTime: Long = System.currentTimeMillis(),
-            logs: MutableList<String> = mutableListOf()
+            logs: MutableList<String> = mutableListOf(),
+            executionTree: ExecutionTreeResponse? = null
         ): ExecutionHistory {
             val status = determineStatusFromResult(result)
             return ExecutionHistory(
@@ -52,7 +55,8 @@ data class ExecutionHistory(
                 startTime = startTime,
                 endTime = endTime,
                 status = status,
-                logs = logs
+                logs = logs,
+                executionTree = executionTree
             )
         }
         

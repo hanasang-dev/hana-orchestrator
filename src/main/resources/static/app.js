@@ -29,9 +29,7 @@ let treeEditorLayers = [];      // 팔레트용 레이어 목록
 let selectedNodeId = null;      // 우클릭/선택된 노드 id
 let nodeCounter = 0;            // 신규 노드 id 채번
 
-let lastReActTree = null;       // 마지막 ReAct 실행 결과 트리 (실행이력 연결 전 임시 보관)
 let lastUserMessage = '';       // 마지막 사용자 메시지
-let reActTreeByExecId = {};     // execId → { tree, query } — 저장 대기 중인 ReAct 트리
 let hoveredEdgeId = null;       // 호버 중인 엣지 id
 let edgeHideTimeout = null;     // 엣지 X버튼 hide 딜레이 타이머
 let currentNodeResults = {};    // 현재 트리의 노드 실행 결과 (P3)
@@ -567,52 +565,24 @@ function deleteSelectedNode() {
 }
 
 // ── 트리 저장 / 불러오기 ──
-// ── ReAct 트리 → 실행이력 아이템 연결 ──
 
-/** lastReActTree를 query 매칭으로 실행이력 아이템에 연결 */
-function linkPendingReActTree(executions) {
-    if (!lastReActTree || !lastUserMessage) return;
-    const match = executions.find(e => e.query === lastUserMessage && !e.executionTree);
-    if (!match) return;
-    reActTreeByExecId[match.id] = { tree: lastReActTree, query: lastUserMessage };
-    lastReActTree = null;
-    // 이미 DOM에 렌더된 아이템이 있으면 저장 버튼 삽입
-    const item = document.querySelector(`.execution-item[data-id="${match.id}"]`);
-    if (item) injectSaveTreeBtn(item, match.id);
-}
-
-/** 실행이력 아이템 DOM에 저장 인라인 UI를 삽입 */
-function injectSaveTreeBtn(item, execId) {
-    if (item.querySelector('.save-exec-tree-btn')) return; // 중복 방지
-    const entry = reActTreeByExecId[execId];
-    if (!entry) return;
-    const meta = item.querySelector('.execution-meta');
-    if (!meta) return;
-    const wrap = document.createElement('span');
-    wrap.className = 'save-exec-tree-wrap';
-    wrap.innerHTML = `<input class="save-exec-tree-name" placeholder="트리 이름..." value="${escapeHtml(entry.query.slice(0, 40))}"><button class="save-exec-tree-btn">💾 저장</button>`;
-    meta.appendChild(wrap);
-    wrap.querySelector('.save-exec-tree-btn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        saveExecTree(execId, wrap);
-    });
-}
-
-async function saveExecTree(execId, wrap) {
-    const entry = reActTreeByExecId[execId];
-    if (!entry) return;
-    const nameInput = wrap.querySelector('.save-exec-tree-name');
-    const name = (nameInput?.value || '').trim() || entry.query.slice(0, 40) || 'react-tree';
+/** 실행이력의 executionTree를 저장 (btn: 클릭된 버튼 엘리먼트) */
+async function saveExecTree(execId, btn) {
+    const item = btn?.closest('.execution-item');
+    const nameInput = item?.querySelector('.exec-save-name');
+    const execData = findExecutionData(execId);
+    if (!execData?.executionTree) { alert('저장할 트리가 없습니다.'); return; }
+    const name = (nameInput?.value || '').trim() || (execData.query || '').slice(0, 40) || 'react-tree';
     try {
         const res = await fetch('/trees/save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, query: entry.query, tree: entry.tree })
+            body: JSON.stringify({ name, query: execData.query, tree: execData.executionTree })
         });
         const data = await res.json();
         if (data.success) {
-            delete reActTreeByExecId[execId];
-            wrap.innerHTML = `<span class="save-exec-tree-done">✅ 저장됨</span>`;
+            const saveRow = btn?.closest('.exec-save-row');
+            if (saveRow) saveRow.innerHTML = `<span class="exec-save-done">✅ "${escapeHtml(name)}" 저장됨</span>`;
         } else {
             alert('저장 실패: ' + (data.error || '알 수 없는 오류'));
         }
@@ -853,10 +823,6 @@ document.getElementById('chatForm').addEventListener('submit', async (e) => {
             }
             chatStatus.textContent = '실행 완료';
 
-            // ReAct 트리 임시 보관 → loadExecutions() 이후 실행이력 아이템에 연결
-            lastReActTree = (result.tree && result.tree.rootNodes?.length > 0)
-                ? result.tree : null;
-
             // 실행 이력 새로고침
             loadExecutions();
         }
@@ -1070,8 +1036,6 @@ function updateExecutionsUI(data) {
         window.executionDataCache = new Map();
         ordered.forEach(exec => window.executionDataCache.set(exec.id, exec));
     }
-
-    linkPendingReActTree(ordered);
 }
 
 function patchExecutionItem(item, exec, isCurrent) {
@@ -1088,10 +1052,6 @@ function patchExecutionItem(item, exec, isCurrent) {
     const meta = item.querySelector('.execution-meta');
     if (meta) {
         meta.innerHTML = `<span>${timeStr}</span>${duration ? `<span>${duration}</span>` : ''}<span class="status-badge status-${statusClass}">${statusText}</span>${exec.executionTree ? `<button class="tree-view-btn" data-exec-id="${exec.id}">🌳 트리 보기</button>` : ''}`;
-        // 저장 대기 중인 ReAct 트리가 있으면 버튼 재삽입
-        if (reActTreeByExecId[exec.id] && !meta.querySelector('.save-exec-tree-btn')) {
-            injectSaveTreeBtn(item, exec.id);
-        }
 
         // 버튼 이벤트 리스너 재연결
         const treeViewBtn = meta.querySelector('.tree-view-btn');
@@ -1104,6 +1064,21 @@ function patchExecutionItem(item, exec, isCurrent) {
                 }
             });
         }
+    }
+    // 실행이력에 트리가 있으면 저장 행 추가 (없으면 제거)
+    const saveRowId = `exec-save-row-${exec.id}`;
+    let saveRow = item.querySelector(`#${saveRowId}`);
+    if (exec.executionTree && !saveRow) {
+        const header = item.querySelector('.execution-header > div');
+        if (header) {
+            const row = document.createElement('div');
+            row.id = saveRowId;
+            row.className = 'exec-save-row';
+            row.innerHTML = `<input class="exec-save-name" placeholder="트리 이름..." value="${escapeHtml((exec.query || '').slice(0, 40))}"><button class="exec-save-btn" onclick="event.stopPropagation();saveExecTree('${exec.id}',this)">💾 저장</button>`;
+            header.appendChild(row);
+        }
+    } else if (!exec.executionTree && saveRow) {
+        saveRow.remove();
     }
     const nodeStats = item.querySelector('.node-stats');
     if (nodeStats) nodeStats.innerHTML = formatNodeStats(exec);
@@ -1219,7 +1194,6 @@ async function loadExecutions() {
         }
         
         updateExecutionsUI(data);
-        linkPendingReActTree(data.history || []);
     } catch (error) {
         console.error('실행 이력 로드 오류:', error);
         executionsList.innerHTML = `<div class="message error">실행 이력을 불러오는 중 오류가 발생했습니다: ${error.message}</div>`;
@@ -1431,6 +1405,7 @@ function renderExecution(exec, isCurrent) {
                         ${exec.executionTree ? `<button class="tree-view-btn" data-exec-id="${exec.id}">🌳 트리 보기</button>` : ''}
                     </div>
                     <div class="node-stats">${formatNodeStats(exec)}</div>
+                    ${exec.executionTree ? `<div id="exec-save-row-${exec.id}" class="exec-save-row"><input class="exec-save-name" placeholder="트리 이름..." value="${escapeHtml((exec.query || '').slice(0, 40))}"><button class="exec-save-btn" onclick="event.stopPropagation();saveExecTree('${exec.id}',this)">💾 저장</button></div>` : ''}
                 </div>
             </div>
             <div class="execution-details" id="details-${exec.id}">

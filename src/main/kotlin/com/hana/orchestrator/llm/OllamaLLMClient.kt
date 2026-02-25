@@ -421,6 +421,7 @@ class OllamaLLMClient(
 
     /**
      * ReAct 루프: 다음 액션 결정 (스텝 히스토리 + 레이어 목록 기반)
+     * JSON Schema 강제: execute_tree(미니트리) 또는 finish
      */
     override suspend fun decideNextAction(
         query: String,
@@ -428,9 +429,12 @@ class OllamaLLMClient(
         layerDescriptions: List<LayerDescription>
     ): ReActDecision {
         val prompt = promptBuilder.buildReActPrompt(query, stepHistory, layerDescriptions)
+        val availableLayerNames = layerDescriptions.map { it.name }
+        val schema = JsonSchemaBuilder.buildReActDecisionSchema(availableLayerNames)
         logger.info("🤔 [ReAct] LLM 결정 요청 (스텝 ${stepHistory.size + 1})")
         return callLLM(
             prompt = prompt,
+            schema = schema,
             responseParser = { jsonText ->
                 jsonConfig.decodeFromString<ReActDecision>(jsonText)
             },

@@ -256,4 +256,25 @@ internal object JsonSchemaBuilder {
             )
         )
     }
+
+    /**
+     * ReActDecision에 대한 JSON Schema
+     * execute_tree: 미니트리를 실행 (TreeExecutor 위임)
+     * finish: 최종 결과 반환
+     * buildExecutionTreeSchema()를 재사용하여 DRY 원칙 준수
+     */
+    fun buildReActDecisionSchema(availableLayerNames: List<String>): JsonObject {
+        return createObjectSchema(
+            required = listOf("action", "reasoning"),
+            properties = mapOf(
+                "action" to createStringProperty(
+                    description = "수행할 액션: execute_tree(미니트리 실행) 또는 finish(완료)",
+                    enum = listOf("execute_tree", "finish")
+                ),
+                "tree" to buildExecutionTreeSchema(availableLayerNames),
+                "result" to createStringProperty("finish 시 최종 결과"),
+                "reasoning" to createStringProperty("이 결정의 이유")
+            )
+        )
+    }
 }

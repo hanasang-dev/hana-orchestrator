@@ -76,7 +76,8 @@ class Orchestrator(
             layerManager = layerManager,
             historyManager = historyManager,
             statePublisher = statePublisher,
-            modelSelectionStrategy = modelSelectionStrategy
+            modelSelectionStrategy = modelSelectionStrategy,
+            treeExecutor = treeExecutor
         )
         
         logger.info("🚀 [Orchestrator] 초기화 시작...")
@@ -164,13 +165,16 @@ class Orchestrator(
 
         return try {
             val result = reactiveExecutor.execute(query, executionId, startTime)
+            val reactTree = ReActTreeConverter.convert(result.stepHistory)
             val history = if (result.error != null && result.result.isEmpty()) {
                 com.hana.orchestrator.domain.entity.ExecutionHistory.createFailed(
                     executionId, query, result.error, startTime, logs = historyManager.getCurrentLogs()
                 )
             } else {
                 com.hana.orchestrator.domain.entity.ExecutionHistory.createCompleted(
-                    executionId, query, result, startTime, logs = historyManager.getCurrentLogs()
+                    executionId, query, result, startTime,
+                    logs = historyManager.getCurrentLogs(),
+                    executionTree = reactTree
                 )
             }
             historyManager.addHistory(history)

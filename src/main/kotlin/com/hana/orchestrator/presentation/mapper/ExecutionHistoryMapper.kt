@@ -25,7 +25,9 @@ object ExecutionHistoryMapper {
      */
     fun ExecutionHistory.toExecutionHistoryResponse(): ExecutionHistoryResponse {
         val state = createExecutionState(this)
-        val tree = this.result.executionTree?.toResponse()
+        // ReAct: executionTree 직접 저장 (직렬화됨)
+        // Tree 모드(레거시): result.executionTree @Transient fallback
+        val tree = this.executionTree ?: this.result.executionTree?.toResponse()
         return ExecutionHistoryResponse(
             id = state.id,
             query = state.query,
@@ -49,7 +51,7 @@ object ExecutionHistoryMapper {
      */
     private fun createExecutionState(history: ExecutionHistory): ExecutionState {
         val context = history.result.context
-        val tree = history.result.executionTree?.toResponse()
+        val tree = history.executionTree ?: history.result.executionTree?.toResponse()
         val nodeResults = context?.getAllResults()?.mapValues { (_, nr) ->
             NodeResultState(
                 nodeId = nr.nodeId,

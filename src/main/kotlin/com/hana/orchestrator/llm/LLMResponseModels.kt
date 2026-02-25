@@ -1,7 +1,8 @@
 package com.hana.orchestrator.llm
 
 import com.hana.orchestrator.domain.entity.ExecutionTree
-import com.hana.orchestrator.data.model.response.ExecutionTreeResponse
+import com.hana.orchestrator.data.model.response.ExecutionTreeResponse as LLMTreeResponse
+import com.hana.orchestrator.presentation.model.execution.ExecutionTreeResponse as PresentationTreeResponse
 import kotlinx.serialization.Serializable
 
 /**
@@ -31,7 +32,7 @@ data class RetryStrategy(
 internal data class RetryStrategyResponse(
     val shouldStop: Boolean,
     val reason: String = "",  // 기본값 제공 (LLM이 누락할 수 있음)
-    val newTree: ExecutionTreeResponse? = null  // shouldStop=true일 때는 null 가능
+    val newTree: LLMTreeResponse? = null  // shouldStop=true일 때는 null 가능
 )
 
 /**
@@ -73,41 +74,25 @@ data class TreeReview(
 
 /**
  * ReAct 루프의 단일 스텝 히스토리
+ * tree: 이 스텝에서 실행한 미니트리 (presentation 포맷 — id 포함, UI 표시/저장용)
  */
 @Serializable
 data class ReActStep(
     val stepNumber: Int,
     val reasoning: String,
-    val layerName: String,
-    val function: String,
-    val args: Map<String, String> = emptyMap(),
-    val calls: List<LayerCall> = emptyList(),  // call_parallel 스텝일 때 채워짐
+    val tree: PresentationTreeResponse? = null,
     val result: String
 )
 
 /**
- * call_parallel 액션에서 사용하는 단일 레이어 호출 명세
- */
-@Serializable
-data class LayerCall(
-    val layerName: String,
-    val function: String,
-    val args: Map<String, String> = emptyMap()
-)
-
-/**
  * LLM이 결정한 다음 ReAct 액션
- * action == "call_layer"    : layerName/function/args 사용 (단일 순차 실행)
- * action == "call_parallel" : calls 사용 (여러 레이어 동시 실행)
- * action == "finish"        : result 사용 (최종 답변)
+ * action == "execute_tree" : tree (미니트리) 실행 — TreeExecutor 위임
+ * action == "finish"       : result 사용 (최종 답변)
  */
 @Serializable
 data class ReActDecision(
-    val action: String,                        // "call_layer" | "call_parallel" | "finish"
-    val layerName: String = "",                // call_layer 전용
-    val function: String = "",                 // call_layer 전용
-    val args: Map<String, String> = emptyMap(), // call_layer 전용
-    val calls: List<LayerCall> = emptyList(),   // call_parallel 전용
+    val action: String,                        // "execute_tree" | "finish"
+    val tree: LLMTreeResponse? = null,         // execute_tree 전용 미니트리 (LLM JSON 파싱용)
     val result: String = "",                   // finish 전용 최종 결과
     val reasoning: String = ""
 )

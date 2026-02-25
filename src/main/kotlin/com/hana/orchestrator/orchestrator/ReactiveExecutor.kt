@@ -1,35 +1,35 @@
 package com.hana.orchestrator.orchestrator
 
+import com.hana.orchestrator.data.mapper.ExecutionTreeMapper
 import com.hana.orchestrator.domain.entity.ExecutionResult
 import com.hana.orchestrator.llm.ReActStep
 import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 import com.hana.orchestrator.llm.useSuspend
+import com.hana.orchestrator.presentation.mapper.ExecutionTreeMapper as PresentationMapper
 import com.hana.orchestrator.presentation.model.execution.ExecutionPhase
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 
 /**
  * ReAct(Reasoning + Acting) 루프 실행기
  * SRP: LLM-guided 단계별 실행 책임만 담당
  *
- * 지원 액션:
- * - call_layer    : 단일 레이어 함수 순차 호출
- * - call_parallel : 여러 레이어 함수 동시 호출 (coroutineScope + async/awaitAll)
- * - finish        : 루프 종료 및 최종 결과 반환
+ * 각 스텝에서 LLM이 미니트리를 결정 → TreeExecutor가 실행 → 결과 누적
+ * action:
+ * - execute_tree : LLM이 미니트리 생성 → TreeExecutor.executeTree() 위임 (플레이스홀더/병렬 지원)
+ * - finish       : 루프 종료 및 최종 결과 반환
  */
 class ReactiveExecutor(
     private val layerManager: LayerManager,
     private val historyManager: ExecutionHistoryManager,
     private val statePublisher: ExecutionStatePublisher,
-    private val modelSelectionStrategy: ModelSelectionStrategy
+    private val modelSelectionStrategy: ModelSelectionStrategy,
+    private val treeExecutor: TreeExecutor
 ) {
     private val maxSteps = 15
     private val logger = createOrchestratorLogger(ReactiveExecutor::class.java, historyManager)
 
     /**
      * ReAct 루프 실행
-     * 최대 maxSteps 반복. 각 스텝에서 LLM이 액션 결정 → 실행 → 관찰 → 반복
+     * 최대 maxSteps 반복. 각 스텝에서 LLM이 미니트리 결정 → TreeExecutor 실행 → 결과 관찰 → 반복
      */
     suspend fun execute(
         query: String,
@@ -59,7 +59,7 @@ class ReactiveExecutor(
 
             logger.info("🤔 [ReAct] 스텝 #$step 결정: action=${decision.action}, reasoning=${decision.reasoning.take(80)}")
 
-            val stepResult = when (decision.action) {
+            when (decision.action) {
                 "finish" -> {
                     val finalResult = decision.result.ifEmpty {
                         stepHistory.lastOrNull()?.result ?: "작업 완료"
@@ -73,45 +73,43 @@ class ReactiveExecutor(
                     return ExecutionResult(result = finalResult, stepHistory = stepHistory.toList())
                 }
 
-                "call_layer" -> {
-                    val args: Map<String, Any> = decision.args
-                    try {
-                        layerManager.executeOnLayer(decision.layerName, decision.function, args)
-                    } catch (e: Exception) {
-                        val errMsg = "ERROR(${decision.layerName}.${decision.function}): ${e.message}"
-                        logger.warn("⚠️ [ReAct] 스텝 #$step 레이어 오류: $errMsg")
-                        errMsg
-                    }.also { result ->
-                        logger.info("📋 [ReAct] 스텝 #$step 결과: ${result.take(120)}")
-                        historyManager.addLogToCurrent("📋 ${decision.layerName}.${decision.function}: ${result.take(60)}")
+                "execute_tree" -> {
+                    val llmTree = decision.tree
+                    if (llmTree == null) {
+                        logger.warn("⚠️ [ReAct] execute_tree: tree is null, 스킵")
+                        stepHistory.add(ReActStep(step, decision.reasoning, null, "(tree is null)"))
+                        continue
                     }
-                }
 
-                "call_parallel" -> {
-                    if (decision.calls.isEmpty()) {
-                        logger.warn("⚠️ [ReAct] call_parallel calls 비어있음, 스킵")
-                        "(병렬 호출 목록 없음)"
-                    } else {
-                        logger.info("⚡ [ReAct] 스텝 #$step 병렬 실행 ${decision.calls.size}개")
-                        historyManager.addLogToCurrent("⚡ 병렬 실행 ${decision.calls.size}개")
-                        val results = coroutineScope {
-                            decision.calls.map { call ->
-                                async {
-                                    try {
-                                        layerManager.executeOnLayer(call.layerName, call.function, call.args)
-                                    } catch (e: Exception) {
-                                        "ERROR(${call.layerName}.${call.function}): ${e.message}"
-                                    }
-                                }
-                            }.awaitAll()
-                        }
-                        results.mapIndexed { i, r ->
-                            val callDesc = decision.calls[i].let { "${it.layerName}.${it.function}" }
-                            "[$callDesc]: ${r.take(200)}"
-                        }.joinToString("\n").also { combined ->
-                            logger.info("📋 [ReAct] 스텝 #$step 병렬 결과:\n${combined.take(300)}")
-                        }
+                    // LLM 트리(data layer) → 도메인 트리 변환 (id 자동 생성 포함)
+                    val domainTree = try {
+                        ExecutionTreeMapper.toExecutionTree(llmTree)
+                    } catch (e: Exception) {
+                        logger.warn("⚠️ [ReAct] 미니트리 변환 실패: ${e.message}")
+                        stepHistory.add(ReActStep(step, decision.reasoning, null, "ERROR(tree-convert): ${e.message}"))
+                        continue
                     }
+
+                    val treeDesc = domainTree.rootNodes.joinToString(", ") { "${it.layerName}.${it.function}" }
+                    logger.info("🌳 [ReAct] 스텝 #$step 미니트리 실행: [$treeDesc]")
+                    historyManager.addLogToCurrent("🌳 미니트리: [$treeDesc]")
+
+                    // TreeExecutor로 미니트리 실행 (플레이스홀더 해석, 병렬/순차 지원)
+                    val stepResult = try {
+                        val currentHistory = historyManager.getCurrentExecution()!!
+                        treeExecutor.executeTree(domainTree, currentHistory).result
+                    } catch (e: Exception) {
+                        val errMsg = "ERROR(mini-tree): ${e.message}"
+                        logger.warn("⚠️ [ReAct] 스텝 #$step 미니트리 오류: $errMsg")
+                        errMsg
+                    }
+
+                    logger.info("📋 [ReAct] 스텝 #$step 결과: ${stepResult.take(120)}")
+                    historyManager.addLogToCurrent("📋 결과: ${stepResult.take(60)}")
+
+                    // 도메인 트리 → presentation 트리 (id 포함, UI 표시/저장용)
+                    val presentationTree = with(PresentationMapper) { domainTree.toResponse() }
+                    stepHistory.add(ReActStep(step, decision.reasoning, presentationTree, stepResult))
                 }
 
                 else -> {
@@ -122,27 +120,6 @@ class ReactiveExecutor(
                     )
                 }
             }
-
-            // 스텝 기록 — call_layer/call_parallel 공통
-            val stepLayerName = when (decision.action) {
-                "call_parallel" -> "parallel(${decision.calls.size})"
-                else -> decision.layerName
-            }
-            val stepFunction = when (decision.action) {
-                "call_parallel" -> decision.calls.joinToString("+") { it.function }
-                else -> decision.function
-            }
-            stepHistory.add(
-                ReActStep(
-                    stepNumber = step,
-                    reasoning = decision.reasoning,
-                    layerName = stepLayerName,
-                    function = stepFunction,
-                    args = decision.args,
-                    calls = if (decision.action == "call_parallel") decision.calls else emptyList(),
-                    result = stepResult
-                )
-            )
         }
 
         // 최대 스텝 도달 — 마지막 결과로 반환

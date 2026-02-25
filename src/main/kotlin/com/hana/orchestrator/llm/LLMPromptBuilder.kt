@@ -363,8 +363,8 @@ $JSON_RULES
             "아직 수행한 작업 없음"
         } else {
             stepHistory.joinToString("\n") { step ->
-                val argsStr = step.args.entries.joinToString(", ") { "${it.key}=${it.value}" }
-                "스텝 ${step.stepNumber}: ${step.layerName}.${step.function}($argsStr)\n  → 결과: ${step.result.take(300)}"
+                val treeDesc = step.tree?.rootNodes?.joinToString(", ") { "${it.layerName}.${it.function}" } ?: "(알 수 없음)"
+                "스텝 ${step.stepNumber}: 미니트리 [$treeDesc]\n  → 결과: ${step.result.take(300)}"
             }
         }
 
@@ -383,20 +383,23 @@ $alreadyDoneNote
 
 결정 규칙 (반드시 순서대로 확인):
 1. 위 히스토리에 목표 달성에 필요한 정보가 이미 모두 있는가? → 있으면 즉시 finish
-2. 독립적으로 동시에 실행 가능한 작업이 2개 이상 남아있는가? → call_parallel
-3. 그 외 단일 작업이 필요한가? → call_layer
+2. 독립적으로 동시에 실행 가능한 작업이 2개 이상 있는가? → execute_tree에 rootNodes를 병렬로 구성 (parallel: true)
+3. 그 외 단일 작업이 필요한가? → execute_tree에 rootNodes 1개
 
 $JSON_RULES
 
 반드시 다음 JSON 형식 중 하나로만 응답하세요. 다른 텍스트는 포함하지 마세요.
 
-단일 레이어 호출:
-{"action":"call_layer","layerName":"레이어이름","function":"함수이름","args":{"파라미터명":"값"},"reasoning":"이유"}
+미니트리 실행 (단일 또는 병렬):
+{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"레이어이름","function":"함수이름","args":{"파라미터":"값"},"parallel":false,"children":[]}]},"reasoning":"이유"}
 
-병렬 호출 (독립적인 작업 여러 개를 동시에 실행):
-{"action":"call_parallel","calls":[{"layerName":"레이어1","function":"함수1","args":{"k":"v"}},{"layerName":"레이어2","function":"함수2","args":{}}],"reasoning":"이유"}
+병렬 실행 (독립 작업 여러 개):
+{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"레이어1","function":"함수1","args":{},"parallel":true,"children":[]},{"layerName":"레이어2","function":"함수2","args":{},"parallel":true,"children":[]}]},"reasoning":"이유"}
 
-목표 달성 (이미 필요한 정보를 모두 얻었을 때):
+부모→자식 순차 실행 (앞 결과가 다음에 필요한 경우):
+{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"레이어1","function":"함수1","args":{},"parallel":false,"children":[{"layerName":"레이어2","function":"함수2","args":{"input":"{{parent}}"},"parallel":false,"children":[]}]}]},"reasoning":"이유"}
+
+목표 달성:
 {"action":"finish","result":"최종 결과 내용","reasoning":"완료 이유"}""".trimIndent()
     }
 
