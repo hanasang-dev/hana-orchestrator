@@ -8,6 +8,7 @@ import com.hana.orchestrator.presentation.mapper.ExecutionHistoryMapper.toExecut
 import com.hana.orchestrator.presentation.model.chat.ChatRequest
 import com.hana.orchestrator.presentation.model.execution.ExecutionHistoryListResponse
 import com.hana.orchestrator.presentation.model.layer.RegisterRemoteLayerResponse
+import io.ktor.http.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
@@ -151,10 +152,10 @@ class LayerController(
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 50
                 val history = orchestrator.getExecutionHistory(limit)
                 val current = orchestrator.getCurrentExecution()
-                
+
                 val historyResponse = history.map { it.toExecutionHistoryResponse() }
                 val currentResponse = current?.toExecutionHistoryResponse()
-                
+
                 call.respond(ExecutionHistoryListResponse(
                     history = historyResponse,
                     current = currentResponse
@@ -163,6 +164,14 @@ class LayerController(
                 call.respond(mapOf("error" to e.message))
             }
         }
-        
+
+        // 실행 이력 삭제 엔드포인트
+        route.delete("/executions/{id}") {
+            val id = call.parameters["id"]
+                ?: return@delete call.respond(HttpStatusCode.BadRequest, mapOf("error" to "id required"))
+            orchestrator.deleteExecution(id)
+            call.respond(mapOf("success" to true))
+        }
+
     }
 }

@@ -22,6 +22,11 @@ class HistoryRepository(
         tmp.renameTo(target)
     }
 
+    fun delete(id: String): Boolean {
+        val file = File(baseDir, "$id.json")
+        return file.exists() && file.delete()
+    }
+
     fun loadRecent(limit: Int = 50): List<ExecutionHistory> =
         baseDir.listFiles { f -> f.name.endsWith(".json") }
             ?.sortedByDescending { it.lastModified() }

@@ -579,7 +579,9 @@ textarea:disabled {
    ───────────────────────────────────────────── */
 .execution-item {
     background: var(--bg);
-    padding: 12px 14px;
+    position: relative;
+    overflow: hidden;
+    padding: 0;           /* padding → .swipe-inner로 이동 */
     border-radius: var(--radius);
     margin-bottom: 8px;
     border-left: 3px solid var(--border);
@@ -587,7 +589,6 @@ textarea:disabled {
     transition: background 0.15s, border-color 0.15s;
     width: 100%;
     box-sizing: border-box;
-    overflow-wrap: break-word;
 }
 
 .execution-item:hover { background: #eef0f6; }
@@ -1155,6 +1156,8 @@ textarea:disabled {
 
 /* 트리 보기 버튼 (실행이력) */
 .tree-view-btn {
+    display: inline-block;
+    margin-top: 6px;
     padding: 3px 10px;
     background: var(--primary-light);
     color: var(--primary);
@@ -1163,45 +1166,9 @@ textarea:disabled {
     cursor: pointer;
     font-size: 11px;
     font-weight: 600;
-    margin-left: 6px;
 }
 
 .tree-view-btn:hover { background: var(--primary); color: white; }
-
-/* 실행이력 트리 저장 행 */
-.exec-save-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 6px;
-}
-
-.exec-save-name {
-    padding: 3px 8px;
-    font-size: 11px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    outline: none;
-    width: 160px;
-    color: var(--text-1);
-    background: var(--surface);
-}
-
-.exec-save-name:focus { border-color: var(--primary); }
-
-.exec-save-btn {
-    padding: 3px 10px;
-    font-size: 11px;
-    font-weight: 600;
-    background: var(--primary-light);
-    color: var(--primary);
-    border: 1px solid var(--primary);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-.exec-save-btn:hover { background: var(--primary); color: white; }
 
 .exec-save-done {
     font-size: 11px;
@@ -1356,3 +1323,81 @@ textarea:disabled {
 
     .section-resize-handle { display: block; }
 }
+
+/* ─────────────────────────────────────────────
+   스와이프 삭제 (실행이력 + 트리 모달)
+   ───────────────────────────────────────────── */
+
+/* 실행이력 swipe-inner: 기존 padding 복원 + 이동 트랜지션 */
+.execution-item > .swipe-inner {
+    padding: 12px 14px;
+    overflow-wrap: break-word;
+    transition: transform 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    will-change: transform;
+}
+
+.execution-item.swiped > .swipe-inner {
+    transform: translateX(-76px);
+}
+
+/* 트리 모달 리스트 아이템 */
+.saved-tree-row {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    margin-bottom: 8px;
+}
+
+.saved-tree-row > .swipe-inner {
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: transform 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    will-change: transform;
+}
+
+.saved-tree-row > .swipe-inner:hover { background: #f5f5f5; }
+
+.saved-tree-row.swiped > .swipe-inner {
+    transform: translateX(-76px);
+}
+
+/* 삭제 버튼 (공통) */
+.swipe-del-btn {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 72px;
+    background: #ef4444;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    gap: 2px;
+    transform: translateX(100%);
+    transition: transform 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    z-index: 2;
+}
+
+.swipe-del-btn span {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+.execution-item.swiped .swipe-del-btn,
+.saved-tree-row.swiped .swipe-del-btn {
+    transform: translateX(0);
+}
+
+.swipe-del-btn:hover  { background: #dc2626; }
+.swipe-del-btn:active { background: #b91c1c; }
+
+/* 마우스 수평 드래그 중 텍스트 선택 방지 */
+.swipe-dragging, .swipe-dragging * { user-select: none !important; cursor: grabbing !important; }

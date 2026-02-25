@@ -9,6 +9,7 @@ import com.hana.orchestrator.domain.entity.ExecutionResult
 import com.hana.orchestrator.llm.ResultEvaluation
 import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 import com.hana.orchestrator.llm.useSuspend
+import com.hana.orchestrator.presentation.mapper.ExecutionTreeMapper
 import com.hana.orchestrator.presentation.model.execution.ExecutionPhase
 
 /**
@@ -206,7 +207,7 @@ class OrchestrationCoordinator(
 
         return try {
             val result = validateAndExecuteTree(tree, query, allDescriptions, executionId, startTime)
-            val history = ExecutionHistory.createCompleted(executionId, query, result, startTime, logs = historyManager.getCurrentLogs())
+            val history = ExecutionHistory.createCompleted(executionId, query, result, startTime, logs = historyManager.getCurrentLogs(), executionTree = result.executionTree?.let { with(ExecutionTreeMapper) { it.toResponse() } })
             historyManager.addHistory(history)
             statePublisher.emitExecutionUpdate(history)
             statePublisher.emitProgressAsync(executionId, ExecutionPhase.COMPLETED, "✅ 완료", 100, System.currentTimeMillis() - startTime)

@@ -92,7 +92,14 @@ class Orchestrator(
     fun getExecutionHistory(limit: Int = 50): List<ExecutionHistory> {
         return historyManager.getExecutionHistory(limit)
     }
-    
+
+    /**
+     * 실행 이력 삭제 (메모리 + 파일)
+     */
+    fun deleteExecution(id: String): Boolean {
+        return historyManager.deleteHistory(id)
+    }
+
     /**
      * 현재 실행 조회
      */

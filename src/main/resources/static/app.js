@@ -627,12 +627,17 @@ async function loadTreeModal() {
             return;
         }
         listEl.innerHTML = trees.map(t => `
-            <div onclick="loadTree('${t.name}')" style="padding:12px 16px; border:1px solid #e0e0e0; border-radius:8px; margin-bottom:8px; cursor:pointer; hover:background:#f5f5f5;">
-                <div style="font-weight:600; font-size:14px;">📄 ${t.name}</div>
-                <div style="font-size:12px; color:#666; margin-top:4px;">${t.query ? t.query.slice(0, 60) + (t.query.length > 60 ? '...' : '') : ''}</div>
-                <div style="font-size:11px; color:#999; margin-top:2px;">${new Date(t.savedAt).toLocaleString()}</div>
+            <div class="saved-tree-row">
+                <div class="swipe-inner" onclick="loadTree('${escapeHtml(t.name)}')">
+                    <div style="font-weight:600; font-size:14px;">📄 ${escapeHtml(t.name)}</div>
+                    <div style="font-size:12px; color:#666; margin-top:4px;">${t.query ? escapeHtml(t.query.slice(0, 60)) + (t.query.length > 60 ? '...' : '') : ''}</div>
+                    <div style="font-size:11px; color:#999; margin-top:2px;">${new Date(t.savedAt).toLocaleString()}</div>
+                </div>
+                <button class="swipe-del-btn" onclick="event.stopPropagation();deleteTree('${escapeHtml(t.name)}',this)">🗑️<span>삭제</span></button>
             </div>
         `).join('');
+        // 스와이프 이벤트 연결
+        listEl.querySelectorAll('.saved-tree-row').forEach(row => attachSwipe(row));
     } catch (e) {
         listEl.innerHTML = '<div style="padding:20px; color:#c00;">불러오기 실패: ' + e.message + '</div>';
     }
@@ -1051,36 +1056,28 @@ function patchExecutionItem(item, exec, isCurrent) {
     
     const meta = item.querySelector('.execution-meta');
     if (meta) {
-        meta.innerHTML = `<span>${timeStr}</span>${duration ? `<span>${duration}</span>` : ''}<span class="status-badge status-${statusClass}">${statusText}</span>${exec.executionTree ? `<button class="tree-view-btn" data-exec-id="${exec.id}">🌳 트리 보기</button>` : ''}`;
+        meta.innerHTML = `<span>${timeStr}</span>${duration ? `<span>${duration}</span>` : ''}<span class="status-badge status-${statusClass}">${statusText}</span>`;
+    }
 
-        // 버튼 이벤트 리스너 재연결
-        const treeViewBtn = meta.querySelector('.tree-view-btn');
-        if (treeViewBtn) {
-            treeViewBtn.addEventListener('click', function(e) {
-                e.stopPropagation();
-                const execData = findExecutionData(exec.id);
-                if (execData && execData.executionTree) {
-                    showTreeVisualization(execData.executionTree, execData.nodeResults);
-                }
-            });
-        }
-    }
-    // 실행이력에 트리가 있으면 저장 행 추가 (없으면 제거)
-    const saveRowId = `exec-save-row-${exec.id}`;
-    let saveRow = item.querySelector(`#${saveRowId}`);
-    if (exec.executionTree && !saveRow) {
-        const header = item.querySelector('.execution-header > div');
-        if (header) {
-            const row = document.createElement('div');
-            row.id = saveRowId;
-            row.className = 'exec-save-row';
-            row.innerHTML = `<input class="exec-save-name" placeholder="트리 이름..." value="${escapeHtml((exec.query || '').slice(0, 40))}"><button class="exec-save-btn" onclick="event.stopPropagation();saveExecTree('${exec.id}',this)">💾 저장</button>`;
-            header.appendChild(row);
-        }
-    } else if (!exec.executionTree && saveRow) {
-        saveRow.remove();
-    }
+    // 트리 보기 버튼: node-stats 아래에 배치 (없으면 추가, 있으면 유지)
     const nodeStats = item.querySelector('.node-stats');
+    let treeViewBtn = item.querySelector('.tree-view-btn');
+    if (exec.executionTree && !treeViewBtn && nodeStats) {
+        treeViewBtn = document.createElement('button');
+        treeViewBtn.className = 'tree-view-btn';
+        treeViewBtn.setAttribute('data-exec-id', exec.id);
+        treeViewBtn.textContent = '🌳 트리 보기';
+        nodeStats.after(treeViewBtn);
+        treeViewBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const execData = findExecutionData(exec.id);
+            if (execData && execData.executionTree) {
+                showTreeVisualization(execData.executionTree, execData.nodeResults);
+            }
+        });
+    } else if (!exec.executionTree && treeViewBtn) {
+        treeViewBtn.remove();
+    }
     if (nodeStats) nodeStats.innerHTML = formatNodeStats(exec);
     
     if (isCurrent && (exec.status === 'RUNNING' || exec.status === 'RETRYING')) {
@@ -1167,6 +1164,139 @@ function attachExecutionItemListeners(item, execId) {
             }
         });
     }
+
+    // 스와이프 삭제 연결
+    attachSwipe(item);
+}
+
+// ── 스와이프 삭제 헬퍼 ──
+
+/**
+ * 터치 스와이프로 .swiped 클래스를 토글.
+ * 수직 스크롤 우선 — 수직 이동이 더 크면 스와이프로 처리하지 않음.
+ */
+function attachSwipe(el) {
+    let startX = 0, startY = 0, dirDecided = false, isHoriz = false, mouseDown = false;
+    const SWIPE_OPEN = 50;   // 왼쪽 스와이프 열림 기준(px)
+    const SWIPE_CLOSE = 30;  // 오른쪽 스와이프 닫힘 기준(px)
+
+    /** 수평 스와이프였으면 직후 발생하는 click을 캡처 단계에서 1회 차단 */
+    function blockNextClick() {
+        el.addEventListener('click', function stopClick(e) {
+            e.stopPropagation();
+            e.preventDefault();
+            el.removeEventListener('click', stopClick, true);
+        }, true);
+    }
+
+    // ── 터치 ──
+    el.addEventListener('touchstart', function(e) {
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        dirDecided = false;
+        isHoriz = false;
+    }, { passive: true });
+
+    el.addEventListener('touchmove', function(e) {
+        if (dirDecided) return;
+        const dx = Math.abs(e.touches[0].clientX - startX);
+        const dy = Math.abs(e.touches[0].clientY - startY);
+        if (dx > 6 || dy > 6) { dirDecided = true; isHoriz = dx > dy; }
+    }, { passive: true });
+
+    el.addEventListener('touchend', function(e) {
+        if (!isHoriz) return;
+        const dx = e.changedTouches[0].clientX - startX;
+        if (dx < -SWIPE_OPEN)  { closeAllSwipes(el); el.classList.add('swiped'); }
+        else if (dx > SWIPE_CLOSE) { el.classList.remove('swiped'); }
+        blockNextClick(); // 터치 스와이프 후 합성 click 차단
+    }, { passive: true });
+
+    // ── 마우스 드래그 ──
+    el.addEventListener('mousedown', function(e) {
+        if (e.button !== 0) return;
+        startX = e.clientX;
+        startY = e.clientY;
+        mouseDown = true;
+        dirDecided = false;
+        isHoriz = false;
+    });
+
+    // 드래그 중 텍스트 선택 방지
+    el.addEventListener('selectstart', function(e) {
+        if (mouseDown) e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', function(e) {
+        if (!mouseDown) return;
+        if (!dirDecided) {
+            const dx = Math.abs(e.clientX - startX);
+            const dy = Math.abs(e.clientY - startY);
+            if (dx > 6 || dy > 6) {
+                dirDecided = true;
+                isHoriz = dx > dy;
+                if (isHoriz) el.classList.add('swipe-dragging');
+            }
+        }
+    });
+
+    window.addEventListener('mouseup', function(e) {
+        if (!mouseDown) return;
+        mouseDown = false;
+        el.classList.remove('swipe-dragging');
+        if (!isHoriz) return;
+        const dx = e.clientX - startX;
+        if (dx < -SWIPE_OPEN)  { closeAllSwipes(el); el.classList.add('swiped'); }
+        else if (dx > SWIPE_CLOSE) { el.classList.remove('swiped'); }
+        blockNextClick(); // 마우스 스와이프 후 click 차단
+    });
+}
+
+/** 열린 스와이프를 모두 닫음 (except 는 유지) */
+function closeAllSwipes(except) {
+    document.querySelectorAll('.execution-item.swiped, .saved-tree-row.swiped').forEach(el => {
+        if (el !== except) el.classList.remove('swiped');
+    });
+}
+
+/** 실행이력 삭제: 애니메이션 → DELETE API → DOM 제거 */
+async function deleteExecution(execId, btn) {
+    const item = btn.closest('.execution-item');
+    if (!item) return;
+    // 높이 축소 애니메이션
+    const h = item.offsetHeight;
+    item.style.transition = 'max-height 0.25s ease, opacity 0.2s ease, margin-bottom 0.25s ease';
+    item.style.overflow = 'hidden';
+    item.style.maxHeight = h + 'px';
+    requestAnimationFrame(() => {
+        item.style.maxHeight = '0';
+        item.style.opacity = '0';
+        item.style.marginBottom = '0';
+    });
+    try {
+        await fetch(`${API_BASE}/executions/${encodeURIComponent(execId)}`, { method: 'DELETE' });
+    } catch (e) { console.error('실행이력 삭제 실패:', e); }
+    if (window.executionDataCache) window.executionDataCache.delete(execId);
+    setTimeout(() => item.remove(), 270);
+}
+
+/** 저장된 트리 삭제: 애니메이션 → DELETE API → DOM 제거 */
+async function deleteTree(name, btn) {
+    const row = btn.closest('.saved-tree-row');
+    if (!row) return;
+    const h = row.offsetHeight;
+    row.style.transition = 'max-height 0.25s ease, opacity 0.2s ease, margin-bottom 0.25s ease';
+    row.style.overflow = 'hidden';
+    row.style.maxHeight = h + 'px';
+    requestAnimationFrame(() => {
+        row.style.maxHeight = '0';
+        row.style.opacity = '0';
+        row.style.marginBottom = '0';
+    });
+    try {
+        await fetch(`/trees/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    } catch (e) { console.error('트리 삭제 실패:', e); }
+    setTimeout(() => row.remove(), 270);
 }
 
 // 실행 이력 로드 (폴링 방식 - 폴백용)
@@ -1393,35 +1523,37 @@ function renderExecution(exec, isCurrent) {
     
     return `
         <div class="execution-item ${statusClass}" data-id="${exec.id}" data-start-time="${exec.startTime}">
-            <div class="execution-header">
-                <div style="flex: 1;">
-                    <div class="execution-title">
-                        ${isCurrent ? '🔄 ' : ''}${exec.query || '(빈 쿼리)'}
-                    </div>
-                    <div class="execution-meta">
-                        <span>${timeStr}</span>
-                        ${duration ? `<span>${duration}</span>` : ''}
-                        <span class="status-badge status-${statusClass}">${statusText}</span>
+            <div class="swipe-inner">
+                <div class="execution-header">
+                    <div style="flex: 1;">
+                        <div class="execution-title">
+                            ${isCurrent ? '🔄 ' : ''}${exec.query || '(빈 쿼리)'}
+                        </div>
+                        <div class="execution-meta">
+                            <span>${timeStr}</span>
+                            ${duration ? `<span>${duration}</span>` : ''}
+                            <span class="status-badge status-${statusClass}">${statusText}</span>
+                        </div>
+                        <div class="node-stats">${formatNodeStats(exec)}</div>
                         ${exec.executionTree ? `<button class="tree-view-btn" data-exec-id="${exec.id}">🌳 트리 보기</button>` : ''}
                     </div>
-                    <div class="node-stats">${formatNodeStats(exec)}</div>
-                    ${exec.executionTree ? `<div id="exec-save-row-${exec.id}" class="exec-save-row"><input class="exec-save-name" placeholder="트리 이름..." value="${escapeHtml((exec.query || '').slice(0, 40))}"><button class="exec-save-btn" onclick="event.stopPropagation();saveExecTree('${exec.id}',this)">💾 저장</button></div>` : ''}
+                </div>
+                <div class="execution-details" id="details-${exec.id}">
+                    ${exec.executionTree ? `<div class="execution-tree" id="tree-${exec.id}">${renderExecutionTreeSection(exec.executionTree)}</div>` : ''}
+                    ${exec.result && exec.result.trim() !== '' ? `
+                        <div class="execution-result"><strong>✅ 최종 결과:</strong><div class="result-content">${escapeHtml(exec.result.trim())}</div></div>
+                    ` : exec.error ? '' : `
+                        <div class="execution-result pending-result">결과가 아직 없습니다...</div>
+                    `}
+                    ${exec.error ? `
+                        <div class="execution-result error-result">
+                            <strong>에러:</strong><br>${escapeHtml(exec.error)}
+                        </div>
+                    ` : ''}
+                    <div class="execution-logs" id="logs-${exec.id}" style="display:none;"><strong>📋 실행 로그:</strong><div class="log-content" id="log-content-${exec.id}"></div></div>
                 </div>
             </div>
-            <div class="execution-details" id="details-${exec.id}">
-                ${exec.executionTree ? `<div class="execution-tree" id="tree-${exec.id}">${renderExecutionTreeSection(exec.executionTree)}</div>` : ''}
-                ${exec.result && exec.result.trim() !== '' ? `
-                    <div class="execution-result"><strong>✅ 최종 결과:</strong><div class="result-content">${escapeHtml(exec.result.trim())}</div></div>
-                ` : exec.error ? '' : `
-                    <div class="execution-result pending-result">결과가 아직 없습니다...</div>
-                `}
-                ${exec.error ? `
-                    <div class="execution-result error-result">
-                        <strong>에러:</strong><br>${escapeHtml(exec.error)}
-                    </div>
-                ` : ''}
-                <div class="execution-logs" id="logs-${exec.id}" style="display:none;"><strong>📋 실행 로그:</strong><div class="log-content" id="log-content-${exec.id}"></div></div>
-            </div>
+            <button class="swipe-del-btn" onclick="event.stopPropagation();deleteExecution('${exec.id}',this)">🗑️<span>삭제</span></button>
         </div>
     `;
 }
@@ -1646,6 +1778,13 @@ async function handleApproval(approved) {
 })();
 
 setInterval(loadLLMStatus, 10000); // 10초마다 갱신
+
+// 다른 곳 클릭 시 열려 있는 스와이프 닫기
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.execution-item') && !e.target.closest('.saved-tree-row')) {
+        closeAllSwipes(null);
+    }
+});
 
 // 실행 중인 작업의 경과 시간을 주기적으로 업데이트
 setInterval(() => {

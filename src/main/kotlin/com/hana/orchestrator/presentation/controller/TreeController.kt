@@ -87,5 +87,12 @@ class TreeController(
                 ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to "not found: $name"))
             call.respond(tree)
         }
+
+        route.delete("/trees/{name}") {
+            val name = call.parameters["name"]
+                ?: return@delete call.respond(HttpStatusCode.BadRequest, mapOf("error" to "name required"))
+            treeRepository.delete(name)
+            call.respond(mapOf("success" to true))
+        }
     }
 }

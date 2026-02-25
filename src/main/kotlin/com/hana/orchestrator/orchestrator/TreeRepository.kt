@@ -42,4 +42,9 @@ class TreeRepository(
         if (!file.exists()) return null
         return runCatching { json.decodeFromString(SavedTree.serializer(), file.readText()) }.getOrNull()
     }
+
+    fun delete(name: String): Boolean {
+        val file = File(baseDir, "$name.json")
+        return file.exists() && file.delete()
+    }
 }

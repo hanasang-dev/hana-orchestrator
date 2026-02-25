@@ -52,6 +52,15 @@ class ExecutionHistoryManager(
     }
     
     /**
+     * 실행 이력 삭제 (메모리 + 파일)
+     */
+    fun deleteHistory(id: String): Boolean {
+        val removed = executionHistory.removeIf { it.id == id }
+        historyRepository.delete(id)
+        return removed
+    }
+
+    /**
      * 실행 이력 업데이트 (같은 ID의 이력을 찾아서 교체, 완료/실패 시 파일 저장)
      */
     fun updateHistory(updatedHistory: ExecutionHistory) {
