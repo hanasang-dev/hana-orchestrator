@@ -33,6 +33,7 @@ let lastUserMessage = '';       // 마지막 사용자 메시지
 let hoveredEdgeId = null;       // 호버 중인 엣지 id
 let edgeHideTimeout = null;     // 엣지 X버튼 hide 딜레이 타이머
 let currentNodeResults = {};    // 현재 트리의 노드 실행 결과 (P3)
+let treeIsLoadedClean = false;  // true: 저장/이력에서 불러온 미수정 트리 → 검토 없이 바로 실행 가능
 
 function showTreeVisualization(executionTree, nodeResults) {
     if (!executionTree || !executionTree.rootNodes || executionTree.rootNodes.length === 0) {
@@ -46,10 +47,12 @@ function showTreeVisualization(executionTree, nodeResults) {
     treeEditorQuery = execData ? execData.query : '';
     document.getElementById('treeModalQuery').textContent = treeEditorQuery || '쿼리 정보 없음';
 
-    // 검토 영역 초기화
-    document.getElementById('reviewResult').textContent = '';
-    document.getElementById('executeTreeBtn').disabled = true;
-    document.getElementById('executeTreeBtn').style.opacity = '0.5';
+    // 이미 완료된 트리 → 검토 없이 바로 실행 가능
+    treeIsLoadedClean = true;
+    document.getElementById('reviewResult').textContent = '✅ 검증된 트리입니다. 바로 실행하거나, 수정 후 검토하세요.';
+    document.getElementById('reviewResult').style.color = '#2f9e44';
+    document.getElementById('executeTreeBtn').disabled = false;
+    document.getElementById('executeTreeBtn').style.opacity = '1';
 
     document.getElementById('treeModal').style.display = 'flex';
 
@@ -69,6 +72,7 @@ function findExecutionDataByTree(executionTree) {
 }
 
 function closeTreeModal() {
+    treeIsLoadedClean = false;
     document.getElementById('treeModal').style.display = 'none';
     document.getElementById('nodeContextMenu').style.display = 'none';
     closeNodeEditor();
@@ -80,9 +84,10 @@ function newEmptyTree() {
     currentNodeResults = {};
     treeEditorQuery = '';
     document.getElementById('treeModalQuery').textContent = '새 트리';
+    treeIsLoadedClean = false;
     document.getElementById('reviewResult').textContent = '';
-    document.getElementById('executeTreeBtn').disabled = false;
-    document.getElementById('executeTreeBtn').style.opacity = '1';
+    document.getElementById('executeTreeBtn').disabled = true;
+    document.getElementById('executeTreeBtn').style.opacity = '0.5';
     document.getElementById('treeModal').style.display = 'flex';
     setTimeout(() => initCytoscape({ rootNodes: [], name: 'new_tree' }), 50);
     buildLayerPalette();
@@ -151,12 +156,26 @@ function closeNodeEditor() {
     document.getElementById('nodeEditorPanel').style.display = 'none';
 }
 
+/** 트리가 수정될 때마다 호출 — 검증된 트리였으면 실행 버튼 비활성화 */
+function markModified() {
+    treeIsLoadedClean = false;
+    const btn = document.getElementById('executeTreeBtn');
+    if (!btn.disabled) {
+        btn.disabled = true;
+        btn.style.opacity = '0.5';
+        const r = document.getElementById('reviewResult');
+        r.textContent = '⚠️ 트리가 수정되었습니다. 실행 전 LLM 검토가 필요합니다.';
+        r.style.color = '#e67700';
+    }
+}
+
 // 선택된 노드를 부모에서 분리 (루트로 만들기)
 function detachFromParent() {
     if (!selectedNodeId || !cyInstance) return;
     const parentEdges = cyInstance.edges().filter(e => e.data('target') === selectedNodeId);
     if (parentEdges.length === 0) { alert('이미 루트 노드입니다.'); return; }
     parentEdges.remove();
+    markModified();
     cyInstance.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 60, rankSep: 80, padding: 30 }).run();
     showNodeEditor(selectedNodeId); // 편집기 갱신 (↑부모 버튼 제거)
     hideContextMenu();
@@ -183,6 +202,7 @@ function applyNodeArgs() {
     const argsStr = Object.entries(newArgs).slice(0, 2).map(([k, v]) => `${k}=${v}`).join('\n');
     node.data('label', `${layerName}.${fnName}${argsStr ? '\n' + argsStr : ''}`);
 
+    markModified();
     closeNodeEditor();
 }
 
@@ -357,6 +377,7 @@ function reparentNode(draggedId, newParentId) {
         if (hasChildren) return;
         directParentEdge.remove();
         cyInstance.add({ data: { id: `${draggedId}_${newParentId}_${Date.now()}`, source: draggedId, target: newParentId } });
+        markModified();
         cyInstance.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 60, rankSep: 80, padding: 30 }).run();
         return;
     }
@@ -369,6 +390,7 @@ function reparentNode(draggedId, newParentId) {
 
     // 새 부모 엣지 추가
     cyInstance.add({ data: { id: `${newParentId}_${draggedId}_${Date.now()}`, source: newParentId, target: draggedId } });
+    markModified();
 
     // 레이아웃 재정렬
     cyInstance.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 60, rankSep: 80, padding: 30 }).run();
@@ -378,6 +400,7 @@ function reparentNode(draggedId, newParentId) {
 function deleteHoveredEdge() {
     if (!hoveredEdgeId || !cyInstance) return;
     cyInstance.getElementById(hoveredEdgeId).remove();
+    markModified();
     document.getElementById('edgeDeleteBtn').style.display = 'none';
     hoveredEdgeId = null;
 }
@@ -536,6 +559,7 @@ function addNodeAtPos(layerName, fnName, cyPos, parentId) {
     if (parentId && cyInstance.getElementById(parentId).length > 0) {
         cyInstance.add({ data: { id: `${parentId}_${newId}`, source: parentId, target: newId } });
     }
+    markModified();
     cyInstance.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 60, rankSep: 80, padding: 30 }).run();
     selectedNodeId = newId;
     // 신규 노드: 바로 args 편집기 오픈
@@ -560,6 +584,7 @@ function deleteSelectedNode() {
     // 해당 노드와 연결된 엣지도 함께 삭제
     cyInstance.remove(node.connectedEdges());
     cyInstance.remove(node);
+    markModified();
     selectedNodeId = null;
     hideContextMenu();
 }
@@ -649,7 +674,11 @@ async function loadTree(name) {
         const saved = await res.json();
         treeEditorQuery = saved.query || '';
         document.getElementById('treeModalQuery').textContent = treeEditorQuery || '쿼리 정보 없음';
-        document.getElementById('reviewResult').textContent = '';
+        treeIsLoadedClean = true;
+        document.getElementById('reviewResult').textContent = '✅ 검증된 트리입니다. 바로 실행하거나, 수정 후 검토하세요.';
+        document.getElementById('reviewResult').style.color = '#2f9e44';
+        document.getElementById('executeTreeBtn').disabled = false;
+        document.getElementById('executeTreeBtn').style.opacity = '1';
         document.getElementById('treeModal').style.display = 'flex';
         closeLoadTreeModal();
         setTimeout(() => { initCytoscape(saved.tree); buildLayerPalette(); }, 50);
