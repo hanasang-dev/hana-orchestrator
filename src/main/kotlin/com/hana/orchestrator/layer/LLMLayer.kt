@@ -4,12 +4,20 @@ import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 import com.hana.orchestrator.llm.useSuspend
 
 /**
- * LLM 직접 답변 레이어
- * 
- * 목적: 레이어로 실행할 수 없는 요청에 대해 LLM이 직접 답변을 제공
- * 
- * 이 레이어는 다른 레이어와 조합하여 사용할 수 있습니다.
- * 예: layer-info.listLayers → llm.answerDirectly (레이어 정보를 LLM이 분석하여 답변)
+ * LLM 텍스트 생성·분석 레이어
+ *
+ * 목적: LLM을 이용한 텍스트 생성, 요약, 번역, 분석, 질문 답변 등 모든 언어 처리 작업
+ *
+ * 언제 사용해야 하는가:
+ * - 텍스트를 요약해야 할 때 → analyze(context=파일내용, query="요약해줘")
+ * - 텍스트를 번역해야 할 때 → analyze(context=원문, query="한국어로 번역해줘")
+ * - 파일/커밋 내용을 분석해야 할 때 → analyze(context={{parent}}, query="분석해줘")
+ * - 일반 지식 질문에 답할 때 → answerDirectly(query=질문)
+ * - 창작(시, 글 등)이 필요할 때 → answerDirectly(query="시를 써줘")
+ *
+ * 다른 레이어의 결과를 LLM으로 처리할 때:
+ * 예: file-system.readFile → llm.analyze(context={{parent}}, query="핵심 2줄 요약")
+ * 예: git.log → llm.analyze(context={{parent}}, query="마지막 커밋을 한 줄로 요약")
  */
 @Layer
 class LLMLayer(

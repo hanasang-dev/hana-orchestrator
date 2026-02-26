@@ -154,7 +154,8 @@ class OllamaLLMClient(
                 val jsonText = JsonExtractor.extract(responseText)
                 lastJsonText = jsonText
                 if (logRawJson) {
-                    logger.info("📋 [트리생성] LLM 원본 반환 (직접 출력):\n$jsonText")
+                    logger.info("📋 [RAW responseText (${responseText.length}chars)]: ${responseText.take(500)}")
+                    logger.info("📋 [EXTRACTED jsonText (${jsonText.length}chars)]: $jsonText")
                 }
 
                 return responseParser(jsonText)

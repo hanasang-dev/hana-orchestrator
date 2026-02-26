@@ -3,6 +3,7 @@ package com.hana.orchestrator.llm
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionHistory
 import com.hana.orchestrator.llm.ReActStep
+import com.hana.orchestrator.presentation.model.execution.ExecutionTreeNodeResponse
 
 /**
  * LLM 프롬프트 생성기
@@ -47,6 +48,16 @@ internal class LLMPromptBuilder {
 - 요청의 핵심 기능 요구사항이 함수 설명에 명시된 작업으로 수행 가능한지 확인하세요"""
     }
     
+    /**
+     * 트리의 모든 노드(루트 + children 재귀)에서 "layerName.function" 목록 수집
+     */
+    private fun collectAllNodeFunctions(nodes: List<ExecutionTreeNodeResponse>?): List<String> {
+        if (nodes == null) return emptyList()
+        return nodes.flatMap { node ->
+            listOf("${node.layerName}.${node.function}") + collectAllNodeFunctions(node.children)
+        }
+    }
+
     /**
      * 사용 가능한 레이어 이름 목록 생성 (헬퍼)
      */
@@ -359,17 +370,22 @@ $JSON_RULES
         layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
     ): String {
         val layersInfo = formatLayerDescriptionsCompact(layerDescriptions)
+        val availableLayerNames = getAvailableLayerNames(layerDescriptions)
         val historySection = if (stepHistory.isEmpty()) {
             "아직 수행한 작업 없음"
         } else {
             stepHistory.joinToString("\n") { step ->
                 val treeDesc = step.tree?.rootNodes?.joinToString(", ") { "${it.layerName}.${it.function}" } ?: "(알 수 없음)"
-                "스텝 ${step.stepNumber}: 미니트리 [$treeDesc]\n  → 결과: ${step.result.take(300)}"
+                "✅ [완료] 스텝 ${step.stepNumber}: [$treeDesc]\n  → 결과: ${step.result.take(300)}"
             }
         }
 
         val alreadyDoneNote = if (stepHistory.isNotEmpty()) {
-            "\n중요: 위 '지금까지 수행한 작업'에 결과가 이미 있으면, 같은 작업을 반복하지 말고 즉시 finish를 선택하세요."
+            val doneFunctions = stepHistory
+                .flatMap { step -> collectAllNodeFunctions(step.tree?.rootNodes) }
+                .distinct()
+                .joinToString(", ")
+            "\n⛔ 절대 금지: 이미 완료된 함수를 다시 호출하지 마세요 → $doneFunctions\n   위 함수들은 실행이 끝났습니다. 다시 호출하면 안 됩니다. 목표가 달성됐다면 반드시 finish를 선택하세요."
         } else ""
 
         return """목표: "$query"
@@ -377,30 +393,44 @@ $JSON_RULES
 사용 가능한 레이어:
 $layersInfo
 
+⛔ layerName은 반드시 위 목록에 있는 이름만 사용하세요: $availableLayerNames
+   목록에 없는 레이어(예: echo, shell, command 등)는 절대 사용하지 마세요.
+
 지금까지 수행한 작업:
 $historySection
 $alreadyDoneNote
 
+⚠️ 데이터 흐름 규칙:
+   - A의 결과가 B의 입력으로 필요하면 → B를 A의 children 배열 안에 넣고 B의 args에 "{{parent}}" 사용
+   - rootNodes에 나란히 [A, B]로 넣으면 A→B 데이터 전달 불가
+   - 올바른 구조: rootNodes:[A(children:[B(args:{input:"{{parent}}"})])]
+   - 잘못된 구조: rootNodes:[A, B] ← B가 A 결과를 받지 못함
+   - LLM이 파일/커밋 내용을 알고 있다고 가정하지 마세요. 반드시 file-system.readFile / git.log 로 먼저 가져오세요.
+
 결정 규칙 (반드시 순서대로 확인):
-1. 위 히스토리에 목표 달성에 필요한 정보가 이미 모두 있는가? → 있으면 즉시 finish
-2. 독립적으로 동시에 실행 가능한 작업이 2개 이상 있는가? → execute_tree에 rootNodes를 병렬로 구성 (parallel: true)
-3. 그 외 단일 작업이 필요한가? → execute_tree에 rootNodes 1개
+1. ⭐[최우선] 히스토리에 SUCCESS 결과가 있고 목표 달성에 필요한 모든 작업이 완료됐는가? → 반드시 finish 선택. 추가 작업 없음.
+2. A 결과 → B 입력이 필요한가? → A를 rootNode로, B를 A의 children에 넣고 B.args에 "{{parent}}" 사용
+3. 독립적으로 동시에 실행 가능한 작업이 2개 이상 있는가? → rootNodes 여러 개 (parallel: true)
+4. 그 외 단일 작업이 필요한가? → rootNodes 1개
 
 $JSON_RULES
 
 반드시 다음 JSON 형식 중 하나로만 응답하세요. 다른 텍스트는 포함하지 마세요.
 
-미니트리 실행 (단일 또는 병렬):
-{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"레이어이름","function":"함수이름","args":{"파라미터":"값"},"parallel":false,"children":[]}]},"reasoning":"이유"}
+단일 실행:
+{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"git","function":"currentBranch","args":{},"parallel":false,"children":[]}]},"reasoning":"브랜치 조회"}
 
-병렬 실행 (독립 작업 여러 개):
-{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"레이어1","function":"함수1","args":{},"parallel":true,"children":[]},{"layerName":"레이어2","function":"함수2","args":{},"parallel":true,"children":[]}]},"reasoning":"이유"}
+파일 읽기 후 LLM 요약 (A→B 순차, B가 A 결과 필요):
+{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"file-system","function":"readFile","args":{"path":"README.md"},"parallel":false,"children":[{"layerName":"llm","function":"analyze","args":{"context":"{{parent}}","query":"2줄로 요약해줘"},"parallel":false,"children":[]}]}]},"reasoning":"파일 읽고 LLM 요약"}
 
-부모→자식 순차 실행 (앞 결과가 다음에 필요한 경우):
-{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"레이어1","function":"함수1","args":{},"parallel":false,"children":[{"layerName":"레이어2","function":"함수2","args":{"input":"{{parent}}"},"parallel":false,"children":[]}]}]},"reasoning":"이유"}
+git 커밋 읽기 후 LLM 요약 (A→B 순차):
+{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"git","function":"log","args":{"count":1},"parallel":false,"children":[{"layerName":"llm","function":"analyze","args":{"context":"{{parent}}","query":"한 줄로 요약해줘"},"parallel":false,"children":[]}]}]},"reasoning":"커밋 읽고 요약"}
 
-목표 달성:
-{"action":"finish","result":"최종 결과 내용","reasoning":"완료 이유"}""".trimIndent()
+병렬 실행 (서로 독립적인 작업):
+{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"git","function":"status","args":{},"parallel":true,"children":[]},{"layerName":"git","function":"currentBranch","args":{},"parallel":true,"children":[]}]},"reasoning":"두 작업 동시 실행"}
+
+목표 완전 달성 시:
+{"action":"finish","result":"(사용자에게 전달할 최종 답변)","reasoning":"완료 이유"}""".trimIndent()
     }
 
     fun buildTreeReviewPrompt(

@@ -47,11 +47,13 @@ class LayerProcessor(
         }
         if (!hasLayerAnnotation) return
         
-        // 클래스명에서 레이어 이름 자동 생성 (예: EchoLayer -> "echo-layer")
+        // 클래스명에서 레이어 이름 자동 생성 (예: EchoLayer -> "echo", FileSystemLayer -> "file-system", LLMLayer -> "llm")
         val className = classDecl.simpleName.asString()
         val layerName = className
             .removeSuffix("Layer")
-            .replace(Regex("([A-Z])")) { "-${it.value.lowercase()}" }
+            .replace(Regex("([A-Z]+)([A-Z][a-z])"), "$1-$2")  // 연속 대문자 처리: GLKit → GL-Kit
+            .replace(Regex("([a-z])([A-Z])"), "$1-$2")          // camelCase 처리: fileSystem → file-System
+            .lowercase()
             .removePrefix("-")
             .ifEmpty { className.lowercase() }
         

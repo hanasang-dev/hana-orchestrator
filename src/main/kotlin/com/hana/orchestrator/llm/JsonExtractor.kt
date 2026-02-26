@@ -19,38 +19,41 @@ internal object JsonExtractor {
         
         var extractedJson: String? = null
         
-        // JSON 코드 블록 찾기 (```json ... ```)
-        val jsonBlockRegex = Regex("```(?:json)?\\s*([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
-        jsonBlockRegex.find(trimmed)?.let {
-            val extracted = it.groupValues[1].trim()
-            if (extracted.isNotEmpty() && (extracted.startsWith("{") || extracted.startsWith("["))) {
-                extractedJson = extracted
+        // 임의 텍스트에서 모든 균형 잡힌 JSON 후보를 순서대로 수집
+        fun collectAll(text: String): List<String> {
+            val result = mutableListOf<String>()
+            var pos = 0
+            while (pos < text.length) {
+                val next = text.indexOfAny(charArrayOf('{', '['), pos)
+                if (next < 0) break
+                val open = text[next]; val close = if (open == '{') '}' else ']'
+                val candidate = extractBalanced(text, next, open, close)
+                if (candidate != null) { result.add(candidate); pos = next + candidate.length }
+                else pos = next + 1
             }
-        }
-        
-        // 중괄호로 시작하는 JSON 찾기 (문자열 리터럴 내부의 { } 는 무시)
-        if (extractedJson == null) {
-            val jsonStart = trimmed.indexOf('{')
-            if (jsonStart >= 0) {
-                extractedJson = extractBalanced(trimmed, jsonStart, '{', '}')
-            }
+            return result
         }
 
-        // 대괄호로 시작하는 JSON 배열 찾기 (문자열 리터럴 내부의 [ ] 는 무시)
-        if (extractedJson == null) {
-            val arrayStart = trimmed.indexOf('[')
-            if (arrayStart >= 0) {
-                extractedJson = extractBalanced(trimmed, arrayStart, '[', ']')
-            }
-        }
+        val jsonBlockRegex = Regex("```(?:json)?\\s*([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+        // 코드블록 내부에서 모든 JSON 후보 수집 (같은 블록 안에 execute_tree + finish 둘 다 있는 경우 처리)
+        val blockCandidates = jsonBlockRegex.findAll(trimmed)
+            .flatMap { collectAll(it.groupValues[1].trim()) }
+            .toList()
+        // 코드블록 밖 평문에서도 수집
+        val plainCandidates = collectAll(jsonBlockRegex.replace(trimmed, " "))
+
+        // 전체 후보 중 "finish" action 포함 블록 우선 선택
+        val allCandidates = blockCandidates + plainCandidates
+        extractedJson = allCandidates.firstOrNull { it.contains("\"finish\"") }
+            ?: allCandidates.firstOrNull()
         
         // JSON이 아닌 경우 에러
         if (extractedJson == null) {
             throw IllegalArgumentException("LLM 응답에서 유효한 JSON을 찾을 수 없습니다. 응답: ${trimmed.take(200)}")
         }
-        
-        // 유니코드 이스케이프 정규화: \u{...} 형식을 일반 문자열로 변환
-        return normalizeUnicodeEscapes(extractedJson)
+
+        // 잘못된 JSON 이스케이프 수정 후 유니코드 이스케이프 정규화
+        return normalizeUnicodeEscapes(sanitizeJsonEscapes(extractedJson!!))
     }
     
     /**
@@ -76,6 +79,53 @@ internal object JsonExtractor {
             }
         }
         return null
+    }
+
+    /**
+     * JSON 문자열 내 잘못된 이스케이프 시퀀스 수정
+     * 예: `\ @param` → `\\ @param` (backslash + space 는 JSON 불가 → double backslash)
+     */
+    private fun sanitizeJsonEscapes(json: String): String {
+        val sb = StringBuilder(json.length)
+        var inString = false
+        var i = 0
+        while (i < json.length) {
+            val c = json[i]
+            if (!inString) {
+                if (c == '"') inString = true
+                sb.append(c)
+                i++
+                continue
+            }
+            // inString = true
+            if (c == '"') {
+                inString = false
+                sb.append(c)
+                i++
+                continue
+            }
+            if (c == '\\') {
+                val next = if (i + 1 < json.length) json[i + 1] else '\u0000'
+                when (next) {
+                    '"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u' -> {
+                        // 유효한 JSON 이스케이프 → \X 두 문자 모두 그대로 출력
+                        sb.append('\\')
+                        sb.append(next)
+                        i += 2
+                    }
+                    else -> {
+                        // 잘못된 이스케이프(예: "\ @param") → \\ 로 교체해서 리터럴 백슬래시로 처리
+                        sb.append('\\')
+                        sb.append('\\')
+                        i++ // \ 만 소비, next 는 다음 루프에서 일반 문자로 처리
+                    }
+                }
+                continue
+            }
+            sb.append(c)
+            i++
+        }
+        return sb.toString()
     }
 
     /**

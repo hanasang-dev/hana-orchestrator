@@ -1,12 +1,14 @@
 package com.hana.orchestrator.orchestrator
 
 import com.hana.orchestrator.data.mapper.ExecutionTreeMapper
+import com.hana.orchestrator.data.model.response.ExecutionNodeResponse
 import com.hana.orchestrator.domain.entity.ExecutionResult
 import com.hana.orchestrator.llm.ReActStep
 import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 import com.hana.orchestrator.llm.useSuspend
 import com.hana.orchestrator.presentation.mapper.ExecutionTreeMapper as PresentationMapper
 import com.hana.orchestrator.presentation.model.execution.ExecutionPhase
+import com.hana.orchestrator.presentation.model.execution.ExecutionTreeNodeResponse
 
 /**
  * ReAct(Reasoning + Acting) 루프 실행기
@@ -26,6 +28,21 @@ class ReactiveExecutor(
 ) {
     private val maxSteps = 15
     private val logger = createOrchestratorLogger(ReactiveExecutor::class.java, historyManager)
+
+    /** 프레젠테이션 트리 노드에서 "layerName.function" 목록 수집 (루트 + children 재귀) */
+    private fun collectAllNodeFunctions(nodes: List<ExecutionTreeNodeResponse>?): List<String> {
+        if (nodes == null) return emptyList()
+        return nodes.flatMap { node ->
+            listOf("${node.layerName}.${node.function}") + collectAllNodeFunctions(node.children)
+        }
+    }
+
+    /** LLM 데이터 트리 노드에서 "layerName.function" 목록 수집 (루트 + children 재귀) */
+    private fun collectLLMNodeFunctions(nodes: List<ExecutionNodeResponse>): List<String> {
+        return nodes.flatMap { node ->
+            listOf("${node.layerName}.${node.function}") + collectLLMNodeFunctions(node.children)
+        }
+    }
 
     /**
      * ReAct 루프 실행
@@ -54,16 +71,27 @@ class ReactiveExecutor(
                     .useSuspend { client -> client.decideNextAction(query, stepHistory, allDescriptions) }
             } catch (e: Exception) {
                 logger.error("❌ [ReAct] LLM 결정 실패: ${e.message}")
-                return ExecutionResult(result = "", error = "ReAct 결정 실패: ${e.message}")
+                // 이미 완료된 스텝 결과가 있으면 그걸로 반환 (결과 유실 방지)
+                val fallback = stepHistory.lastOrNull()?.result ?: ""
+                return ExecutionResult(
+                    result = fallback,
+                    error = "ReAct 결정 실패: ${e.message}",
+                    stepHistory = stepHistory.toList()
+                )
             }
 
             logger.info("🤔 [ReAct] 스텝 #$step 결정: action=${decision.action}, reasoning=${decision.reasoning.take(80)}")
 
             when (decision.action) {
                 "finish" -> {
-                    val finalResult = decision.result.ifEmpty {
-                        stepHistory.lastOrNull()?.result ?: "작업 완료"
-                    }
+                    // LLM이 finish.result에 명시한 답변 우선 사용.
+                    // 비어있으면 히스토리의 마지막 성공 결과 사용 (에러/Unknown function 제외)
+                    val lastSuccessResult = stepHistory.lastOrNull { step ->
+                        !step.result.startsWith("ERROR") && !step.result.startsWith("Unknown function")
+                    }?.result
+                    val finalResult = decision.result.ifEmpty { null }
+                        ?: lastSuccessResult
+                        ?: "작업 완료"
                     logger.info("✅ [ReAct] 완료 (${step}스텝): ${finalResult.take(100)}")
                     historyManager.addLogToCurrent("✅ ReAct 완료 (${step}스텝)")
                     statePublisher.emitProgressAsync(
@@ -79,6 +107,21 @@ class ReactiveExecutor(
                         logger.warn("⚠️ [ReAct] execute_tree: tree is null, 스킵")
                         stepHistory.add(ReActStep(step, decision.reasoning, null, "(tree is null)"))
                         continue
+                    }
+
+                    // 중복 루프 감지: 제안된 함수들이 전부 이미 완료된 경우 강제 finish (children 포함 재귀)
+                    if (stepHistory.isNotEmpty()) {
+                        val doneFunctions = stepHistory
+                            .flatMap { s -> collectAllNodeFunctions(s.tree?.rootNodes) }
+                            .toSet()
+                        val proposed = collectLLMNodeFunctions(llmTree.getActualRootNodes()).toSet()
+                        if (proposed.isNotEmpty() && doneFunctions.containsAll(proposed)) {
+                            val finalResult = stepHistory
+                                .lastOrNull { !it.result.startsWith("ERROR") && !it.result.startsWith("Unknown function") && !it.result.startsWith("정보 부족") }
+                                ?.result ?: stepHistory.lastOrNull()?.result ?: "작업 완료"
+                            logger.info("🔁 [ReAct] 중복 루프 감지 → 강제 finish (이미 완료: $proposed)")
+                            return ExecutionResult(result = finalResult, stepHistory = stepHistory.toList())
+                        }
                     }
 
                     // LLM 트리(data layer) → 도메인 트리 변환 (id 자동 생성 포함)

@@ -83,6 +83,13 @@ object LayerFactory {
     }
 
     /**
+     * 개발 레이어 생성 (레이어 패턴 참조, 스캐폴딩, 코드 파일 저장)
+     */
+    fun createDevelopLayer(projectRoot: java.io.File? = null): DevelopLayer {
+        return if (projectRoot != null) DevelopLayer(projectRoot) else DevelopLayer()
+    }
+
+    /**
      * 모든 기본 레이어 생성
      */
     fun createDefaultLayers(
@@ -95,7 +102,8 @@ object LayerFactory {
             createTextValidatorLayer(),
             createFileSystemLayer(approvalGate),
             createBuildLayer(),
-            createGitLayer()
+            createGitLayer(),
+            createDevelopLayer()
         )
         
         // LLMLayer는 ModelSelectionStrategy가 필요하므로 선택적으로 추가
