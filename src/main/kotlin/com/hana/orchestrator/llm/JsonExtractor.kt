@@ -52,8 +52,8 @@ internal object JsonExtractor {
             throw IllegalArgumentException("LLM 응답에서 유효한 JSON을 찾을 수 없습니다. 응답: ${trimmed.take(200)}")
         }
 
-        // 잘못된 JSON 이스케이프 수정 후 유니코드 이스케이프 정규화
-        return normalizeUnicodeEscapes(sanitizeJsonEscapes(extractedJson!!))
+        // JS 스타일 주석 제거 → 잘못된 이스케이프 수정 → 유니코드 이스케이프 정규화
+        return normalizeUnicodeEscapes(sanitizeJsonEscapes(stripJsComments(extractedJson!!)))
     }
     
     /**
@@ -79,6 +79,32 @@ internal object JsonExtractor {
             }
         }
         return null
+    }
+
+    /**
+     * JS 스타일 주석 제거 (문자열 외부의 // ... 라인 끝까지)
+     * 예: {"key": "val",  // 주석} → {"key": "val",  }
+     * 문자열 내부의 // (예: "https://...") 는 그대로 유지
+     */
+    private fun stripJsComments(json: String): String {
+        val sb = StringBuilder(json.length)
+        var inString = false
+        var escaped = false
+        var i = 0
+        while (i < json.length) {
+            val c = json[i]
+            if (escaped) { escaped = false; sb.append(c); i++; continue }
+            if (c == '\\' && inString) { escaped = true; sb.append(c); i++; continue }
+            if (c == '"') { inString = !inString; sb.append(c); i++; continue }
+            if (!inString && c == '/' && i + 1 < json.length && json[i + 1] == '/') {
+                // 줄 끝까지 스킵
+                while (i < json.length && json[i] != '\n') i++
+                continue
+            }
+            sb.append(c)
+            i++
+        }
+        return sb.toString()
     }
 
     /**

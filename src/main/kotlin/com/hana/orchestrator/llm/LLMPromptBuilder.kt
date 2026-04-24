@@ -3,8 +3,6 @@ package com.hana.orchestrator.llm
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.domain.entity.ExecutionHistory
 import com.hana.orchestrator.llm.ReActStep
-import com.hana.orchestrator.presentation.model.execution.ExecutionTreeNodeResponse
-
 /**
  * LLM 프롬프트 생성기
  * SRP: 프롬프트 생성만 담당
@@ -48,16 +46,6 @@ internal class LLMPromptBuilder {
 - 요청의 핵심 기능 요구사항이 함수 설명에 명시된 작업으로 수행 가능한지 확인하세요"""
     }
     
-    /**
-     * 트리의 모든 노드(루트 + children 재귀)에서 "layerName.function" 목록 수집
-     */
-    private fun collectAllNodeFunctions(nodes: List<ExecutionTreeNodeResponse>?): List<String> {
-        if (nodes == null) return emptyList()
-        return nodes.flatMap { node ->
-            listOf("${node.layerName}.${node.function}") + collectAllNodeFunctions(node.children)
-        }
-    }
-
     /**
      * 사용 가능한 레이어 이름 목록 생성 (헬퍼)
      */
@@ -376,16 +364,25 @@ $JSON_RULES
         } else {
             stepHistory.joinToString("\n") { step ->
                 val treeDesc = step.tree?.rootNodes?.joinToString(", ") { "${it.layerName}.${it.function}" } ?: "(알 수 없음)"
-                "✅ [완료] 스텝 ${step.stepNumber}: [$treeDesc]\n  → 결과: ${step.result.take(300)}"
+                val result = step.result.take(300)
+                // "다음 단계:" 힌트 추출 → LLM에게 아직 미완료임을 명시
+                val nextStepHint = if (result.contains("다음 단계:")) {
+                    val idx = result.indexOf("다음 단계:")
+                    val end = result.indexOf("\n", idx).takeIf { it != -1 } ?: result.length
+                    "\n  🔜 [아직 미완료 — 반드시 다음에 실행] ${result.substring(idx, end).trim()}"
+                } else ""
+                "✅ [완료] 스텝 ${step.stepNumber}: [$treeDesc]\n  → 결과: $result$nextStepHint"
             }
         }
 
         val alreadyDoneNote = if (stepHistory.isNotEmpty()) {
             val doneFunctions = stepHistory
-                .flatMap { step -> collectAllNodeFunctions(step.tree?.rootNodes) }
+                .flatMap { it.successfulFunctions }
                 .distinct()
                 .joinToString(", ")
-            "\n⛔ 절대 금지: 이미 완료된 함수를 다시 호출하지 마세요 → $doneFunctions\n   위 함수들은 실행이 끝났습니다. 다시 호출하면 안 됩니다. 목표가 달성됐다면 반드시 finish를 선택하세요."
+            if (doneFunctions.isNotEmpty()) {
+                "\n⛔ 이미 성공 완료된 함수 목록 → $doneFunctions\n   위 함수들은 실행 결과가 히스토리에 있습니다.\n   🔜 '아직 미완료' 표시가 있으면 그 단계만 실행하세요. 완료된 함수는 rootNodes에 넣지 마세요."
+            } else ""
         } else ""
 
         return """목표: "$query"
@@ -408,7 +405,8 @@ $alreadyDoneNote
    - LLM이 파일/커밋 내용을 알고 있다고 가정하지 마세요. 반드시 file-system.readFile / git.log 로 먼저 가져오세요.
 
 결정 규칙 (반드시 순서대로 확인):
-1. ⭐[최우선] 히스토리에 SUCCESS 결과가 있고 목표 달성에 필요한 모든 작업이 완료됐는가? → 반드시 finish 선택. 추가 작업 없음.
+0. ⛔[finish 금지] 히스토리의 결과에 "다음 단계:" 가 포함되어 있으면 그 단계를 먼저 실행해야 함. 실행 전에는 finish 선택 불가.
+1. ⭐[최우선] 히스토리에 SUCCESS 결과가 있고, 결과에 "다음 단계:"가 없으며, 목표 달성에 필요한 모든 작업이 완료됐는가? → 반드시 finish 선택.
 2. A 결과 → B 입력이 필요한가? → A를 rootNode로, B를 A의 children에 넣고 B.args에 "{{parent}}" 사용
 3. 독립적으로 동시에 실행 가능한 작업이 2개 이상 있는가? → rootNodes 여러 개 (parallel: true)
 4. 그 외 단일 작업이 필요한가? → rootNodes 1개

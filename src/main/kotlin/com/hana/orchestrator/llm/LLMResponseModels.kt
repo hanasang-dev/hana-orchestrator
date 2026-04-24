@@ -81,7 +81,8 @@ data class ReActStep(
     val stepNumber: Int,
     val reasoning: String,
     val tree: PresentationTreeResponse? = null,
-    val result: String
+    val result: String,
+    val successfulFunctions: List<String> = emptyList()
 )
 
 /**

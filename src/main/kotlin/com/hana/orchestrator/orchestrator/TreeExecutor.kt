@@ -128,6 +128,20 @@ class TreeExecutor(
             return skippedResult
         }
         
+        // rootNode에서 {{parent}} 사용 불가 검증
+        if (parentNodeId == null) {
+            val illegalArgs = node.args.entries
+                .filter { (_, v) -> v is String && (v as String).contains("{{parent}}") }
+                .map { it.key }
+            if (illegalArgs.isNotEmpty()) {
+                logger.warn("${indent}⚠️ [TreeExecutor] rootNode에서 {{parent}} 사용 불가: ${node.layerName}.${node.function}(args=$illegalArgs)")
+                return context.recordNode(
+                    node, NodeStatus.FAILED, depth, parentNodeId,
+                    error = "ERROR: ${node.layerName}.${node.function} — rootNode는 {{parent}}를 사용할 수 없습니다. 이 노드를 다른 노드의 children에 넣으세요."
+                )
+            }
+        }
+
         val runningResult = context.recordNode(node, NodeStatus.RUNNING, depth, parentNodeId)
         logger.debug("${indent}🎯 [TreeExecutor] 실행 시작: ${node.layerName}.${node.function} (id=$nodeId, depth=$depth, parent=$parentNodeId, children=${node.children.size}, parallel=${node.parallel})")
         

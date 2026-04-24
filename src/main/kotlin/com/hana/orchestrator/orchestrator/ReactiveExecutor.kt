@@ -2,8 +2,10 @@ package com.hana.orchestrator.orchestrator
 
 import com.hana.orchestrator.data.mapper.ExecutionTreeMapper
 import com.hana.orchestrator.data.model.response.ExecutionNodeResponse
+import com.hana.orchestrator.data.model.response.ExecutionTreeResponse
 import com.hana.orchestrator.domain.entity.ExecutionResult
 import com.hana.orchestrator.llm.ReActStep
+import kotlinx.serialization.json.buildJsonObject
 import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 import com.hana.orchestrator.llm.useSuspend
 import com.hana.orchestrator.presentation.mapper.ExecutionTreeMapper as PresentationMapper
@@ -45,6 +47,19 @@ class ReactiveExecutor(
     }
 
     /**
+     * 스텝 결과에서 "다음 단계:" 힌트 파싱
+     * 형식: layerName="X", function="Y"
+     * 이미 실행된 함수는 제외 (doneFunctions)
+     */
+    private fun parseNextStepHint(result: String, doneFunctions: Set<String>): Pair<String, String>? {
+        if (!result.contains("다음 단계:")) return null
+        val layerName = Regex("""layerName="([^"]+)"""").find(result)?.groupValues?.get(1) ?: return null
+        val function = Regex("""function="([^"]+)"""").find(result)?.groupValues?.get(1) ?: return null
+        val key = "$layerName.$function"
+        return if (key !in doneFunctions) Pair(layerName, function) else null
+    }
+
+    /**
      * ReAct 루프 실행
      * 최대 maxSteps 반복. 각 스텝에서 LLM이 미니트리 결정 → TreeExecutor 실행 → 결과 관찰 → 반복
      */
@@ -64,6 +79,38 @@ class ReactiveExecutor(
                 executionId, ExecutionPhase.TREE_EXECUTION,
                 "🤔 스텝 #$step 결정 중...", progressPct, System.currentTimeMillis() - startTime
             )
+
+            // 직전 스텝 결과의 "다음 단계:" 힌트 → LLM 없이 자동 실행
+            val doneFunctions = stepHistory.flatMap { it.successfulFunctions }.toSet()
+            val autoStep = stepHistory.lastOrNull()?.result?.let { parseNextStepHint(it, doneFunctions) }
+            if (autoStep != null) {
+                val (layerName, function) = autoStep
+                logger.info("🔜 [ReAct] '다음 단계' 자동 실행: $layerName.$function")
+                val autoNode = ExecutionNodeResponse(layerName, function, buildJsonObject {})
+                val autoLlmTree = ExecutionTreeResponse(rootNodes = listOf(autoNode))
+                val autoDomainTree = try {
+                    ExecutionTreeMapper.toExecutionTree(autoLlmTree)
+                } catch (e: Exception) {
+                    logger.warn("⚠️ [ReAct] '다음 단계' 트리 변환 실패: ${e.message}")
+                    stepHistory.add(ReActStep(step, "auto:$layerName.$function", null, "ERROR(auto-next): ${e.message}"))
+                    continue
+                }
+                val autoExecResult = try {
+                    treeExecutor.executeTree(autoDomainTree, historyManager.getCurrentExecution()!!)
+                } catch (e: Exception) {
+                    logger.warn("⚠️ [ReAct] '다음 단계' 실행 실패: ${e.message}")
+                    null
+                }
+                val autoResult = autoExecResult?.result ?: "ERROR(auto-next): 실행 실패"
+                val autoSuccessful = autoExecResult?.context?.completedNodes
+                    ?.filter { it.isSuccess }
+                    ?.map { "${it.node.layerName}.${it.node.function}" }
+                    ?: emptyList()
+                logger.info("📋 [ReAct] 스텝 #$step (자동) 결과: ${autoResult.take(120)}")
+                val autoPresentation = with(PresentationMapper) { autoDomainTree.toResponse() }
+                stepHistory.add(ReActStep(step, "자동 실행: $layerName.$function", autoPresentation, autoResult, autoSuccessful))
+                continue
+            }
 
             // LLM이 다음 액션 결정
             val decision = try {
@@ -109,11 +156,9 @@ class ReactiveExecutor(
                         continue
                     }
 
-                    // 중복 루프 감지: 제안된 함수들이 전부 이미 완료된 경우 강제 finish (children 포함 재귀)
+                    // 중복 루프 감지: 제안된 함수들이 전부 이미 성공 완료된 경우 강제 finish
                     if (stepHistory.isNotEmpty()) {
-                        val doneFunctions = stepHistory
-                            .flatMap { s -> collectAllNodeFunctions(s.tree?.rootNodes) }
-                            .toSet()
+                        val doneFunctions = stepHistory.flatMap { it.successfulFunctions }.toSet()
                         val proposed = collectLLMNodeFunctions(llmTree.getActualRootNodes()).toSet()
                         if (proposed.isNotEmpty() && doneFunctions.containsAll(proposed)) {
                             val finalResult = stepHistory
@@ -138,21 +183,27 @@ class ReactiveExecutor(
                     historyManager.addLogToCurrent("🌳 미니트리: [$treeDesc]")
 
                     // TreeExecutor로 미니트리 실행 (플레이스홀더 해석, 병렬/순차 지원)
-                    val stepResult = try {
+                    val treeExecResult = try {
                         val currentHistory = historyManager.getCurrentExecution()!!
-                        treeExecutor.executeTree(domainTree, currentHistory).result
+                        treeExecutor.executeTree(domainTree, currentHistory)
                     } catch (e: Exception) {
                         val errMsg = "ERROR(mini-tree): ${e.message}"
                         logger.warn("⚠️ [ReAct] 스텝 #$step 미니트리 오류: $errMsg")
-                        errMsg
+                        null
                     }
+                    val stepResult = treeExecResult?.result ?: "ERROR(mini-tree): 실행 실패"
+                    // 성공한 노드만 추출 (alreadyDoneNote·중복감지에서 실패 노드 제외)
+                    val successfulFunctions = treeExecResult?.context?.completedNodes
+                        ?.filter { it.isSuccess }
+                        ?.map { "${it.node.layerName}.${it.node.function}" }
+                        ?: emptyList()
 
                     logger.info("📋 [ReAct] 스텝 #$step 결과: ${stepResult.take(120)}")
                     historyManager.addLogToCurrent("📋 결과: ${stepResult.take(60)}")
 
                     // 도메인 트리 → presentation 트리 (id 포함, UI 표시/저장용)
                     val presentationTree = with(PresentationMapper) { domainTree.toResponse() }
-                    stepHistory.add(ReActStep(step, decision.reasoning, presentationTree, stepResult))
+                    stepHistory.add(ReActStep(step, decision.reasoning, presentationTree, stepResult, successfulFunctions))
                 }
 
                 else -> {
