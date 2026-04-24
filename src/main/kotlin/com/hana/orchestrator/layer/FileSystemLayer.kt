@@ -184,6 +184,53 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
     }
     
     /**
+     * 파일 내용 검색 (grep)
+     *
+     * @param pattern 검색할 텍스트 또는 정규식 (예: "fun ", "TODO", "class.*Layer")
+     * @param path 검색 대상 파일 또는 디렉토리 경로 (기본값: ".", 상대 경로 사용 필수)
+     * @param glob 검색할 파일 필터 glob 패턴 (기본값: "*" — 모든 파일, 예: "*.kt", "*.json")
+     * @return 매칭된 결과 목록 (파일경로:라인번호: 내용 형식)
+     */
+    @LayerFunction
+    suspend fun searchContent(pattern: String, path: String = ".", glob: String = "*"): String {
+        return try {
+            val root = Paths.get(path).toAbsolutePath().normalize()
+            if (!Files.exists(root)) return "ERROR: 경로가 존재하지 않습니다: $path"
+
+            val regex = Regex(pattern)
+            val globMatcher = FileSystems.getDefault().getPathMatcher("glob:$glob")
+
+            val targets = if (Files.isRegularFile(root)) {
+                listOf(root)
+            } else {
+                Files.walk(root)
+                    .filter { Files.isRegularFile(it) && globMatcher.matches(it.fileName) }
+                    .toList()
+            }
+
+            val results = mutableListOf<String>()
+            for (file in targets) {
+                try {
+                    file.toFile().readLines().forEachIndexed { idx, line ->
+                        if (regex.containsMatchIn(line)) {
+                            val rel = root.relativize(file).toString().ifEmpty { file.fileName.toString() }
+                            results.add("$rel:${idx + 1}: $line")
+                        }
+                    }
+                } catch (_: Exception) { /* 바이너리 등 읽기 불가 파일 스킵 */ }
+            }
+
+            if (results.isEmpty()) {
+                "INFO: '$pattern' 패턴에 매칭되는 내용이 없습니다 (경로: $path, 파일필터: $glob)"
+            } else {
+                "검색 결과 (${results.size}건):\n" + results.joinToString("\n")
+            }
+        } catch (e: Exception) {
+            "ERROR: 내용 검색 실패: ${e.message}"
+        }
+    }
+
+    /**
      * 파일 삭제
      * 
      * @param path 삭제할 파일 경로 (상대 경로 사용 필수)
@@ -322,7 +369,13 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
                 val targetPath = (args["targetPath"] as? String) ?: ""
                 moveFile(sourcePath, targetPath)
             }
-            else -> "Unknown function: $function. Available: readFile, writeFile, listDirectory, backupFile, findFiles, deleteFile, moveFile"
+            "searchContent" -> {
+                val pattern = (args["pattern"] as? String) ?: return "ERROR: pattern 파라미터 필수"
+                val path = (args["path"] as? String) ?: "."
+                val glob = (args["glob"] as? String) ?: "*"
+                searchContent(pattern, path, glob)
+            }
+            else -> "Unknown function: $function. Available: readFile, writeFile, listDirectory, backupFile, findFiles, searchContent, deleteFile, moveFile"
         }
     }
 }
