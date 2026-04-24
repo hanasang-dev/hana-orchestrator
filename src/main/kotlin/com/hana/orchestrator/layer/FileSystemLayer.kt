@@ -2,6 +2,9 @@ package com.hana.orchestrator.layer
 
 import com.hana.orchestrator.orchestrator.ApprovalGate
 import java.io.File
+import java.nio.file.FileSystems
+import java.nio.file.Files
+import java.nio.file.Paths
 
 /**
  * 파일 시스템 레이어
@@ -146,40 +149,34 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
     }
     
     /**
-     * 파일 검색 (glob 패턴 지원)
-     * 
-     * @param pattern 검색 패턴 (예: "*.kt", "*.txt")
+     * 파일 검색 (glob 패턴 지원, ** 재귀 포함)
+     *
+     * @param pattern glob 패턴 (예: "*.kt", "**∕*.kt", "src∕**∕*Test.kt")
      * @param rootPath 검색 시작 경로 (기본값: ".", 상대 경로 사용 필수)
      *   - 올바른 예: ".", "src", "src/main", "./docs"
      *   - 잘못된 예: "/", "/src", "/path/to/dir" (절대 경로 사용 금지)
      *   - 현재 작업 디렉토리 기준으로 상대 경로를 해석합니다
-     * @return 찾은 파일 경로 목록 (줄바꿈으로 구분)
+     * @return 찾은 파일 경로 목록 (줄바꿈으로 구분, rootPath 기준 상대 경로)
      */
     @LayerFunction
     suspend fun findFiles(pattern: String, rootPath: String = "."): String {
         return try {
-            val root = File(rootPath)
-            if (!root.exists()) {
+            val root = Paths.get(rootPath).toAbsolutePath().normalize()
+            if (!Files.exists(root)) {
                 return "ERROR: 검색 경로가 존재하지 않습니다: $rootPath"
             }
-            
-            // 간단한 glob 패턴 매칭 (예: "*.kt" -> ".*\\.kt")
-            val regexPattern = pattern
-                .replace(".", "\\.")
-                .replace("*", ".*")
-                .replace("?", ".")
-            
-            val regex = Regex(regexPattern)
-            
-            val files = root.walkTopDown()
-                .filter { it.isFile && it.name.matches(regex) }
-                .map { it.absolutePath }
+            val matcher = FileSystems.getDefault().getPathMatcher("glob:$pattern")
+            val matches = Files.walk(root)
+                .filter { Files.isRegularFile(it) }
+                .filter { matcher.matches(root.relativize(it)) }
+                .map { root.relativize(it).toString() }
+                .sorted()
                 .toList()
-            
-            if (files.isEmpty()) {
+
+            if (matches.isEmpty()) {
                 "INFO: 패턴 '$pattern'에 맞는 파일을 찾지 못했습니다"
             } else {
-                files.joinToString("\n")
+                matches.joinToString("\n")
             }
         } catch (e: Exception) {
             "ERROR: 파일 검색 실패: ${e.message}"

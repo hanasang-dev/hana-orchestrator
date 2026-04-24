@@ -52,9 +52,9 @@ class ReactiveExecutor(
      * 이미 실행된 함수는 제외 (doneFunctions)
      */
     private fun parseNextStepHint(result: String, doneFunctions: Set<String>): Pair<String, String>? {
-        if (!result.contains("다음 단계:")) return null
-        val layerName = Regex("""layerName="([^"]+)"""").find(result)?.groupValues?.get(1) ?: return null
-        val function = Regex("""function="([^"]+)"""").find(result)?.groupValues?.get(1) ?: return null
+        val match = Regex("""다음 단계: layerName="([^"]+)", function="([^"]+)"""").find(result) ?: return null
+        val layerName = match.groupValues[1]
+        val function = match.groupValues[2]
         val key = "$layerName.$function"
         return if (key !in doneFunctions) Pair(layerName, function) else null
     }

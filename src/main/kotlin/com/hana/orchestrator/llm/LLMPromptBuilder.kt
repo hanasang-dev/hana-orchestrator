@@ -364,7 +364,11 @@ $JSON_RULES
         } else {
             stepHistory.joinToString("\n") { step ->
                 val treeDesc = step.tree?.rootNodes?.joinToString(", ") { "${it.layerName}.${it.function}" } ?: "(알 수 없음)"
-                val result = step.result.take(300)
+                val result = if (step.result.length > 200) {
+                    "${step.result.take(100)}...[전체 ${step.result.length}자 — 데이터가 이미 로드됨. 다시 읽기 금지]"
+                } else {
+                    step.result
+                }
                 // "다음 단계:" 힌트 추출 → LLM에게 아직 미완료임을 명시
                 val nextStepHint = if (result.contains("다음 단계:")) {
                     val idx = result.indexOf("다음 단계:")
@@ -403,6 +407,13 @@ $alreadyDoneNote
    - 올바른 구조: rootNodes:[A(children:[B(args:{input:"{{parent}}"})])]
    - 잘못된 구조: rootNodes:[A, B] ← B가 A 결과를 받지 못함
    - LLM이 파일/커밋 내용을 알고 있다고 가정하지 마세요. 반드시 file-system.readFile / git.log 로 먼저 가져오세요.
+
+⭐ 읽기 + 분석/요약/검토/개선 패턴 (최우선 규칙):
+   - "파일을 읽고 분석/검토/개선/설명해줘" 요청은 반드시 한 번의 execute_tree로 처리하세요
+   - readFile의 children에 llm.analyze를 넣고 "{{parent}}"로 파일 내용을 전달하세요
+   - 올바른 예: readFile(args:{path:"..."},children:[llm.analyze(args:{context:"{{parent}}",query:"코드 품질 관점 개선사항"})])
+   - 잘못된 예: 스텝1 readFile만 → 스텝2 readFile 재시도 (데이터 전달 불가, 중복 루프)
+   - 히스토리에 "[데이터가 이미 로드됨]" 표시가 있고 분석이 필요하면: finish 선택 후 result에 직접 분석 내용 작성
 
 결정 규칙 (반드시 순서대로 확인):
 0. ⛔[finish 금지] 히스토리의 결과에 "다음 단계:" 가 포함되어 있으면 그 단계를 먼저 실행해야 함. 실행 전에는 finish 선택 불가.
