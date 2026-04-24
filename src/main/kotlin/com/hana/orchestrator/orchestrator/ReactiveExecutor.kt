@@ -156,7 +156,7 @@ class ReactiveExecutor(
                         continue
                     }
 
-                    // 중복 루프 감지: 제안된 함수들이 전부 이미 성공 완료된 경우 강제 finish
+                    // 중복 루프 감지 1: 제안된 함수들이 전부 이미 성공 완료된 경우 강제 finish
                     if (stepHistory.isNotEmpty()) {
                         val doneFunctions = stepHistory.flatMap { it.successfulFunctions }.toSet()
                         val proposed = collectLLMNodeFunctions(llmTree.getActualRootNodes()).toSet()
@@ -166,6 +166,20 @@ class ReactiveExecutor(
                                 ?.result ?: stepHistory.lastOrNull()?.result ?: "작업 완료"
                             logger.info("🔁 [ReAct] 중복 루프 감지 → 강제 finish (이미 완료: $proposed)")
                             return ExecutionResult(result = finalResult, stepHistory = stepHistory.toList())
+                        }
+                    }
+
+                    // 중복 루프 감지 2: 직전 스텝이 에러인데 동일 트리를 또 제안하는 경우 강제 finish
+                    val lastStep = stepHistory.lastOrNull()
+                    if (lastStep?.result?.startsWith("ERROR") == true) {
+                        val lastFunctions = lastStep.tree?.rootNodes?.map { "${it.layerName}.${it.function}" }?.toSet()
+                        val proposed = collectLLMNodeFunctions(llmTree.getActualRootNodes()).toSet()
+                        if (lastFunctions != null && lastFunctions == proposed) {
+                            val finalResult = stepHistory
+                                .lastOrNull { !it.result.startsWith("ERROR") }
+                                ?.result ?: "실행 실패"
+                            logger.info("🔁 [ReAct] 에러 후 동일 액션 반복 감지 → 강제 finish (반복: $proposed)")
+                            return ExecutionResult(result = finalResult, error = "에러 후 동일 액션 반복으로 중단", stepHistory = stepHistory.toList())
                         }
                     }
 
