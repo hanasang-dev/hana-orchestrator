@@ -153,13 +153,19 @@ class ApplicationBootstrap {
         
         // 서버 생성 및 시작
         val server = createAndStartServer(port, orchestrator, serviceInfo, applicationScope)
-        
+
         // Shutdown hook 설정
         lifecycleManager.setupShutdownHooks(server, serviceInfo.id, heartbeatJob, applicationScope, orchestrator)
-        
+
         // 시작 정보 출력
         printStartupInfo(port, serviceInfo)
-        
+
+        // 재시작 복구 검증 (비동기 — 서버 완전 기동 후 실행)
+        applicationScope.launch {
+            delay(3000)
+            checkPendingRecovery(port)
+        }
+
         // 서버 실행 및 대기
         runServer(server, serviceInfo.id, heartbeatJob, applicationScope, orchestrator)
     }
@@ -219,5 +225,57 @@ class ApplicationBootstrap {
             lifecycleManager.gracefulShutdownAsync(server, serviceId, heartbeatJob, applicationScope, orchestrator)
         }
     }
-    
+
+    /**
+     * 재시작 복구 검증
+     * pending.jsonl이 존재하면 이전 재시작이 복구 검증을 기다리고 있다는 뜻.
+     * /health 응답으로 성공 여부 판단 → 성공 시 파일 삭제, 실패 시 git 롤백 후 파일 삭제.
+     */
+    private suspend fun checkPendingRecovery(port: Int) = withContext(Dispatchers.IO) {
+        val workDir = File(System.getProperty("user.dir") ?: ".")
+        val pendingFile = File(workDir, ".hana/pending.jsonl")
+        if (!pendingFile.exists()) return@withContext
+
+        val lastLine = pendingFile.readLines().lastOrNull { it.contains("rollbackBranch") } ?: run {
+            pendingFile.delete()
+            return@withContext
+        }
+        val rollbackBranch = Regex(""""rollbackBranch":"([^"]+)"""").find(lastLine)?.groupValues?.get(1) ?: run {
+            pendingFile.delete()
+            return@withContext
+        }
+
+        logger.info("🔄 [Recovery] 재시작 후 복구 검증 시작 (rollback → $rollbackBranch)")
+
+        val healthy = try {
+            val connection = java.net.URL("http://localhost:$port/health").openConnection() as java.net.HttpURLConnection
+            connection.connectTimeout = 3000
+            connection.readTimeout = 3000
+            val code = connection.responseCode
+            connection.disconnect()
+            code == 200
+        } catch (e: Exception) {
+            logger.warn("⚠️ [Recovery] /health 확인 실패: ${e.message}")
+            false
+        }
+
+        if (healthy) {
+            logger.info("✅ [Recovery] 검증 성공 — 변경사항 유지")
+            pendingFile.delete()
+        } else {
+            logger.warn("❌ [Recovery] 검증 실패 — $rollbackBranch 브랜치로 롤백")
+            try {
+                ProcessBuilder("git", "checkout", rollbackBranch)
+                    .directory(workDir)
+                    .inheritIO()
+                    .start()
+                    .waitFor()
+                logger.info("✅ [Recovery] git checkout $rollbackBranch 완료 — 수동으로 빌드 후 재시작 필요")
+            } catch (e: Exception) {
+                logger.error("❌ [Recovery] git rollback 실패: ${e.message}")
+            }
+            pendingFile.delete()
+        }
+    }
+
 }

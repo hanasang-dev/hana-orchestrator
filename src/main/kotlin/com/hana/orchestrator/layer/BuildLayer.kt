@@ -45,9 +45,12 @@ class BuildLayer(
      * build() 완료 후 호출하면 새 JAR로 프로세스를 교체함.
      * - shadow JAR(build/libs/ *-all.jar 패턴) 를 찾아 새 JVM 으로 기동
      * - 현재 프로세스는 포트 해제 후 즉시 종료 (새 프로세스가 동일 포트 재취득)
+     * - rollbackBranch 지정 시 재시작 후 검증 실패하면 해당 브랜치로 자동 롤백
+     *
+     * @param rollbackBranch 검증 실패 시 롤백할 git 브랜치 (예: "main"). 빈 문자열이면 롤백 없음.
      */
     @LayerFunction
-    suspend fun restart(): String = withContext(Dispatchers.IO) {
+    suspend fun restart(rollbackBranch: String = ""): String = withContext(Dispatchers.IO) {
         try {
             val jar = File(projectRoot, "build/libs")
                 .listFiles { f -> f.name.endsWith("-all.jar") }
@@ -55,6 +58,15 @@ class BuildLayer(
                 ?: return@withContext "ERROR: shadow JAR를 찾을 수 없습니다 (먼저 build 실행 필요)"
 
             val javaExe = ProcessHandle.current().info().command().orElse("java")
+
+            // 재시작 전 pending 상태 기록 (재시작 후 복구 검증용)
+            if (rollbackBranch.isNotBlank()) {
+                val pendingFile = File(projectRoot, ".hana/pending.jsonl")
+                pendingFile.parentFile.mkdirs()
+                pendingFile.appendText(
+                    """{"rollbackBranch":"$rollbackBranch","ts":${System.currentTimeMillis()}}""" + "\n"
+                )
+            }
 
             // 재시작 스크립트: 현재 프로세스 종료 후 2초 뒤 새 프로세스 시작
             val restartLog = File(projectRoot, ".hana/restart.log")
