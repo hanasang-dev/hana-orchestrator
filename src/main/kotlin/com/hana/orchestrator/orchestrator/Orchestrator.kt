@@ -11,6 +11,7 @@ import com.hana.orchestrator.llm.factory.DefaultLLMClientFactory
 import com.hana.orchestrator.llm.useSuspend
 import com.hana.orchestrator.context.AppContextService
 import com.hana.orchestrator.domain.dto.ChatDto
+import com.hana.orchestrator.presentation.model.metrics.OrchestratorMetrics
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.serialization.Serializable
 
@@ -91,6 +92,10 @@ class Orchestrator(
      */
     fun getExecutionHistory(limit: Int = 50): List<ExecutionHistory> {
         return historyManager.getExecutionHistory(limit)
+    }
+
+    fun computeMetrics(): OrchestratorMetrics {
+        return MetricsService().compute(historyManager.getExecutionHistory(limit = 200))
     }
 
     /**

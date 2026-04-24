@@ -15,7 +15,7 @@ data class ExecutionResult(
     val error: String? = null,
     @Transient val executionTree: ExecutionTree? = null,
     @Transient val context: ExecutionContext? = null,
-    @Transient val stepHistory: List<ReActStep> = emptyList()
+    val stepHistory: List<ReActStep> = emptyList()
 ) {
     /**
      * 실행이 성공했는지 확인

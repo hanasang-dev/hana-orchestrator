@@ -6,6 +6,7 @@ import com.hana.orchestrator.presentation.controller.ApprovalController
 import com.hana.orchestrator.presentation.controller.ChatController
 import com.hana.orchestrator.presentation.controller.HealthController
 import com.hana.orchestrator.presentation.controller.LayerController
+import com.hana.orchestrator.presentation.controller.MetricsController
 import com.hana.orchestrator.presentation.controller.ServiceController
 import com.hana.orchestrator.presentation.controller.ExecutionWebSocketController
 import com.hana.orchestrator.orchestrator.TreeRepository
@@ -75,6 +76,7 @@ class ServerConfigurator(
                 ExecutionWebSocketController(orchestrator).configureRoutes(this)
                 TreeController(orchestrator, TreeRepository()).configureRoutes(this)
                 ApprovalController(orchestrator.approvalGate).configureRoutes(this)
+                MetricsController(orchestrator).configureRoutes(this)
             }
         }
     }
