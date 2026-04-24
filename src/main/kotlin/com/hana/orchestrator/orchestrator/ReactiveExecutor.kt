@@ -172,7 +172,7 @@ class ReactiveExecutor(
                     // 중복 루프 감지 2: 직전 스텝이 에러인데 동일 트리를 또 제안하는 경우 강제 finish
                     val lastStep = stepHistory.lastOrNull()
                     if (lastStep?.result?.startsWith("ERROR") == true) {
-                        val lastFunctions = lastStep.tree?.rootNodes?.map { "${it.layerName}.${it.function}" }?.toSet()
+                        val lastFunctions = lastStep.tree?.rootNodes?.let { collectAllNodeFunctions(it) }?.toSet()
                         val proposed = collectLLMNodeFunctions(llmTree.getActualRootNodes()).toSet()
                         if (lastFunctions != null && lastFunctions == proposed) {
                             val finalResult = stepHistory
