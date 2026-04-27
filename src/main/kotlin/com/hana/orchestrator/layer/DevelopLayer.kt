@@ -189,6 +189,7 @@ $functionBlocks
                 "INFO: '${desc.name}' 레이어는 이미 등록되어 있습니다. (함수: ${desc.functions.joinToString(", ")})"
             } else {
                 layerManager.registerLayer(instance)
+                LayerRegistry.register(normalized, projectRoot)
                 "SUCCESS: '${desc.name}' 레이어 동적 등록 완료. 즉시 사용 가능. 함수: ${desc.functions.joinToString(", ")}"
             }
         } catch (e: ClassNotFoundException) {

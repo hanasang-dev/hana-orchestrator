@@ -47,6 +47,25 @@ class LayerManager(
             defaultLayers.filterIsInstance<com.hana.orchestrator.layer.DevelopLayer>()
                 .firstOrNull()?.setLayerManager(this)
 
+            // 영속 레지스트리에서 이전에 핫로드된 레이어 복원
+            val projectRoot = java.io.File(System.getProperty("user.dir"))
+            val persistedLayers = com.hana.orchestrator.layer.LayerRegistry.loadAll(
+                projectRoot, LayerManager::class.java.classLoader
+            )
+            var restoredCount = 0
+            for (layer in persistedLayers) {
+                val desc = layer.describe()
+                if (desc.name !in layerNameMap) {
+                    layers.add(layer)
+                    layerNameMap[desc.name] = layer
+                    restoredCount++
+                    logger.info("  - 영속 레이어 복원: ${layer::class.simpleName} (${desc.name})")
+                }
+            }
+            if (restoredCount > 0) {
+                logger.info("♻️ [LayerManager] 영속 레지스트리에서 ${restoredCount}개 레이어 복원 완료")
+            }
+
             isInitialized = true
             logger.info("✅ [LayerManager] 총 ${layers.size}개 레이어 등록 완료")
         }

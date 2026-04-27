@@ -64,4 +64,4 @@ build/
 setup.sh
 
 # Orchestrator runtime data (persistent context etc.)
-.hana/
+.hana/layer-registry.json
