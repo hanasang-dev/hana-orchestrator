@@ -25,13 +25,17 @@
 
 ## 아키텍처 원칙 (절대 위반 금지)
 
-### 레이어 책임 분리
-- **레이어의 동작·사용법·조합 패턴은 레이어 자신이 `describe()`(KDoc)으로 설명한다**
-- **오케스트레이터 프롬프트(`LLMPromptBuilder`)는 오케스트레이터 자신의 책임만 담는다**
-  - 허용: 트리 구조 규칙, `{{parent}}` 동작 방식, execute_tree/finish 판단 기준, JSON 포맷
-  - 금지: 특정 레이어명·함수명 언급, 레이어 조합 패턴, "readFile 후 llm.analyze" 같은 구체적 사용 예시
+### 레이어 격리
+- **레이어는 서로의 존재를 알아서는 안 된다** — 레이어 코드·KDoc에 타 레이어명·함수명 언급 금지
+- **레이어의 동작·사용법은 레이어 자신이 KDoc으로 설명한다** — 조합 패턴은 LLM이 결정
+- 세부 규칙 → [`layer/CLAUDE.md`](src/main/kotlin/com/hana/orchestrator/layer/CLAUDE.md)
+
+### 오케스트레이터 책임
+- **오케스트레이터도 하나의 레이어다** — `LLMPromptBuilder`는 자신의 구조적 책임만 담는다
+  - 허용: 트리 구조, `{{parent}}` 동작, execute_tree/finish 판단, JSON 포맷
+  - 금지: 특정 레이어명·함수명 언급, 레이어 조합 패턴
 - LLM 라우팅 개선이 필요하면 → 해당 레이어의 KDoc을 수정한다. 프롬프트에 우겨넣지 않는다.
-- 이 규칙을 어기면 레이어가 추가/변경될 때마다 프롬프트도 같이 수정해야 하는 강결합이 생긴다.
+- 세부 규칙 → [`llm/CLAUDE.md`](src/main/kotlin/com/hana/orchestrator/llm/CLAUDE.md)
 
 ## 개발 워크플로우
 - 빌드 가능한 단위로 작업 후 반드시 빌드 확인

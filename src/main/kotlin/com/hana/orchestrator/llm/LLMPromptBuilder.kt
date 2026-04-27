@@ -125,8 +125,21 @@ internal class LLMPromptBuilder {
         } else ""
 
         val projectContextSection = if (projectContext.isNotEmpty()) {
-            val lines = projectContext.entries.joinToString("\n") { (k, v) -> "  [$k] $v" }
-            "\n📂 프로젝트 컨텍스트 (반드시 준수):\n$lines\n"
+            val sb = StringBuilder("\n📂 프로젝트 컨텍스트 (반드시 준수):\n")
+            projectContext["workingDirectory"]?.let { sb.append("  작업 디렉토리: $it\n") }
+            // kotlinFileIndex: "ClassName:relative/path.kt, ..." → 명확한 테이블로 변환
+            projectContext["kotlinFileIndex"]?.takeIf { it.isNotEmpty() }?.let { index ->
+                sb.append("\n  📄 Kotlin 파일 경로 인덱스 (파일 접근 시 반드시 이 경로를 사용):\n")
+                index.split(", ").forEach { entry ->
+                    val colon = entry.indexOf(':')
+                    if (colon > 0) {
+                        sb.append("    ${entry.substring(0, colon)} → ${entry.substring(colon + 1)}\n")
+                    }
+                }
+            }
+            projectContext.filterKeys { it != "workingDirectory" && it != "kotlinFileIndex" }
+                .forEach { (k, v) -> sb.append("  [$k] $v\n") }
+            sb.toString()
         } else ""
 
         return """목표: "$query"
@@ -144,14 +157,15 @@ $alreadyDoneNote
 ⚠️ 데이터 흐름 규칙:
    - A의 결과가 B의 입력으로 필요하면 → B를 A의 children 배열 안에 넣고 B의 args에 "{{parent}}" 사용
    - "{{parent}}"는 직접 부모 노드의 결과만 가리킴. 형제(sibling) 노드 결과는 받을 수 없음.
-   - 3단계 체인(A→B→C): C는 B의 children에 넣어야 C.args의 "{{parent}}"가 B 결과를 가리킴.
-     올바른: A(children:[B(children:[C(args:{x:"{{parent}}"})])]) ← C가 B 결과를 받음
+   - 이 규칙은 깊이에 관계없이 동일하게 적용됨: 각 노드는 자신의 부모 결과만 {{parent}}로 받음.
+     올바른: A(children:[B(children:[C(args:{x:"{{parent}}"})])]) ← C가 B 결과를, B가 A 결과를 받음
      잘못됨: A(children:[B, C]) ← C의 "{{parent}}"는 A 결과를 가리킴 (B 결과 아님)
    - LLM이 파일/커밋 내용을 알고 있다고 가정하지 마세요. 반드시 해당 레이어 함수로 먼저 가져오세요.
 
 ⭐ 데이터 연쇄 패턴 (최우선 규칙):
    - 데이터를 가져온 뒤 처리하는 작업은 반드시 한 번의 execute_tree로 처리하세요
    - 데이터를 쓰는 노드는 반드시 해당 데이터를 생성한 노드의 children에 배치하세요 (형제 배치 금지)
+   - 변환 결과를 저장해야 한다면 저장 노드도 같은 트리의 children에 포함하세요 (읽기→변환→저장을 하나의 트리로)
    - 잘못된 예: 스텝1 데이터만 읽음 → 스텝2 같은 데이터를 다시 읽으려 함 (중복 루프)
    - 히스토리에 "[데이터가 이미 로드됨]" 표시가 있고 처리가 필요하면: finish 선택 후 result에 직접 결과 작성
 
@@ -169,7 +183,7 @@ $JSON_RULES
 단일 노드:
 {"action":"execute_tree","tree":{"rootNodes":[{"layerName":"git","function":"currentBranch","args":{},"parallel":false,"children":[]}]},"reasoning":"브랜치 조회"}
 
-2단계 체인 — B가 A 결과({{parent}})를 입력으로 사용:
+체인 — 앞 노드 결과({{parent}})가 뒤 노드 입력으로 필요한 경우, 뒤 노드를 앞 노드의 children에 넣는다. 깊이 제한 없음:
 {"action":"execute_tree","tree":{"rootNodes":[{"layerName":"file-system","function":"readFile","args":{"path":"README.md"},"parallel":false,"children":[{"layerName":"llm","function":"analyze","args":{"context":"{{parent}}","query":"2줄로 요약해줘"},"parallel":false,"children":[]}]}]},"reasoning":"A→B 체인"}
 
 병렬 — 독립적인 작업 동시 실행:

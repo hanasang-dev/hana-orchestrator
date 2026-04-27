@@ -1,8 +1,10 @@
 package com.hana.orchestrator.layer
 
 /**
- * 문자열 유틸리티 레이어 — 이미 완성된 문자열을 단순 변환(대소문자·접두어·자르기 등)하는 용도.
- * 코드 생성·수정·작성이 필요하면 이 레이어가 아닌 llm.analyze 를 사용하세요.
+ * 문자열 유틸리티 레이어 — 이미 완성된 문자열을 단순 변환하는 용도.
+ * - 특정 문자열 치환: replace(text, search, replacement)
+ * - 대소문자 변환, 접두어/접미사 추가, 자르기 등
+ * - 복잡한 코드 생성·분석이 필요하면 llm 레이어를 사용하세요.
  */
 @Layer
 class TextTransformerLayer : CommonLayerInterface {
@@ -47,6 +49,16 @@ class TextTransformerLayer : CommonLayerInterface {
         return "$text$suffix"
     }
     
+    /**
+     * 텍스트 내 특정 문자열을 다른 문자열로 치환합니다.
+     * 결과는 변환된 문자열로, 별도로 저장이 필요하면 저장 단계를 children에 연결하세요.
+     * 예: replace(text="{{parent}}", search="변경전", replacement="변경후")
+     */
+    @LayerFunction
+    suspend fun replace(text: String, search: String, replacement: String): String {
+        return text.replace(search, replacement)
+    }
+
     /**
      * 텍스트 길이 제한
      */
@@ -93,7 +105,13 @@ class TextTransformerLayer : CommonLayerInterface {
                     ?: (args["maxLength"] as? Int) ?: 10
                 truncate(text, maxLength)
             }
-            else -> "Unknown function: $function. Available: toUpperCase, toLowerCase, reverse, addPrefix, addSuffix, truncate"
+            "replace" -> {
+                val text = (args["text"] as? String) ?: ""
+                val search = (args["search"] as? String) ?: ""
+                val replacement = (args["replacement"] as? String) ?: (args["replace"] as? String) ?: ""
+                replace(text, search, replacement)
+            }
+            else -> "Unknown function: $function. Available: toUpperCase, toLowerCase, reverse, addPrefix, addSuffix, truncate, replace"
         }
     }
 }

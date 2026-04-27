@@ -14,8 +14,7 @@ import com.hana.orchestrator.llm.useSuspend
  * - 새 코드를 생성해야 할 때 → analyze(context="", query="Kotlin으로 ... 클래스를 작성해줘")
  * - 일반 지식 질문이나 창작이 필요할 때 → answerDirectly(query=질문)
  *
- * 코드 수정 패턴 (readFile 결과를 받아 수정 후 writeFile):
- * file-system.readFile → llm.analyze(context={{parent}}, query="함수를 추가한 전체 파일 코드 작성") → file-system.writeFile
+ * 데이터 변환 후 저장이 필요하면, 저장 노드를 이 레이어 노드의 children에 연결하세요.
  */
 @Layer
 class LLMLayer(

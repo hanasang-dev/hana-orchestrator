@@ -12,7 +12,13 @@ import java.nio.file.Paths
  * 목적: 소스 코드·설정 등 파일을 읽고, 내용을 수정·추가할 수 있는 기능 제공.
  * (예: 변수·코드 추가, 기존 라인 수정, 새 파일 쓰기. readFile → 내용 생성/변경 → writeFile)
  *
- * 실행 트리의 노드로 사용 가능하여 반복적으로 사용할 수 있습니다.
+ * ⭐ 파일 경로를 정확히 알고 있으면 바로 readFile(path="상대경로") 사용.
+ *    kotlinFileIndex 컨텍스트에 "파일명:경로" 형태로 경로가 있으면 그 경로를 그대로 사용하세요.
+ *    예: kotlinFileIndex에 "EchoLayer:src/main/kotlin/.../EchoLayer.kt" 가 있으면
+ *        readFile(path="src/main/kotlin/.../EchoLayer.kt") 로 바로 읽으세요.
+ *
+ * ⭐ 경로를 모를 때: findFiles(pattern="**\/EchoLayer.kt") 로 먼저 경로를 찾은 후 readFile.
+ *
  * 예: 파일 읽기 → 분석 → 수정 → 다시 읽기 → 검증
  */
 @Layer
@@ -38,8 +44,14 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
         return try {
             val file = File(path)
             if (!file.exists()) {
+                // 파일명만 주어진 경우 또는 절대 경로로 존재하지 않는 경우 → 파일명으로 자동 탐색
                 val filename = file.name
-                return "ERROR: 파일이 존재하지 않습니다: $path. 힌트: file-system.findFiles(pattern=\"**/$filename\")로 정확한 경로를 먼저 확인하세요."
+                val found = findFiles("**/$filename")
+                if (!found.startsWith("ERROR") && !found.startsWith("INFO")) {
+                    val resolvedPath = found.lines().first().trim()
+                    return readFile(resolvedPath)
+                }
+                return "ERROR: 파일이 존재하지 않습니다: $path. findFiles(pattern=\"**/$filename\")로 정확한 경로를 먼저 확인하세요."
             }
             if (!file.isFile) {
                 return "ERROR: 파일이 아닙니다: $path"
@@ -92,12 +104,15 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
     @LayerFunction
     suspend fun writeFile(path: String, content: String): String {
         return try {
-            // 1. 보호된 파일 확인
-            if (!validateChanges(path, content)) {
-                return "ERROR: 파일 수정 실패 - 보호된 파일입니다: $path"
+            // 1. 경로 자동 해석: 파일이 현재 경로에 없으면 기존 파일 위치 탐색
+            val resolvedPath = resolveWritePath(path)
+
+            // 2. 보호된 파일 확인
+            if (!validateChanges(resolvedPath, content)) {
+                return "ERROR: 파일 수정 실패 - 보호된 파일입니다: $resolvedPath"
             }
 
-            val file = File(path)
+            val file = File(resolvedPath)
 
             // 2. 승인 게이트: 파일 쓰기 전 사용자 확인 대기 (approvalGate가 설정된 경우)
             if (approvalGate != null) {
@@ -109,13 +124,13 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
             }
 
             // 3. 기존 파일이 있을 때만 백업 (신규 파일이면 백업 생략)
-            val backupPath = if (file.exists()) backupFile(path) else "신규 파일"
+            val backupPath = if (file.exists()) backupFile(resolvedPath) else "신규 파일"
 
             // 4. 파일 쓰기
             file.parentFile?.mkdirs()
             file.writeText(content)
 
-            "SUCCESS: 파일 수정 완료\n경로: $path\n백업: $backupPath"
+            "SUCCESS: 파일 수정 완료\n경로: $resolvedPath\n백업: $backupPath"
         } catch (e: Exception) {
             "ERROR: 파일 쓰기 실패: ${e.message}"
         }
@@ -292,6 +307,20 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
         }
     }
     
+    /**
+     * writeFile용 경로 해석: 파일이 현재 경로에 없으면 프로젝트 내 동일 파일명을 탐색.
+     * 신규 파일(탐색 결과 없음)은 원래 path 그대로 반환.
+     */
+    private suspend fun resolveWritePath(path: String): String {
+        if (File(path).exists()) return path
+        val filename = File(path).name
+        val found = findFiles("**/$filename")
+        if (!found.startsWith("ERROR") && !found.startsWith("INFO")) {
+            return found.lines().first().trim()
+        }
+        return path
+    }
+
     /**
      * path가 존재하는 파일인지 검사. 보호된 파일이면 실패.
      * @param existsLabel 존재하지 않을 때 메시지용 (예: "파일", "원본 파일")

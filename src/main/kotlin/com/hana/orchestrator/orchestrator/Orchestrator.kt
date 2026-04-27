@@ -122,8 +122,10 @@ class Orchestrator(
 
         val volatileCtx = appContextService.getVolatileStore().snapshot()
         val workingDir = volatileCtx["workingDirectory"] ?: System.getProperty("user.dir") ?: "."
+        val kotlinFileIndex = buildKotlinFileIndex(workingDir)
         val projectContext = buildMap {
             put("workingDirectory", workingDir)
+            if (kotlinFileIndex.isNotEmpty()) put("kotlinFileIndex", kotlinFileIndex)
         }
 
         return try {

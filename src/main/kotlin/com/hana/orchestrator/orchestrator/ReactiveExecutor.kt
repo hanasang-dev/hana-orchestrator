@@ -6,6 +6,10 @@ import com.hana.orchestrator.data.model.response.ExecutionTreeResponse
 import com.hana.orchestrator.domain.entity.ExecutionResult
 import com.hana.orchestrator.llm.ReActStep
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 import com.hana.orchestrator.llm.useSuspend
 import com.hana.orchestrator.presentation.mapper.ExecutionTreeMapper as PresentationMapper
@@ -31,18 +35,51 @@ class ReactiveExecutor(
     private val maxSteps = 15
     private val logger = createOrchestratorLogger(ReactiveExecutor::class.java, historyManager)
 
-    /** 프레젠테이션 트리 노드에서 "layerName.function" 목록 수집 (루트 + children 재귀) */
+    // ── P1: 인수(args) 포함 노드 식별 키 생성 헬퍼 ──────────────────────────────
+
+    /** 도메인 노드 식별 키 (레이어.함수(args)) — 중복 감지용 */
+    private fun nodeKey(layerName: String, function: String, args: Map<String, Any>): String {
+        val argsStr = args.entries.sortedBy { it.key }
+            .joinToString(",") { (k, v) -> "$k=${anyToCanonical(v)}" }
+        return "$layerName.$function($argsStr)"
+    }
+
+    private fun anyToCanonical(v: Any?): String = when (v) {
+        is Map<*, *> -> "{${v.entries.sortedBy { it.key.toString() }
+            .joinToString(",") { (k, vv) -> "$k=${anyToCanonical(vv)}" }}}"
+        is List<*> -> "[${v.joinToString(",") { anyToCanonical(it) }}]"
+        else -> v?.toString() ?: ""
+    }
+
+    /** LLM 응답 노드 식별 키 (JsonElement args 포함) — 중복 감지용 */
+    private fun llmNodeKey(node: ExecutionNodeResponse): String {
+        val argsStr = (node.args as? JsonObject)
+            ?.entries?.sortedBy { it.key }
+            ?.joinToString(",") { (k, v) -> "$k=${jsonToCanonical(v)}" } ?: ""
+        return "${node.layerName}.${node.function}($argsStr)"
+    }
+
+    private fun jsonToCanonical(e: JsonElement): String = when (e) {
+        is JsonObject -> "{${e.entries.sortedBy { it.key }
+            .joinToString(",") { (k, v) -> "$k=${jsonToCanonical(v)}" }}}"
+        is JsonArray -> "[${e.joinToString(",") { jsonToCanonical(it) }}]"
+        is JsonPrimitive -> e.content  // JsonNull도 JsonPrimitive의 서브클래스
+    }
+
+    /** 프레젠테이션 트리 노드에서 args 포함 식별 키 목록 수집 (루트 + children 재귀) */
     private fun collectAllNodeFunctions(nodes: List<ExecutionTreeNodeResponse>?): List<String> {
         if (nodes == null) return emptyList()
         return nodes.flatMap { node ->
-            listOf("${node.layerName}.${node.function}") + collectAllNodeFunctions(node.children)
+            val argsStr = node.args.entries.sortedBy { it.key }
+                .joinToString(",") { (k, v) -> "$k=$v" }
+            listOf("${node.layerName}.${node.function}($argsStr)") + collectAllNodeFunctions(node.children)
         }
     }
 
-    /** LLM 데이터 트리 노드에서 "layerName.function" 목록 수집 (루트 + children 재귀) */
+    /** LLM 데이터 트리 노드에서 args 포함 식별 키 목록 수집 (루트 + children 재귀) */
     private fun collectLLMNodeFunctions(nodes: List<ExecutionNodeResponse>): List<String> {
         return nodes.flatMap { node ->
-            listOf("${node.layerName}.${node.function}") + collectLLMNodeFunctions(node.children)
+            listOf(llmNodeKey(node)) + collectLLMNodeFunctions(node.children)
         }
     }
 
@@ -82,8 +119,10 @@ class ReactiveExecutor(
             )
 
             // 직전 스텝 결과의 "다음 단계:" 힌트 → LLM 없이 자동 실행
-            val doneFunctions = stepHistory.flatMap { it.successfulFunctions }.toSet()
-            val autoStep = stepHistory.lastOrNull()?.result?.let { parseNextStepHint(it, doneFunctions) }
+            // parseNextStepHint는 함수명만 비교하므로 args 접미사를 제거한 이름 집합을 사용
+            val doneFunctionNames = stepHistory.flatMap { it.successfulFunctions }
+                .map { it.substringBefore("(") }.toSet()
+            val autoStep = stepHistory.lastOrNull()?.result?.let { parseNextStepHint(it, doneFunctionNames) }
             if (autoStep != null) {
                 val (layerName, function) = autoStep
                 logger.info("🔜 [ReAct] '다음 단계' 자동 실행: $layerName.$function")
@@ -103,9 +142,10 @@ class ReactiveExecutor(
                     null
                 }
                 val autoResult = autoExecResult?.result ?: "ERROR(auto-next): 실행 실패"
+                // P1: args 포함 키, P2: ERROR 문자열 반환은 성공으로 간주하지 않음
                 val autoSuccessful = autoExecResult?.context?.completedNodes
-                    ?.filter { it.isSuccess }
-                    ?.map { "${it.node.layerName}.${it.node.function}" }
+                    ?.filter { it.isSuccess && !it.result.orEmpty().startsWith("ERROR") }
+                    ?.map { nodeKey(it.node.layerName, it.node.function, it.node.args) }
                     ?: emptyList()
                 logger.info("📋 [ReAct] 스텝 #$step (자동) 결과: ${autoResult.take(120)}")
                 val autoPresentation = with(PresentationMapper) { autoDomainTree.toResponse() }
@@ -207,10 +247,10 @@ class ReactiveExecutor(
                         null
                     }
                     val stepResult = treeExecResult?.result ?: "ERROR(mini-tree): 실행 실패"
-                    // 성공한 노드만 추출 (alreadyDoneNote·중복감지에서 실패 노드 제외)
+                    // P1: args 포함 키, P2: ERROR 문자열 반환은 성공으로 간주하지 않음
                     val successfulFunctions = treeExecResult?.context?.completedNodes
-                        ?.filter { it.isSuccess }
-                        ?.map { "${it.node.layerName}.${it.node.function}" }
+                        ?.filter { it.isSuccess && !it.result.orEmpty().startsWith("ERROR") }
+                        ?.map { nodeKey(it.node.layerName, it.node.function, it.node.args) }
                         ?: emptyList()
 
                     logger.info("📋 [ReAct] 스텝 #$step 결과: ${stepResult.take(120)}")
