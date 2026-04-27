@@ -335,19 +335,13 @@ function getNodeAtScreenPos(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     const rx = clientX - rect.left;
     const ry = clientY - rect.top;
-    return cyInstance.nodes().filter(n => {
+    const hit = cyInstance.nodes().filter(n => {
         const pos = n.renderedPosition();
         const w = n.renderedWidth() / 2 + 8;
         const h = n.renderedHeight() / 2 + 8;
         return Math.abs(pos.x - rx) < w && Math.abs(pos.y - ry) < h;
-    }).first().length > 0
-        ? cyInstance.nodes().filter(n => {
-            const pos = n.renderedPosition();
-            const w = n.renderedWidth() / 2 + 8;
-            const h = n.renderedHeight() / 2 + 8;
-            return Math.abs(pos.x - rx) < w && Math.abs(pos.y - ry) < h;
-        }).first()
-        : null;
+    }).first();
+    return hit.length > 0 ? hit : null;
 }
 
 // 드래그 중 겹치는 다른 노드 찾기
@@ -590,31 +584,6 @@ function deleteSelectedNode() {
 }
 
 // ── 트리 저장 / 불러오기 ──
-
-/** 실행이력의 executionTree를 저장 (btn: 클릭된 버튼 엘리먼트) */
-async function saveExecTree(execId, btn) {
-    const item = btn?.closest('.execution-item');
-    const nameInput = item?.querySelector('.exec-save-name');
-    const execData = findExecutionData(execId);
-    if (!execData?.executionTree) { alert('저장할 트리가 없습니다.'); return; }
-    const name = (nameInput?.value || '').trim() || (execData.query || '').slice(0, 40) || 'react-tree';
-    try {
-        const res = await fetch('/trees/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, query: execData.query, tree: execData.executionTree })
-        });
-        const data = await res.json();
-        if (data.success) {
-            const saveRow = btn?.closest('.exec-save-row');
-            if (saveRow) saveRow.innerHTML = `<span class="exec-save-done">✅ "${escapeHtml(name)}" 저장됨</span>`;
-        } else {
-            alert('저장 실패: ' + (data.error || '알 수 없는 오류'));
-        }
-    } catch (e) {
-        alert('저장 실패: ' + e.message);
-    }
-}
 
 async function saveTree() {
     const tree = elementsToTree();
@@ -942,13 +911,11 @@ function updateProgressUI(progress) {
 
     // 페이즈별 색상 변경
     const colors = {
-        'STARTING': 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)',
-        'TREE_CREATION': 'linear-gradient(90deg, #f093fb 0%, #f5576c 100%)',
+        'STARTING':        'linear-gradient(90deg, #667eea 0%, #764ba2 100%)',
         'TREE_VALIDATION': 'linear-gradient(90deg, #4facfe 0%, #00f2fe 100%)',
-        'TREE_EXECUTION': 'linear-gradient(90deg, #43e97b 0%, #38f9d7 100%)',
-        'RESULT_EVALUATION': 'linear-gradient(90deg, #fa709a 0%, #fee140 100%)',
-        'COMPLETED': 'linear-gradient(90deg, #30cfd0 0%, #330867 100%)',
-        'FAILED': 'linear-gradient(90deg, #eb3349 0%, #f45c43 100%)'
+        'TREE_EXECUTION':  'linear-gradient(90deg, #43e97b 0%, #38f9d7 100%)',
+        'COMPLETED':       'linear-gradient(90deg, #30cfd0 0%, #330867 100%)',
+        'FAILED':          'linear-gradient(90deg, #eb3349 0%, #f45c43 100%)'
     };
     progressBar.style.background = colors[progress.phase] || colors['STARTING'];
 }
@@ -982,9 +949,6 @@ function connectWebSocket() {
                 updateProgressUI(data);
             } else {
                 // 실행 이력 업데이트
-                if (data.history && data.history[0]) {
-                    console.log('첫 번째 실행 이력의 executionTree:', data.history[0].executionTree);
-                }
                 updateExecutionsUI(data);
             }
         } catch (error) {
@@ -1531,7 +1495,6 @@ function initSectionResizers() {
 }
 
 function renderExecution(exec, isCurrent) {
-    console.log('renderExecution called:', exec.id, 'has executionTree:', !!exec.executionTree, exec.executionTree);
     const statusClass = (exec.status || '').toLowerCase();
     const statusText = getStatusLabel(exec.status);
     

@@ -45,10 +45,8 @@ data class ProgressUpdate(
 @Serializable
 enum class ExecutionPhase {
     STARTING,           // 시작
-    TREE_CREATION,      // 실행 트리 생성
     TREE_VALIDATION,    // 트리 검증
     TREE_EXECUTION,     // 트리 실행
-    RESULT_EVALUATION,  // 결과 평가
     COMPLETED,          // 완료
     FAILED              // 실패
 }

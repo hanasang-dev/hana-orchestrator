@@ -450,19 +450,6 @@ textarea:disabled {
     min-height: 16px;
 }
 
-#saveReActTreeBtn {
-    display: none;
-    margin-top: 8px;
-    padding: 6px 14px;
-    font-size: 12px;
-    background: var(--primary-light);
-    color: var(--primary);
-    border: 1px solid var(--primary);
-    border-radius: var(--radius-sm);
-}
-
-#saveReActTreeBtn:hover { background: var(--primary); color: white; }
-
 /* 진행바 */
 #progressContainer {
     display: none;
@@ -1122,26 +1109,6 @@ textarea:disabled {
     margin-bottom: 6px;
 }
 
-/* ReAct 트리 저장 인라인 행 */
-.save-tree-row {
-    display: none;
-    align-items: center;
-    gap: 6px;
-    margin-top: 8px;
-}
-
-.save-tree-row input[type="text"] {
-    flex: 1;
-    padding: 5px 8px;
-    font-size: 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    outline: none;
-    min-width: 0;
-}
-
-.save-tree-row input[type="text"]:focus { border-color: var(--primary); }
-
 /* 트리 에디터 모달 이름 입력 */
 .tree-name-input {
     padding: 6px 10px;
@@ -1169,12 +1136,6 @@ textarea:disabled {
 }
 
 .tree-view-btn:hover { background: var(--primary); color: white; }
-
-.exec-save-done {
-    font-size: 11px;
-    color: var(--success);
-    font-weight: 600;
-}
 
 /* 실행 결과 변형 */
 .execution-result.error-result {
