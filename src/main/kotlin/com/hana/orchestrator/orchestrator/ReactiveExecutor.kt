@@ -24,6 +24,13 @@ import com.hana.orchestrator.presentation.model.execution.ExecutionTreeNodeRespo
  * action:
  * - execute_tree : LLM이 미니트리 생성 → TreeExecutor.executeTree() 위임 (플레이스홀더/병렬 지원)
  * - finish       : 루프 종료 및 최종 결과 반환
+ *
+ * 종료 조건 (우선순위 순):
+ * 1. LLM이 finish 반환 → 정상 완료
+ * 2. 중복 루프 감지 → 이미 완료한 작업을 또 제안
+ * 3. 에러 후 동일 트리 반복 → 에러 재시도 루프
+ * 4. 연속 에러 N회 → 근본적인 실패 상태
+ * 5. absoluteMaxSteps 도달 → runaway 안전망 (마지막 수단)
  */
 class ReactiveExecutor(
     private val layerManager: LayerManager,
@@ -32,7 +39,10 @@ class ReactiveExecutor(
     private val modelSelectionStrategy: ModelSelectionStrategy,
     private val treeExecutor: TreeExecutor
 ) {
-    private val maxSteps = 15
+    /** runaway 방지용 절대 안전망 — 정상 작업에서는 도달하지 않아야 함 */
+    private val absoluteMaxSteps = 200
+    /** 이 횟수만큼 연속으로 ERROR 결과가 나오면 복구 불가 상태로 판단하고 중단 */
+    private val maxConsecutiveErrors = 3
     private val logger = createOrchestratorLogger(ReactiveExecutor::class.java, historyManager)
 
     // ── P1: 인수(args) 포함 노드 식별 키 생성 헬퍼 ──────────────────────────────
@@ -97,8 +107,8 @@ class ReactiveExecutor(
     }
 
     /**
-     * ReAct 루프 실행
-     * 최대 maxSteps 반복. 각 스텝에서 LLM이 미니트리 결정 → TreeExecutor 실행 → 결과 관찰 → 반복
+     * ReAct 루프 실행.
+     * 종료는 의미적 감지에 맡기고, absoluteMaxSteps는 runaway 안전망으로만 사용.
      */
     suspend fun execute(
         query: String,
@@ -108,9 +118,38 @@ class ReactiveExecutor(
     ): ExecutionResult {
         val allDescriptions = layerManager.getAllLayerDescriptions()
         val stepHistory = mutableListOf<ReActStep>()
+        var step = 0
+        var consecutiveErrors = 0
 
-        for (step in 1..maxSteps) {
-            val progressPct = (step * 70 / maxSteps + 15).coerceAtMost(85)
+        while (true) {
+            step++
+
+            // ── runaway 안전망 (의미적 감지가 모두 빗나간 경우에만 도달) ──
+            if (step > absoluteMaxSteps) {
+                val finalResult = stepHistory.lastOrNull()?.result ?: "최대 스텝 도달"
+                logger.warn("⚠️ [ReAct] 절대 최대 스텝($absoluteMaxSteps) 도달: 강제 종료")
+                return ExecutionResult(
+                    result = finalResult,
+                    error = "절대 최대 ReAct 스텝($absoluteMaxSteps) 도달",
+                    stepHistory = stepHistory.toList()
+                )
+            }
+
+            // ── 연속 에러 감지: 복구 불가 상태 판단 ──
+            if (consecutiveErrors >= maxConsecutiveErrors) {
+                val finalResult = stepHistory
+                    .lastOrNull { !it.result.startsWith("ERROR") }
+                    ?.result ?: "연속 실패로 중단"
+                logger.warn("⚠️ [ReAct] 연속 에러 ${maxConsecutiveErrors}회 → 강제 종료")
+                return ExecutionResult(
+                    result = finalResult,
+                    error = "연속 에러 ${maxConsecutiveErrors}회로 중단",
+                    stepHistory = stepHistory.toList()
+                )
+            }
+
+            // 진행률: 스텝마다 5%씩 올라가다 85%에서 수렴 (작업량 불확정이므로 점근)
+            val progressPct = minOf(15 + step * 5, 85)
             logger.info("🔄 [ReAct] 스텝 #$step 시작")
             historyManager.addLogToCurrent("🔄 ReAct 스텝 #$step")
             statePublisher.emitProgress(
@@ -133,6 +172,7 @@ class ReactiveExecutor(
                 } catch (e: Exception) {
                     logger.warn("⚠️ [ReAct] '다음 단계' 트리 변환 실패: ${e.message}")
                     stepHistory.add(ReActStep(step, "auto:$layerName.$function", null, "ERROR(auto-next): ${e.message}"))
+                    consecutiveErrors++
                     continue
                 }
                 val autoExecResult = try {
@@ -150,6 +190,7 @@ class ReactiveExecutor(
                 logger.info("📋 [ReAct] 스텝 #$step (자동) 결과: ${autoResult.take(120)}")
                 val autoPresentation = with(PresentationMapper) { autoDomainTree.toResponse() }
                 stepHistory.add(ReActStep(step, "자동 실행: $layerName.$function", autoPresentation, autoResult, autoSuccessful))
+                if (autoResult.startsWith("ERROR")) consecutiveErrors++ else consecutiveErrors = 0
                 continue
             }
 
@@ -174,8 +215,8 @@ class ReactiveExecutor(
                 "finish" -> {
                     // LLM이 finish.result에 명시한 답변 우선 사용.
                     // 비어있으면 히스토리의 마지막 성공 결과 사용 (에러/Unknown function 제외)
-                    val lastSuccessResult = stepHistory.lastOrNull { step ->
-                        !step.result.startsWith("ERROR") && !step.result.startsWith("Unknown function")
+                    val lastSuccessResult = stepHistory.lastOrNull { s ->
+                        !s.result.startsWith("ERROR") && !s.result.startsWith("Unknown function")
                     }?.result
                     val finalResult = decision.result.ifEmpty { null }
                         ?: lastSuccessResult
@@ -193,7 +234,8 @@ class ReactiveExecutor(
                     val llmTree = decision.tree
                     if (llmTree == null) {
                         logger.warn("⚠️ [ReAct] execute_tree: tree is null, 스킵")
-                        stepHistory.add(ReActStep(step, decision.reasoning, null, "(tree is null)"))
+                        stepHistory.add(ReActStep(step, decision.reasoning, null, "ERROR(tree-null): tree is null"))
+                        consecutiveErrors++
                         continue
                     }
 
@@ -230,6 +272,7 @@ class ReactiveExecutor(
                     } catch (e: Exception) {
                         logger.warn("⚠️ [ReAct] 미니트리 변환 실패: ${e.message}")
                         stepHistory.add(ReActStep(step, decision.reasoning, null, "ERROR(tree-convert): ${e.message}"))
+                        consecutiveErrors++
                         continue
                     }
 
@@ -259,6 +302,7 @@ class ReactiveExecutor(
                     // 도메인 트리 → presentation 트리 (id 포함, UI 표시/저장용)
                     val presentationTree = with(PresentationMapper) { domainTree.toResponse() }
                     stepHistory.add(ReActStep(step, decision.reasoning, presentationTree, stepResult, successfulFunctions))
+                    if (stepResult.startsWith("ERROR")) consecutiveErrors++ else consecutiveErrors = 0
                 }
 
                 else -> {
@@ -270,10 +314,5 @@ class ReactiveExecutor(
                 }
             }
         }
-
-        // 최대 스텝 도달 — 마지막 결과로 반환
-        val finalResult = stepHistory.lastOrNull()?.result ?: "최대 스텝 도달"
-        logger.warn("⚠️ [ReAct] 최대 스텝(${maxSteps}) 도달: 강제 종료")
-        return ExecutionResult(result = finalResult, error = "최대 ReAct 스텝(${maxSteps}) 도달", stepHistory = stepHistory.toList())
     }
 }
