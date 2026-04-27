@@ -616,6 +616,18 @@ textarea:disabled {
     flex-wrap: wrap;
 }
 
+/* 실행이력 카드 결과 미리보기 (FIX 3) */
+.exec-result-preview {
+    font-size: 11px;
+    color: var(--text-2);
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    font-style: italic;
+}
+
 .execution-details {
     max-height: 0;
     overflow: hidden;
@@ -925,10 +937,25 @@ textarea:disabled {
 }
 
 .review-result-text {
-    flex: 1;
     font-size: 12px;
     color: var(--text-2);
     min-height: 18px;
+    word-break: break-word;
+    line-height: 1.4;
+}
+
+/* 트리 에디터 모달 footer 2열 레이아웃 (FIX 1) */
+.tree-modal-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+}
+
+.modal-footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 /* 트리 불러오기 모달 */

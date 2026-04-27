@@ -198,8 +198,8 @@ function applyNodeArgs() {
     });
 
     node.data('args', newArgs);
-    // 라벨 갱신: args 일부 표시
-    const argsStr = Object.entries(newArgs).slice(0, 2).map(([k, v]) => `${k}=${v}`).join('\n');
+    // 라벨 갱신: args 일부 표시 (FIX 4: truncate)
+    const argsStr = Object.entries(newArgs).slice(0, 2).map(([k, v]) => `${k}=${truncateArgVal(v)}`).join('\n');
     node.data('label', `${layerName}.${fnName}${argsStr ? '\n' + argsStr : ''}`);
 
     markModified();
@@ -461,12 +461,18 @@ function cytoscapeStyle() {
     ];
 }
 
+/** 긴 arg 값을 잘라서 노드 라벨 overflow 방지 (FIX 4) */
+function truncateArgVal(v, max = 20) {
+    const s = String(v);
+    return s.length > max ? s.slice(0, max) + '…' : s;
+}
+
 // ExecutionTree → Cytoscape elements 변환
 function treeToElements(executionTree) {
     const elements = [];
     function walk(node, parentId) {
         const nodeId = node.id || `node_${nodeCounter++}`;
-        const argsStr = node.args ? Object.entries(node.args).slice(0, 2).map(([k, v]) => `${k}=${v}`).join('\n') : '';
+        const argsStr = node.args ? Object.entries(node.args).slice(0, 2).map(([k, v]) => `${k}=${truncateArgVal(v)}`).join('\n') : '';
         const label = `${node.layerName}.${node.function}${argsStr ? '\n' + argsStr : ''}`;
         elements.push({ data: { id: nodeId, label, layerName: node.layerName, function: node.function, args: node.args || {} } });
         if (parentId) elements.push({ data: { id: `${parentId}_${nodeId}`, source: parentId, target: nodeId } });
@@ -878,6 +884,24 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
 
 let wsConnection = null;
 
+// 진행 타이머 (FIX 5: 서버 메시지 사이에도 실시간 증가)
+let progressLiveTimer = null;
+
+function startProgressLiveTimer(startMs) {
+    stopProgressLiveTimer();
+    progressLiveTimer = setInterval(() => {
+        const el = document.getElementById('progressTime');
+        if (el) el.textContent = ((Date.now() - startMs) / 1000).toFixed(1) + '초';
+    }, 100);
+}
+
+function stopProgressLiveTimer() {
+    if (progressLiveTimer !== null) {
+        clearInterval(progressLiveTimer);
+        progressLiveTimer = null;
+    }
+}
+
 // 진행 상태 UI 업데이트
 function updateProgressUI(progress) {
     const progressContainer = document.getElementById('progressContainer');
@@ -891,12 +915,17 @@ function updateProgressUI(progress) {
 
     // 진행 중일 때만 표시
     if (progress.phase === 'COMPLETED' || progress.phase === 'FAILED') {
-        // 완료/실패 시 잠시 표시 후 숨김
+        // 완료/실패 시 라이브 타이머 중단 후 잠시 표시 후 숨김 (FIX 5)
+        stopProgressLiveTimer();
+        progressTime.textContent = (progress.elapsedMs / 1000).toFixed(1) + '초';
         setTimeout(() => {
             progressContainer.style.display = 'none';
         }, 2000);
     } else {
         progressContainer.style.display = 'block';
+        // 라이브 타이머: 서버 메시지 없는 구간에도 계속 증가 (FIX 5)
+        const startMs = Date.now() - progress.elapsedMs;
+        startProgressLiveTimer(startMs);
     }
 
     // 진행률 업데이트
@@ -904,10 +933,6 @@ function updateProgressUI(progress) {
 
     // 메시지 업데이트
     progressMessage.textContent = progress.message;
-
-    // 경과 시간 업데이트
-    const elapsedSec = (progress.elapsedMs / 1000).toFixed(1);
-    progressTime.textContent = elapsedSec + '초';
 
     // 페이즈별 색상 변경
     const colors = {
@@ -1050,6 +1075,23 @@ function patchExecutionItem(item, exec, isCurrent) {
     const meta = item.querySelector('.execution-meta');
     if (meta) {
         meta.innerHTML = `<span>${timeStr}</span>${duration ? `<span>${duration}</span>` : ''}<span class="status-badge status-${statusClass}">${statusText}</span>`;
+    }
+
+    // 결과 미리보기 동기화 (FIX 3)
+    const resultTrimmed = exec.result && exec.result.trim();
+    let previewEl = item.querySelector('.exec-result-preview');
+    if (resultTrimmed) {
+        const previewText = escapeHtml(resultTrimmed.slice(0, 80)) + (resultTrimmed.length > 80 ? '…' : '');
+        if (previewEl) {
+            previewEl.innerHTML = previewText;
+        } else {
+            previewEl = document.createElement('div');
+            previewEl.className = 'exec-result-preview';
+            previewEl.innerHTML = previewText;
+            if (meta) meta.after(previewEl);
+        }
+    } else if (previewEl) {
+        previewEl.remove();
     }
 
     // 트리 보기 버튼: node-stats 아래에 배치 (없으면 추가, 있으면 유지)
@@ -1494,6 +1536,14 @@ function initSectionResizers() {
     executionsCard.style.flex = '1 1 0';
 }
 
+/** 실행이력 카드 표시 이름: 쿼리 없으면 루트노드명 → "(직접 실행)" (FIX 2) */
+function getExecDisplayName(exec) {
+    if (exec.query && exec.query.trim()) return exec.query;
+    const root = exec.executionTree?.rootNodes?.[0];
+    if (root) return `(${root.layerName}.${root.function})`;
+    return '(직접 실행)';
+}
+
 function renderExecution(exec, isCurrent) {
     const statusClass = (exec.status || '').toLowerCase();
     const statusText = getStatusLabel(exec.status);
@@ -1513,19 +1563,26 @@ function renderExecution(exec, isCurrent) {
         stopElapsedTimeTimer(exec.id);
     }
     
+    // 결과 미리보기 (FIX 3)
+    const resultTrimmed = exec.result && exec.result.trim();
+    const resultPreview = resultTrimmed
+        ? `<div class="exec-result-preview">${escapeHtml(resultTrimmed.slice(0, 80))}${resultTrimmed.length > 80 ? '…' : ''}</div>`
+        : '';
+
     return `
         <div class="execution-item ${statusClass}" data-id="${exec.id}" data-start-time="${exec.startTime}">
             <div class="swipe-inner">
                 <div class="execution-header">
                     <div style="flex: 1;">
                         <div class="execution-title">
-                            ${isCurrent ? '🔄 ' : ''}${exec.query || '(빈 쿼리)'}
+                            ${isCurrent ? '🔄 ' : ''}${escapeHtml(getExecDisplayName(exec))}
                         </div>
                         <div class="execution-meta">
                             <span>${timeStr}</span>
                             ${duration ? `<span>${duration}</span>` : ''}
                             <span class="status-badge status-${statusClass}">${statusText}</span>
                         </div>
+                        ${resultPreview}
                         <div class="node-stats">${formatNodeStats(exec)}</div>
                         ${exec.executionTree ? `<button class="tree-view-btn" data-exec-id="${exec.id}">🌳 트리 보기</button>` : ''}
                     </div>

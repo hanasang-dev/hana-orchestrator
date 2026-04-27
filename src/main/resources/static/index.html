@@ -154,13 +154,15 @@
                 </div>
             </div>
             <!-- 하단 액션 바 -->
-            <div class="modal-footer">
+            <div class="modal-footer tree-modal-footer">
                 <div id="reviewResult" class="review-result-text"></div>
-                <input type="text" id="treeNameInput" class="tree-name-input" placeholder="트리 이름...">
-                <button onclick="saveTree()" class="btn-warning">💾 저장</button>
-                <button onclick="loadTreeModal()" class="btn-ghost">📂 불러오기</button>
-                <button id="reviewBtn" onclick="reviewTree()">🔍 LLM 검토</button>
-                <button id="executeTreeBtn" onclick="executeEditedTree()" disabled class="btn-success">▶ 실행</button>
+                <div class="modal-footer-actions">
+                    <input type="text" id="treeNameInput" class="tree-name-input" placeholder="트리 이름...">
+                    <button onclick="saveTree()" class="btn-warning">💾 저장</button>
+                    <button onclick="loadTreeModal()" class="btn-ghost">📂 불러오기</button>
+                    <button id="reviewBtn" onclick="reviewTree()">🔍 LLM 검토</button>
+                    <button id="executeTreeBtn" onclick="executeEditedTree()" disabled class="btn-success">▶ 실행</button>
+                </div>
             </div>
         </div>
     </div>
