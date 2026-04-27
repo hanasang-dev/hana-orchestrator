@@ -104,7 +104,8 @@ interface LLMClient {
     suspend fun decideNextAction(
         query: String,
         stepHistory: List<ReActStep>,
-        layerDescriptions: List<LayerDescription>
+        layerDescriptions: List<LayerDescription>,
+        projectContext: Map<String, String> = emptyMap()
     ): ReActDecision
 
     /**

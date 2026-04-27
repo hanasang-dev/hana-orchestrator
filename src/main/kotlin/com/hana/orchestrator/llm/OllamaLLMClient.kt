@@ -427,9 +427,10 @@ class OllamaLLMClient(
     override suspend fun decideNextAction(
         query: String,
         stepHistory: List<ReActStep>,
-        layerDescriptions: List<LayerDescription>
+        layerDescriptions: List<LayerDescription>,
+        projectContext: Map<String, String>
     ): ReActDecision {
-        val prompt = promptBuilder.buildReActPrompt(query, stepHistory, layerDescriptions)
+        val prompt = promptBuilder.buildReActPrompt(query, stepHistory, layerDescriptions, projectContext)
         val availableLayerNames = layerDescriptions.map { it.name }
         val schema = JsonSchemaBuilder.buildReActDecisionSchema(availableLayerNames)
         logger.info("🤔 [ReAct] LLM 결정 요청 (스텝 ${stepHistory.size + 1})")

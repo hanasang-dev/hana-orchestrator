@@ -38,7 +38,8 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
         return try {
             val file = File(path)
             if (!file.exists()) {
-                return "ERROR: 파일이 존재하지 않습니다: $path"
+                val filename = file.name
+                return "ERROR: 파일이 존재하지 않습니다: $path. 힌트: file-system.findFiles(pattern=\"**/$filename\")로 정확한 경로를 먼저 확인하세요."
             }
             if (!file.isFile) {
                 return "ERROR: 파일이 아닙니다: $path"

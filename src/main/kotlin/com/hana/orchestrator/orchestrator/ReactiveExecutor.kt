@@ -66,7 +66,8 @@ class ReactiveExecutor(
     suspend fun execute(
         query: String,
         executionId: String,
-        startTime: Long
+        startTime: Long,
+        projectContext: Map<String, String> = emptyMap()
     ): ExecutionResult {
         val allDescriptions = layerManager.getAllLayerDescriptions()
         val stepHistory = mutableListOf<ReActStep>()
@@ -115,7 +116,7 @@ class ReactiveExecutor(
             // LLM이 다음 액션 결정
             val decision = try {
                 modelSelectionStrategy.selectClientForReActDecision()
-                    .useSuspend { client -> client.decideNextAction(query, stepHistory, allDescriptions) }
+                    .useSuspend { client -> client.decideNextAction(query, stepHistory, allDescriptions, projectContext) }
             } catch (e: Exception) {
                 logger.error("❌ [ReAct] LLM 결정 실패: ${e.message}")
                 // 이미 완료된 스텝 결과가 있으면 그걸로 반환 (결과 유실 방지)

@@ -1,14 +1,14 @@
 package com.hana.orchestrator.layer
 
 /**
- * 텍스트 변환 레이어
- * 테스트용: 부모 레이어의 텍스트를 받아서 변환
+ * 문자열 유틸리티 레이어 — 이미 완성된 문자열을 단순 변환(대소문자·접두어·자르기 등)하는 용도.
+ * 코드 생성·수정·작성이 필요하면 이 레이어가 아닌 llm.analyze 를 사용하세요.
  */
 @Layer
 class TextTransformerLayer : CommonLayerInterface {
-    
+
     /**
-     * 텍스트를 대문자로 변환
+     * 문자열 전체를 대문자로 변환합니다. 소스코드나 파일 내용을 수정하는 데 사용하지 마세요.
      */
     @LayerFunction
     suspend fun toUpperCase(text: String): String {

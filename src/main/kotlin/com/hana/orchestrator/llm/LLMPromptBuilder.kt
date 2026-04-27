@@ -355,7 +355,8 @@ $JSON_RULES
     fun buildReActPrompt(
         query: String,
         stepHistory: List<ReActStep>,
-        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>
+        layerDescriptions: List<com.hana.orchestrator.layer.LayerDescription>,
+        projectContext: Map<String, String> = emptyMap()
     ): String {
         val layersInfo = formatLayerDescriptionsCompact(layerDescriptions)
         val availableLayerNames = getAvailableLayerNames(layerDescriptions)
@@ -389,8 +390,13 @@ $JSON_RULES
             } else ""
         } else ""
 
-        return """목표: "$query"
+        val projectContextSection = if (projectContext.isNotEmpty()) {
+            val lines = projectContext.entries.joinToString("\n") { (k, v) -> "  [$k] $v" }
+            "\n📂 프로젝트 컨텍스트 (반드시 준수):\n$lines\n"
+        } else ""
 
+        return """목표: "$query"
+$projectContextSection
 사용 가능한 레이어:
 $layersInfo
 
@@ -403,17 +409,17 @@ $alreadyDoneNote
 
 ⚠️ 데이터 흐름 규칙:
    - A의 결과가 B의 입력으로 필요하면 → B를 A의 children 배열 안에 넣고 B의 args에 "{{parent}}" 사용
-   - rootNodes에 나란히 [A, B]로 넣으면 A→B 데이터 전달 불가
-   - 올바른 구조: rootNodes:[A(children:[B(args:{input:"{{parent}}"})])]
-   - 잘못된 구조: rootNodes:[A, B] ← B가 A 결과를 받지 못함
-   - LLM이 파일/커밋 내용을 알고 있다고 가정하지 마세요. 반드시 file-system.readFile / git.log 로 먼저 가져오세요.
+   - "{{parent}}"는 직접 부모 노드의 결과만 가리킴. 형제(sibling) 노드 결과는 받을 수 없음.
+   - 3단계 체인(A→B→C): C는 B의 children에 넣어야 C.args의 "{{parent}}"가 B 결과를 가리킴.
+     올바른: A(children:[B(children:[C(args:{x:"{{parent}}"})])]) ← C가 B 결과를 받음
+     잘못됨: A(children:[B, C]) ← C의 "{{parent}}"는 A 결과를 가리킴 (B 결과 아님)
+   - LLM이 파일/커밋 내용을 알고 있다고 가정하지 마세요. 반드시 해당 레이어 함수로 먼저 가져오세요.
 
-⭐ 읽기 + 분석/요약/검토/개선 패턴 (최우선 규칙):
-   - "파일을 읽고 분석/검토/개선/설명해줘" 요청은 반드시 한 번의 execute_tree로 처리하세요
-   - readFile의 children에 llm.analyze를 넣고 "{{parent}}"로 파일 내용을 전달하세요
-   - 올바른 예: readFile(args:{path:"..."},children:[llm.analyze(args:{context:"{{parent}}",query:"코드 품질 관점 개선사항"})])
-   - 잘못된 예: 스텝1 readFile만 → 스텝2 readFile 재시도 (데이터 전달 불가, 중복 루프)
-   - 히스토리에 "[데이터가 이미 로드됨]" 표시가 있고 분석이 필요하면: finish 선택 후 result에 직접 분석 내용 작성
+⭐ 데이터 연쇄 패턴 (최우선 규칙):
+   - 데이터를 가져온 뒤 처리하는 작업은 반드시 한 번의 execute_tree로 처리하세요
+   - 데이터를 쓰는 노드는 반드시 해당 데이터를 생성한 노드의 children에 배치하세요 (형제 배치 금지)
+   - 잘못된 예: 스텝1 데이터만 읽음 → 스텝2 같은 데이터를 다시 읽으려 함 (중복 루프)
+   - 히스토리에 "[데이터가 이미 로드됨]" 표시가 있고 처리가 필요하면: finish 선택 후 result에 직접 결과 작성
 
 결정 규칙 (반드시 순서대로 확인):
 0. ⛔[finish 금지] 히스토리의 결과에 "다음 단계:" 가 포함되어 있으면 그 단계를 먼저 실행해야 함. 실행 전에는 finish 선택 불가.
@@ -426,17 +432,14 @@ $JSON_RULES
 
 반드시 다음 JSON 형식 중 하나로만 응답하세요. 다른 텍스트는 포함하지 마세요.
 
-단일 실행:
+단일 노드:
 {"action":"execute_tree","tree":{"rootNodes":[{"layerName":"git","function":"currentBranch","args":{},"parallel":false,"children":[]}]},"reasoning":"브랜치 조회"}
 
-파일 읽기 후 LLM 요약 (A→B 순차, B가 A 결과 필요):
-{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"file-system","function":"readFile","args":{"path":"README.md"},"parallel":false,"children":[{"layerName":"llm","function":"analyze","args":{"context":"{{parent}}","query":"2줄로 요약해줘"},"parallel":false,"children":[]}]}]},"reasoning":"파일 읽고 LLM 요약"}
+2단계 체인 — B가 A 결과({{parent}})를 입력으로 사용:
+{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"file-system","function":"readFile","args":{"path":"README.md"},"parallel":false,"children":[{"layerName":"llm","function":"analyze","args":{"context":"{{parent}}","query":"2줄로 요약해줘"},"parallel":false,"children":[]}]}]},"reasoning":"A→B 체인"}
 
-git 커밋 읽기 후 LLM 요약 (A→B 순차):
-{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"git","function":"log","args":{"count":1},"parallel":false,"children":[{"layerName":"llm","function":"analyze","args":{"context":"{{parent}}","query":"한 줄로 요약해줘"},"parallel":false,"children":[]}]}]},"reasoning":"커밋 읽고 요약"}
-
-병렬 실행 (서로 독립적인 작업):
-{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"git","function":"status","args":{},"parallel":true,"children":[]},{"layerName":"git","function":"currentBranch","args":{},"parallel":true,"children":[]}]},"reasoning":"두 작업 동시 실행"}
+병렬 — 독립적인 작업 동시 실행:
+{"action":"execute_tree","tree":{"rootNodes":[{"layerName":"git","function":"status","args":{},"parallel":true,"children":[]},{"layerName":"git","function":"currentBranch","args":{},"parallel":true,"children":[]}]},"reasoning":"동시 실행"}
 
 목표 완전 달성 시:
 {"action":"finish","result":"(사용자에게 전달할 최종 답변)","reasoning":"완료 이유"}""".trimIndent()

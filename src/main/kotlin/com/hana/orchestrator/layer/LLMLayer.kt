@@ -4,20 +4,18 @@ import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 import com.hana.orchestrator.llm.useSuspend
 
 /**
- * LLM 텍스트 생성·분석 레이어
+ * LLM 텍스트 생성·분석·코드 작성 레이어
  *
- * 목적: LLM을 이용한 텍스트 생성, 요약, 번역, 분석, 질문 답변 등 모든 언어 처리 작업
+ * 목적: LLM을 이용한 모든 언어 처리 — 요약, 번역, 분석, 코드 생성·수정, 질문 답변 등
  *
  * 언제 사용해야 하는가:
- * - 텍스트를 요약해야 할 때 → analyze(context=파일내용, query="요약해줘")
- * - 텍스트를 번역해야 할 때 → analyze(context=원문, query="한국어로 번역해줘")
- * - 파일/커밋 내용을 분석해야 할 때 → analyze(context={{parent}}, query="분석해줘")
- * - 일반 지식 질문에 답할 때 → answerDirectly(query=질문)
- * - 창작(시, 글 등)이 필요할 때 → answerDirectly(query="시를 써줘")
+ * - 텍스트를 요약·번역·분석해야 할 때 → analyze(context=내용, query="요약해줘")
+ * - 소스코드에 함수를 추가·수정해야 할 때 → analyze(context=기존코드, query="uppercase() 함수를 추가한 전체 코드를 작성해줘")
+ * - 새 코드를 생성해야 할 때 → analyze(context="", query="Kotlin으로 ... 클래스를 작성해줘")
+ * - 일반 지식 질문이나 창작이 필요할 때 → answerDirectly(query=질문)
  *
- * 다른 레이어의 결과를 LLM으로 처리할 때:
- * 예: file-system.readFile → llm.analyze(context={{parent}}, query="핵심 2줄 요약")
- * 예: git.log → llm.analyze(context={{parent}}, query="마지막 커밋을 한 줄로 요약")
+ * 코드 수정 패턴 (readFile 결과를 받아 수정 후 writeFile):
+ * file-system.readFile → llm.analyze(context={{parent}}, query="함수를 추가한 전체 파일 코드 작성") → file-system.writeFile
  */
 @Layer
 class LLMLayer(
@@ -40,12 +38,13 @@ class LLMLayer(
     }
     
     /**
-     * 컨텍스트를 포함하여 LLM이 분석하고 답변을 생성합니다.
-     * 다른 레이어의 결과를 받아서 LLM이 분석하는 경우에 사용됩니다.
-     * 
-     * @param context 컨텍스트 정보 (예: 다른 레이어의 실행 결과)
-     * @param query 분석할 요청
-     * @return LLM이 생성한 답변
+     * 컨텍스트를 바탕으로 LLM이 분석·생성·코드 작성을 수행합니다.
+     * 다른 레이어의 결과(파일 내용, 커밋 로그 등)를 받아 처리하거나, 소스코드를 생성·수정할 때 사용합니다.
+     * 코드 수정 시에는 query에 "전체 파일 코드를 작성해줘"처럼 완성된 코드 출력을 요청하세요.
+     *
+     * @param context 처리할 입력 내용 (파일 내용, 커밋 로그, 원문 등)
+     * @param query 수행할 작업 (요약, 번역, 함수 추가, 코드 생성 등)
+     * @return LLM이 생성한 결과 (텍스트 또는 소스코드)
      */
     @LayerFunction
     suspend fun analyze(context: String, query: String): String {

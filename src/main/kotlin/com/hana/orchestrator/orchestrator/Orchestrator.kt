@@ -175,8 +175,15 @@ class Orchestrator(
         statePublisher.emitExecutionUpdate(runningHistory)
         statePublisher.emitProgressAsync(executionId, com.hana.orchestrator.presentation.model.execution.ExecutionPhase.STARTING, "🚀 ReAct 시작", 0, 0)
 
+        // 프로젝트 컨텍스트 구성 — LLM이 파일 경로·구조를 추론할 수 있도록
+        val volatileCtx = appContextService.getVolatileStore().snapshot()
+        val workingDir = volatileCtx["workingDirectory"] ?: System.getProperty("user.dir") ?: "."
+        val projectContext = buildMap {
+            put("workingDirectory", workingDir)
+        }
+
         return try {
-            val result = reactiveExecutor.execute(query, executionId, startTime)
+            val result = reactiveExecutor.execute(query, executionId, startTime, projectContext)
             val reactTree = ReActTreeConverter.convert(result.stepHistory)
             val history = if (result.error != null && result.result.isEmpty()) {
                 com.hana.orchestrator.domain.entity.ExecutionHistory.createFailed(
@@ -291,4 +298,22 @@ class Orchestrator(
     suspend fun close() {
         // 현재 구현에서는 정리할 리소스가 없음
     }
+}
+
+/**
+ * src/main/kotlin 아래 .kt 파일을 스캔하여 "ClassName -> relative/path/to/ClassName.kt" 인덱스를 반환.
+ * LLM이 경로를 추측하지 않아도 되도록 projectContext에 주입.
+ */
+private fun buildKotlinFileIndex(workingDir: String): String {
+    val root = java.io.File(workingDir, "src/main/kotlin")
+    if (!root.exists()) return ""
+    return root.walkTopDown()
+        .filter { it.isFile && it.extension == "kt" }
+        .map { file ->
+            val rel = file.relativeTo(java.io.File(workingDir)).path
+            "${file.nameWithoutExtension}:$rel"
+        }
+        .sorted()
+        .take(60)            // 컨텍스트 과부하 방지
+        .joinToString(", ")
 }
