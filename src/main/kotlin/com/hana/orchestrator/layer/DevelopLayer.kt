@@ -219,7 +219,9 @@ $functionBlocks
 
             layerDir.mkdirs()
             file.writeText(code)
-            "SUCCESS: ${file.relativeTo(projectRoot).path} 저장 완료\n다음 단계: layerName=\"build\", function=\"compileKotlin\" 으로 컴파일 확인 필수. 이 단계를 실행하기 전에 finish 선택 불가."
+            """SUCCESS: ${file.relativeTo(projectRoot).path} 저장 완료
+다음 단계: layerName="build", function="compileKotlin"
+[필수후속] 컴파일 완료 후 반드시 develop.hotLoad(name="$normalized") 실행. hotLoad 성공 전 finish 불가."""
         } catch (e: Exception) {
             "ERROR: 파일 저장 실패: ${e.message}"
         }

@@ -107,6 +107,29 @@ class ReactiveExecutor(
     }
 
     /**
+     * 스텝 결과에서 "[필수후속]" 힌트 파싱 → 미실행 필수 후속 단계 반환
+     * 형식: [필수후속] ... layerName.function(key="value") ...
+     * 이미 실행된 함수는 제외 (doneFunctions)
+     */
+    private fun parseRequiredFollowUpHint(
+        result: String,
+        doneFunctions: Set<String>
+    ): Triple<String, String, Map<String, String>>? {
+        if (!result.contains("[필수후속]")) return null
+        val match = Regex("""\[필수후속\][^\n]*?(\w+)\.(\w+)\(([^)]*)\)""").find(result) ?: return null
+        val layerName = match.groupValues[1]
+        val function = match.groupValues[2]
+        val argsRaw = match.groupValues[3]
+        val fnKey = "$layerName.$function"
+        if (fnKey in doneFunctions) return null
+        val args = mutableMapOf<String, String>()
+        Regex("""(\w+)="([^"]*)"""").findAll(argsRaw).forEach { m ->
+            args[m.groupValues[1]] = m.groupValues[2]
+        }
+        return Triple(layerName, function, args)
+    }
+
+    /**
      * ReAct 루프 실행.
      * 종료는 의미적 감지에 맡기고, absoluteMaxSteps는 runaway 안전망으로만 사용.
      */
@@ -191,6 +214,43 @@ class ReactiveExecutor(
                 val autoPresentation = with(PresentationMapper) { autoDomainTree.toResponse() }
                 stepHistory.add(ReActStep(step, "자동 실행: $layerName.$function", autoPresentation, autoResult, autoSuccessful))
                 if (autoResult.startsWith("ERROR")) consecutiveErrors++ else consecutiveErrors = 0
+                continue
+            }
+
+            // 히스토리 전체에서 [필수후속] 힌트 파싱 → 미실행 필수 후속 단계 자동 실행
+            val requiredFollowUp = stepHistory
+                .asSequence()
+                .mapNotNull { parseRequiredFollowUpHint(it.result, doneFunctionNames) }
+                .firstOrNull()
+            if (requiredFollowUp != null) {
+                val (rfLayerName, rfFunction, rfArgs) = requiredFollowUp
+                logger.info("🔜 [ReAct] '[필수후속]' 자동 실행: $rfLayerName.$rfFunction($rfArgs)")
+                val rfArgsJson = buildJsonObject { rfArgs.forEach { (k, v) -> put(k, JsonPrimitive(v)) } }
+                val rfNode = ExecutionNodeResponse(rfLayerName, rfFunction, rfArgsJson)
+                val rfLlmTree = ExecutionTreeResponse(rootNodes = listOf(rfNode))
+                val rfDomainTree = try {
+                    ExecutionTreeMapper.toExecutionTree(rfLlmTree)
+                } catch (e: Exception) {
+                    logger.warn("⚠️ [ReAct] '[필수후속]' 트리 변환 실패: ${e.message}")
+                    stepHistory.add(ReActStep(step, "auto:[필수후속]:$rfLayerName.$rfFunction", null, "ERROR(required-followup): ${e.message}"))
+                    consecutiveErrors++
+                    continue
+                }
+                val rfExecResult = try {
+                    treeExecutor.executeTree(rfDomainTree, historyManager.getCurrentExecution()!!)
+                } catch (e: Exception) {
+                    logger.warn("⚠️ [ReAct] '[필수후속]' 실행 실패: ${e.message}")
+                    null
+                }
+                val rfResult = rfExecResult?.result ?: "ERROR(required-followup): 실행 실패"
+                val rfSuccessful = rfExecResult?.context?.completedNodes
+                    ?.filter { it.isSuccess && !it.result.orEmpty().startsWith("ERROR") }
+                    ?.map { nodeKey(it.node.layerName, it.node.function, it.node.args) }
+                    ?: emptyList()
+                logger.info("📋 [ReAct] 스텝 #$step ([필수후속] 자동) 결과: ${rfResult.take(120)}")
+                val rfPresentation = with(PresentationMapper) { rfDomainTree.toResponse() }
+                stepHistory.add(ReActStep(step, "자동 실행([필수후속]): $rfLayerName.$rfFunction", rfPresentation, rfResult, rfSuccessful))
+                if (rfResult.startsWith("ERROR")) consecutiveErrors++ else consecutiveErrors = 0
                 continue
             }
 

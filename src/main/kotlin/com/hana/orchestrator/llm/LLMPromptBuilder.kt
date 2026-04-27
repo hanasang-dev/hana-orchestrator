@@ -105,11 +105,19 @@ internal class LLMPromptBuilder {
                 } else {
                     step.result
                 }
-                val nextStepHint = if (result.contains("다음 단계:")) {
-                    val idx = result.indexOf("다음 단계:")
-                    val end = result.indexOf("\n", idx).takeIf { it != -1 } ?: result.length
-                    "\n  🔜 [아직 미완료 — 반드시 다음에 실행] ${result.substring(idx, end).trim()}"
-                } else ""
+                // 힌트는 원본(step.result)에서 추출 — 잘린 result 아님
+                val nextStepHint = buildString {
+                    if (step.result.contains("다음 단계:")) {
+                        val idx = step.result.indexOf("다음 단계:")
+                        val end = step.result.indexOf("\n", idx).takeIf { it != -1 } ?: step.result.length
+                        append("\n  🔜 [아직 미완료 — 반드시 다음에 실행] ${step.result.substring(idx, end).trim()}")
+                    }
+                    if (step.result.contains("[필수후속]")) {
+                        val idx = step.result.indexOf("[필수후속]")
+                        val end = step.result.indexOf("\n", idx).takeIf { it != -1 } ?: step.result.length
+                        append("\n  ⛔ ${step.result.substring(idx, end).trim()}")
+                    }
+                }
                 "✅ [완료] 스텝 ${step.stepNumber}: [$treeDesc]\n  → 결과: $result$nextStepHint"
             }
         }
@@ -170,7 +178,7 @@ $alreadyDoneNote
    - 히스토리에 "[데이터가 이미 로드됨]" 표시가 있고 처리가 필요하면: finish 선택 후 result에 직접 결과 작성
 
 결정 규칙 (반드시 순서대로 확인):
-0. ⛔[finish 금지] 히스토리의 결과에 "다음 단계:" 가 포함되어 있으면 그 단계를 먼저 실행해야 함. 실행 전에는 finish 선택 불가.
+0. ⛔[finish 금지] 히스토리의 결과에 "다음 단계:"가 포함되어 있거나, "⛔ [필수후속"이 표시되어 있고 해당 후속 단계가 아직 실행되지 않은 경우 → 해당 단계를 먼저 실행해야 함. finish 선택 불가.
 1. ⭐[최우선] 히스토리에 SUCCESS 결과가 있고, 결과에 "다음 단계:"가 없으며, 목표 달성에 필요한 모든 작업이 완료됐는가? → 반드시 finish 선택.
 2. A 결과 → B 입력이 필요한가? → A를 rootNode로, B를 A의 children에 넣고 B.args에 "{{parent}}" 사용
 3. 독립적으로 동시에 실행 가능한 작업이 2개 이상 있는가? → rootNodes 여러 개 (parallel: true)
