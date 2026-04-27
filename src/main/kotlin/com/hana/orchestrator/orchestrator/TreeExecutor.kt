@@ -181,7 +181,7 @@ class TreeExecutor(
             )
         }
         
-        // 노드 실패 시 재시도는 OrchestrationCoordinator에서 처리됨
+        // 노드 실패 시 재시도는 ReactiveExecutor(ReAct 루프)에서 처리됨
         if (executionResult.isFailure) {
             val failMsg = "${indent}⚠️ [TreeExecutor] 노드 실패: ${node.layerName}.${node.function} (id=$nodeId, depth=$depth)"
             val retryPointMsg = "${indent}   재시도 시작점: ${context.findRetryStartPoint(nodeId)}"

@@ -129,22 +129,6 @@ class LayerController(
                 call.respond(mapOf("error" to e.message))
             }
         }
-        
-        // 디버그: 트리 생성만 동일 프롬프트·모델로 호출하여 소요 시간 측정
-        route.post("/debug/benchmark-tree") {
-            try {
-                val body = runCatching { call.receive<Map<String, String>>() }.getOrElse { emptyMap() }
-                val query = body["query"] ?: "Hello를 echo로 출력해줘"
-                val result = orchestrator.benchmarkTreeCreation(query)
-                call.respond(result)
-            } catch (e: Exception) {
-                call.respond(mapOf(
-                    "elapsedMs" to 0L,
-                    "success" to false,
-                    "error" to (e.message ?: "Unknown error")
-                ))
-            }
-        }
 
         // 실행 이력 조회 엔드포인트
         route.get("/executions") {
