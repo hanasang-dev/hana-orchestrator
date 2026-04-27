@@ -142,7 +142,7 @@ class ReactiveExecutor(
                         ?: "작업 완료"
                     logger.info("✅ [ReAct] 완료 (${step}스텝): ${finalResult.take(100)}")
                     historyManager.addLogToCurrent("✅ ReAct 완료 (${step}스텝)")
-                    statePublisher.emitProgressAsync(
+                    statePublisher.emitProgress(
                         executionId, ExecutionPhase.COMPLETED, "✅ 완료", 100,
                         System.currentTimeMillis() - startTime
                     )

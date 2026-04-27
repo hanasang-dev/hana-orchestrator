@@ -191,7 +191,7 @@ class Orchestrator(
             )
             historyManager.addHistory(history)
             statePublisher.emitExecutionUpdate(history)
-            statePublisher.emitProgressAsync(executionId, ExecutionPhase.COMPLETED, "✅ 완료", 100, System.currentTimeMillis() - startTime)
+            statePublisher.emitProgress(executionId, ExecutionPhase.COMPLETED, "✅ 완료", 100, System.currentTimeMillis() - startTime)
             historyManager.clearCurrentExecution()
             result
         } catch (e: Exception) {

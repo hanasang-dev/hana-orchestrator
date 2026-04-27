@@ -13,7 +13,7 @@ import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.collectLatest  // used by executionUpdates
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 
@@ -46,7 +46,7 @@ class ExecutionWebSocketController(
 
                     // 진행 상태 업데이트 구독
                     val progressJob = launch {
-                        orchestrator.progressUpdates.collectLatest { progress ->
+                        orchestrator.progressUpdates.collect { progress ->
                             broadcastToAll(json.encodeToString(progress))
                         }
                     }
