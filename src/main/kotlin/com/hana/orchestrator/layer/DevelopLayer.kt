@@ -154,53 +154,94 @@ $functionBlocks
     }
 
     /**
-     * 컴파일 완료된 레이어를 런타임에 즉시 등록합니다.
-     * build.compileKotlin() 성공 후에 호출하세요. 서버 재시작 없이 바로 사용 가능합니다.
+     * .class 파일에서 레이어 인스턴스 로드 (공통 헬퍼)
      *
-     * @param name 레이어 이름 (예: "Greeting"). "Layer" 접미사 불필요.
-     * @return 등록 결과 및 사용 가능한 함수 목록
+     * child-first 클래스로더를 사용하여 부모 클래스로더의 캐시를 우회.
+     * 같은 클래스 파일을 재컴파일 후 reloadLayer 시에도 최신 버전이 로드됨.
+     */
+    private fun loadLayerInstance(normalized: String): CommonLayerInterface {
+        val buildDir = File(projectRoot, "build/classes/kotlin/main")
+        if (!buildDir.exists()) error("빌드 출력 디렉토리가 없습니다. build.compileKotlin()을 먼저 실행하세요.")
+        val classLoader = childFirstClassLoader(buildDir, normalized, this::class.java.classLoader)
+        return classLoader.loadClass("com.hana.orchestrator.layer.${normalized}Layer")
+            .getDeclaredConstructor().newInstance() as CommonLayerInterface
+    }
+
+    /**
+     * 특정 레이어 클래스에 대해 child-first 위임을 사용하는 URLClassLoader 생성.
+     *
+     * 표준 URLClassLoader는 parent-first 방식이라 부모가 캐싱한 구버전을 반환.
+     * 이 로더는 "${normalized}Layer" 접두사 클래스에 대해서만 buildDir를 먼저 탐색.
+     * CommonLayerInterface 등 공유 인터페이스는 여전히 부모에 위임 → ClassCastException 방지.
+     */
+    private fun childFirstClassLoader(buildDir: File, normalized: String, parent: ClassLoader): URLClassLoader {
+        val prefix = "com.hana.orchestrator.layer.${normalized}Layer"
+        return object : URLClassLoader(arrayOf(buildDir.toURI().toURL()), parent) {
+            override fun loadClass(name: String, resolve: Boolean): Class<*> {
+                if (name.startsWith(prefix)) {
+                    synchronized(getClassLoadingLock(name)) {
+                        findLoadedClass(name)?.let { return it }
+                        try {
+                            return findClass(name).also { if (resolve) resolveClass(it) }
+                        } catch (_: ClassNotFoundException) { }
+                    }
+                }
+                return super.loadClass(name, resolve)
+            }
+        }
+    }
+
+    /**
+     * 컴파일 완료된 레이어를 런타임에 즉시 등록합니다 (신규 레이어 전용).
+     * 이미 등록된 레이어를 교체하려면 reloadLayer()를 사용하세요.
+     *
+     * @param name 레이어 이름 (예: "Farewell"). "Layer" 접미사 불필요.
      */
     @LayerFunction
     suspend fun hotLoad(name: String): String {
-        val layerManager = layerManagerRef
-            ?: return "ERROR: LayerManager가 주입되지 않았습니다."
+        val layerManager = layerManagerRef ?: return "ERROR: LayerManager가 주입되지 않았습니다."
         val normalized = name.removeSuffix("Layer")
-        val className = "com.hana.orchestrator.layer.${normalized}Layer"
-        val buildDir = File(projectRoot, "build/classes/kotlin/main")
-
-        if (!buildDir.exists()) {
-            return "ERROR: 빌드 출력 디렉토리가 없습니다: ${buildDir.path}. 먼저 build.compileKotlin()을 실행하세요."
-        }
-
-        // 이미 등록된 레이어인지 확인
         val existingNames = layerManager.getAllLayerDescriptions().map { it.name }
-
         return try {
-            // 부모 클래스로더를 부모로 두어 CommonLayerInterface 등 공유 클래스는 그대로 사용
-            val classLoader = URLClassLoader(
-                arrayOf(buildDir.toURI().toURL()),
-                this::class.java.classLoader
-            )
-            val clazz = classLoader.loadClass(className)
-            val instance = clazz.getDeclaredConstructor().newInstance() as CommonLayerInterface
+            val instance = loadLayerInstance(normalized)
             val desc = instance.describe()
-
             if (desc.name in existingNames) {
-                "INFO: '${desc.name}' 레이어는 이미 등록되어 있습니다. (함수: ${desc.functions.joinToString(", ")})"
+                "INFO: '${desc.name}' 레이어는 이미 등록되어 있습니다. 코드를 수정했다면 develop.reloadLayer()를 사용하세요."
             } else {
                 layerManager.registerLayer(instance)
                 LayerRegistry.register(normalized, projectRoot)
                 "SUCCESS: '${desc.name}' 레이어 동적 등록 완료. 즉시 사용 가능. 함수: ${desc.functions.joinToString(", ")}"
             }
-        } catch (e: ClassNotFoundException) {
-            "ERROR: 클래스를 찾을 수 없습니다: $className. build.compileKotlin()이 성공했는지 확인하세요."
-        } catch (e: NoSuchMethodException) {
-            "ERROR: 기본 생성자(no-arg constructor)가 없습니다. createLayer()로 생성한 스캐폴드만 hotLoad 가능합니다."
-        } catch (e: ClassCastException) {
-            "ERROR: CommonLayerInterface를 구현하지 않습니다: $className"
-        } catch (e: Exception) {
-            "ERROR: 동적 로드 실패: ${e.message}"
-        }
+        } catch (e: IllegalStateException) { "ERROR: ${e.message}" }
+        catch (e: ClassNotFoundException) { "ERROR: 클래스를 찾을 수 없습니다. build.compileKotlin()이 성공했는지 확인하세요." }
+        catch (e: NoSuchMethodException) { "ERROR: 기본 생성자(no-arg constructor)가 없습니다." }
+        catch (e: ClassCastException) { "ERROR: CommonLayerInterface를 구현하지 않습니다." }
+        catch (e: Exception) { "ERROR: 동적 로드 실패: ${e.message}" }
+    }
+
+    /**
+     * 기존 레이어를 새 컴파일 결과로 교체합니다 (신규 등록에도 사용 가능).
+     * 레이어 코드 수정 후 build.compileKotlin() 성공 시 호출하세요.
+     *
+     * @param name 레이어 이름 (예: "Farewell"). "Layer" 접미사 불필요.
+     */
+    @LayerFunction
+    suspend fun reloadLayer(name: String): String {
+        val layerManager = layerManagerRef ?: return "ERROR: LayerManager가 주입되지 않았습니다."
+        val normalized = name.removeSuffix("Layer")
+        return try {
+            val instance = loadLayerInstance(normalized)
+            val desc = instance.describe()
+            val wasRegistered = layerManager.unregisterLayer(desc.name)
+            layerManager.registerLayer(instance)
+            LayerRegistry.register(normalized, projectRoot)
+            val action = if (wasRegistered) "리로드(교체)" else "신규 등록"
+            "SUCCESS: '${desc.name}' 레이어 $action 완료. 함수: ${desc.functions.joinToString(", ")}"
+        } catch (e: IllegalStateException) { "ERROR: ${e.message}" }
+        catch (e: ClassNotFoundException) { "ERROR: 클래스를 찾을 수 없습니다. build.compileKotlin()이 성공했는지 확인하세요." }
+        catch (e: NoSuchMethodException) { "ERROR: 기본 생성자(no-arg constructor)가 없습니다." }
+        catch (e: ClassCastException) { "ERROR: CommonLayerInterface를 구현하지 않습니다." }
+        catch (e: Exception) { "ERROR: 리로드 실패: ${e.message}" }
     }
 
     /**
@@ -222,7 +263,7 @@ $functionBlocks
             file.writeText(code)
             """SUCCESS: ${file.relativeTo(projectRoot).path} 저장 완료
 다음 단계: layerName="build", function="compileKotlin"
-[필수후속] 컴파일 완료 후 반드시 develop.hotLoad(name="$normalized") 실행. hotLoad 성공 전 finish 불가."""
+[필수후속] 컴파일 완료 후 반드시 develop.reloadLayer(name="$normalized") 실행. reloadLayer 성공 전 finish 불가."""
         } catch (e: Exception) {
             "ERROR: 파일 저장 실패: ${e.message}"
         }
@@ -287,7 +328,11 @@ $functionBlocks
                 val name = args["name"] as? String ?: return "ERROR: name 필수"
                 hotLoad(name)
             }
-            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad"
+            "reloadLayer" -> {
+                val name = args["name"] as? String ?: return "ERROR: name 필수"
+                reloadLayer(name)
+            }
+            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad, reloadLayer"
         }
     }
 }

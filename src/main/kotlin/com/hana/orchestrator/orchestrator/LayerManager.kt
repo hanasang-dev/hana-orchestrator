@@ -86,8 +86,19 @@ class LayerManager(
         layers.add(layer)
         val desc = layer.describe()
         layerNameMap[desc.name] = layer
-        // 레이어 등록 시 캐시 무효화
         cachedDescriptions.clear()
+    }
+
+    /**
+     * 레이어 등록 해제 (reloadLayer에서 교체 전 사용)
+     * @return 실제로 제거됐으면 true, 등록된 적 없으면 false
+     */
+    suspend fun unregisterLayer(layerName: String): Boolean {
+        ensureInitialized()
+        val layer = layerNameMap.remove(layerName) ?: return false
+        layers.remove(layer)
+        cachedDescriptions.clear()
+        return true
     }
     
     /**

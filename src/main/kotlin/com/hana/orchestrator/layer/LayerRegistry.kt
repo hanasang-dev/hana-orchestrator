@@ -49,9 +49,33 @@ object LayerRegistry {
         val buildDir = File(projectRoot, "build/classes/kotlin/main")
         if (!buildDir.exists()) return emptyList()
 
-        val classLoader = URLClassLoader(arrayOf(buildDir.toURI().toURL()), parentClassLoader)
+        // 레이어마다 별도 child-first 클래스로더 사용:
+        // - 공유 클래스로더를 쓰면 부모에 클래스가 캐시되어 reloadLayer 시 구버전이 반환됨
+        // - child-first는 buildDir를 먼저 탐색하여 항상 최신 .class를 로드
         return names.mapNotNull { name ->
+            val classLoader = childFirstClassLoader(buildDir, name, parentClassLoader)
             loadLayer("com.hana.orchestrator.layer.${name}Layer", classLoader)
+        }
+    }
+
+    /**
+     * 특정 레이어 클래스에 대해 child-first 위임을 사용하는 URLClassLoader 생성.
+     * "${normalized}Layer" 접두사 클래스만 buildDir를 먼저 탐색하고 나머지는 부모에 위임.
+     */
+    private fun childFirstClassLoader(buildDir: File, normalized: String, parent: ClassLoader): URLClassLoader {
+        val prefix = "com.hana.orchestrator.layer.${normalized}Layer"
+        return object : URLClassLoader(arrayOf(buildDir.toURI().toURL()), parent) {
+            override fun loadClass(name: String, resolve: Boolean): Class<*> {
+                if (name.startsWith(prefix)) {
+                    synchronized(getClassLoadingLock(name)) {
+                        findLoadedClass(name)?.let { return it }
+                        try {
+                            return findClass(name).also { if (resolve) resolveClass(it) }
+                        } catch (_: ClassNotFoundException) { }
+                    }
+                }
+                return super.loadClass(name, resolve)
+            }
         }
     }
 
@@ -75,7 +99,7 @@ object LayerRegistry {
             .waitFor()
     }
 
-    private fun loadLayer(className: String, classLoader: URLClassLoader): CommonLayerInterface? = try {
+    private fun loadLayer(className: String, classLoader: ClassLoader): CommonLayerInterface? = try {
         classLoader.loadClass(className).getDeclaredConstructor().newInstance() as CommonLayerInterface
     } catch (_: Exception) {
         null
