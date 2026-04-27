@@ -1,21 +1,31 @@
 package com.hana.orchestrator.layer
 
 import java.io.File
+import java.net.URLClassLoader
 
 /**
- * 새 레이어 생성 전용 레이어
+ * 새 레이어 생성 및 런타임 등록 레이어
  *
  * ⭐ "새 레이어를 만들어줘", "XXXLayer를 만들어줘" 요청이 오면 반드시 develop.createLayer() 를 사용할 것.
- * file-system 레이어로는 레이어 파일을 생성할 수 없음. 반드시 develop 레이어를 사용할 것.
  *
  * 워크플로우:
  * 1. develop.createLayer(name, description, functions) → 파일 저장 완료
  * 2. build.compileKotlin() → 컴파일 확인
+ * 3. develop.hotLoad(name) → 런타임 즉시 등록 (서버 재시작 불필요)
  */
 @Layer
 class DevelopLayer(
     private val projectRoot: File = File(System.getProperty("user.dir"))
 ) : CommonLayerInterface {
+
+    private var layerManagerRef: com.hana.orchestrator.orchestrator.LayerManager? = null
+
+    /**
+     * LayerManager 참조 설정 (LayerManager에서 주입)
+     */
+    fun setLayerManager(layerManager: com.hana.orchestrator.orchestrator.LayerManager) {
+        layerManagerRef = layerManager
+    }
 
     private val layerDir: File
         get() = File(projectRoot, "src/main/kotlin/com/hana/orchestrator/layer")
@@ -144,6 +154,55 @@ $functionBlocks
     }
 
     /**
+     * 컴파일 완료된 레이어를 런타임에 즉시 등록합니다.
+     * build.compileKotlin() 성공 후에 호출하세요. 서버 재시작 없이 바로 사용 가능합니다.
+     *
+     * @param name 레이어 이름 (예: "Greeting"). "Layer" 접미사 불필요.
+     * @return 등록 결과 및 사용 가능한 함수 목록
+     */
+    @LayerFunction
+    suspend fun hotLoad(name: String): String {
+        val layerManager = layerManagerRef
+            ?: return "ERROR: LayerManager가 주입되지 않았습니다."
+        val normalized = name.removeSuffix("Layer")
+        val className = "com.hana.orchestrator.layer.${normalized}Layer"
+        val buildDir = File(projectRoot, "build/classes/kotlin/main")
+
+        if (!buildDir.exists()) {
+            return "ERROR: 빌드 출력 디렉토리가 없습니다: ${buildDir.path}. 먼저 build.compileKotlin()을 실행하세요."
+        }
+
+        // 이미 등록된 레이어인지 확인
+        val existingNames = layerManager.getAllLayerDescriptions().map { it.name }
+
+        return try {
+            // 부모 클래스로더를 부모로 두어 CommonLayerInterface 등 공유 클래스는 그대로 사용
+            val classLoader = URLClassLoader(
+                arrayOf(buildDir.toURI().toURL()),
+                this::class.java.classLoader
+            )
+            val clazz = classLoader.loadClass(className)
+            val instance = clazz.getDeclaredConstructor().newInstance() as CommonLayerInterface
+            val desc = instance.describe()
+
+            if (desc.name in existingNames) {
+                "INFO: '${desc.name}' 레이어는 이미 등록되어 있습니다. (함수: ${desc.functions.joinToString(", ")})"
+            } else {
+                layerManager.registerLayer(instance)
+                "SUCCESS: '${desc.name}' 레이어 동적 등록 완료. 즉시 사용 가능. 함수: ${desc.functions.joinToString(", ")}"
+            }
+        } catch (e: ClassNotFoundException) {
+            "ERROR: 클래스를 찾을 수 없습니다: $className. build.compileKotlin()이 성공했는지 확인하세요."
+        } catch (e: NoSuchMethodException) {
+            "ERROR: 기본 생성자(no-arg constructor)가 없습니다. createLayer()로 생성한 스캐폴드만 hotLoad 가능합니다."
+        } catch (e: ClassCastException) {
+            "ERROR: CommonLayerInterface를 구현하지 않습니다: $className"
+        } catch (e: Exception) {
+            "ERROR: 동적 로드 실패: ${e.message}"
+        }
+    }
+
+    /**
      * 레이어 코드 파일 저장 (내부용 — LLM에게 노출 안 됨)
      *
      * createLayer() 내부에서만 사용.
@@ -221,7 +280,11 @@ $functionBlocks
                 }
                 createLayer(name, description, functions)
             }
-            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer"
+            "hotLoad" -> {
+                val name = args["name"] as? String ?: return "ERROR: name 필수"
+                hotLoad(name)
+            }
+            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad"
         }
     }
 }

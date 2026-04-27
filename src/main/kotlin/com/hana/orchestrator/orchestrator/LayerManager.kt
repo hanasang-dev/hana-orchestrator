@@ -42,6 +42,11 @@ class LayerManager(
                 layerNameMap[desc.name] = layer
             }
             layers.addAll(defaultLayers)
+
+            // DevelopLayer에 LayerManager 주입 (hotLoad로 런타임 레이어 등록 가능하게 함)
+            defaultLayers.filterIsInstance<com.hana.orchestrator.layer.DevelopLayer>()
+                .firstOrNull()?.setLayerManager(this)
+
             isInitialized = true
             logger.info("✅ [LayerManager] 총 ${layers.size}개 레이어 등록 완료")
         }
