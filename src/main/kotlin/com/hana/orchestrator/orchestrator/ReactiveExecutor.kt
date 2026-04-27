@@ -139,12 +139,13 @@ class ReactiveExecutor(
         startTime: Long,
         projectContext: Map<String, String> = emptyMap()
     ): ExecutionResult {
-        val allDescriptions = layerManager.getAllLayerDescriptions()
         val stepHistory = mutableListOf<ReActStep>()
         var step = 0
         var consecutiveErrors = 0
 
         while (true) {
+            // 매 스텝마다 갱신 — hotLoad로 추가된 레이어도 즉시 반영
+            val allDescriptions = layerManager.getAllLayerDescriptions()
             step++
 
             // ── runaway 안전망 (의미적 감지가 모두 빗나간 경우에만 도달) ──
