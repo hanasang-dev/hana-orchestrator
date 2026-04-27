@@ -76,7 +76,7 @@ class ReactiveExecutor(
             val progressPct = (step * 70 / maxSteps + 15).coerceAtMost(85)
             logger.info("🔄 [ReAct] 스텝 #$step 시작")
             historyManager.addLogToCurrent("🔄 ReAct 스텝 #$step")
-            statePublisher.emitProgressAsync(
+            statePublisher.emitProgress(
                 executionId, ExecutionPhase.TREE_EXECUTION,
                 "🤔 스텝 #$step 결정 중...", progressPct, System.currentTimeMillis() - startTime
             )

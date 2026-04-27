@@ -128,6 +128,13 @@ class Orchestrator(
 
         return try {
             val result = reactiveExecutor.execute(query, executionId, startTime, projectContext)
+            val elapsed = System.currentTimeMillis() - startTime
+            // 안전망: ReactiveExecutor가 어떤 경로로 종료되든 항상 최종 상태를 emit
+            if (result.error != null && result.result.isEmpty()) {
+                statePublisher.emitProgress(executionId, ExecutionPhase.FAILED, "❌ 실패", 100, elapsed)
+            } else {
+                statePublisher.emitProgress(executionId, ExecutionPhase.COMPLETED, "✅ 완료", 100, elapsed)
+            }
             val reactTree = ReActTreeConverter.convert(result.stepHistory)
             val history = if (result.error != null && result.result.isEmpty()) {
                 ExecutionHistory.createFailed(
@@ -145,6 +152,8 @@ class Orchestrator(
             historyManager.clearCurrentExecution()
             result
         } catch (e: Exception) {
+            val elapsed = System.currentTimeMillis() - startTime
+            statePublisher.emitProgress(executionId, ExecutionPhase.FAILED, "❌ 실패", 100, elapsed)
             val failedHistory = ExecutionHistory.createFailed(
                 executionId, query, e.message ?: "실행 실패", startTime, logs = historyManager.getCurrentLogs()
             )
