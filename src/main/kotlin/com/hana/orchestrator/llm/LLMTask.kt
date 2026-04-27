@@ -7,7 +7,7 @@ package com.hana.orchestrator.llm
  * 사용 예:
  * ```kotlin
  * @LLMTask(complexity = LLMTaskComplexity.SIMPLE)
- * suspend fun validateQueryFeasibility(...): QueryFeasibility
+ * suspend fun reviewTree(...): TreeReview
  * ```
  */
 @Target(AnnotationTarget.FUNCTION)

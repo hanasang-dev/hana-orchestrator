@@ -131,55 +131,7 @@ internal object JsonSchemaBuilder {
     }
     
     // ========== 공개 API ==========
-    
-    /**
-     * ResultEvaluation에 대한 JSON Schema
-     */
-    fun buildResultEvaluationSchema(): JsonObject {
-        return createObjectSchema(
-            required = listOf("isSatisfactory", "reason", "needsRetry"),
-            properties = mapOf(
-                "isSatisfactory" to createBooleanProperty("요구사항 충족 여부"),
-                "reason" to createStringProperty("평가 이유"),
-                "needsRetry" to createBooleanProperty("재처리 필요 여부")
-            )
-        )
-    }
-    
-    /**
-     * RetryStrategyResponse에 대한 JSON Schema
-     */
-    fun buildRetryStrategySchema(availableLayerNames: List<String> = emptyList()): JsonObject {
-        // newTree는 ExecutionTreeResponse와 동일한 구조이므로 재사용
-        val executionTreeSchema = if (availableLayerNames.isNotEmpty()) {
-            buildExecutionTreeSchema(availableLayerNames)
-        } else {
-            // availableLayerNames가 없으면 간단한 스키마만 제공
-            JsonObject(
-                mapOf(
-                    "type" to JsonPrimitive("object"),
-                    "properties" to JsonObject(
-                        mapOf(
-                            "rootNodes" to createArrayProperty(
-                                description = "루트 노드 배열",
-                                items = JsonObject(mapOf("type" to JsonPrimitive("object")))
-                            )
-                        )
-                    )
-                )
-            )
-        }
-        
-        return createObjectSchema(
-            required = listOf("shouldStop", "reason"),
-            properties = mapOf(
-                "shouldStop" to createBooleanProperty("재처리 중단 여부"),
-                "reason" to createStringProperty("중단/재처리 이유"),
-                "newTree" to executionTreeSchema
-            )
-        )
-    }
-    
+
     /**
      * ExecutionTreeResponse에 대한 JSON Schema
      * (동적으로 레이어 이름 목록을 받아서 생성)
@@ -231,32 +183,6 @@ internal object JsonSchemaBuilder {
         )
     }
     
-    /**
-     * ComparisonResult에 대한 JSON Schema
-     */
-    fun buildComparisonResultSchema(): JsonObject {
-        return createObjectSchema(
-            required = listOf("isSignificantlyDifferent", "reason"),
-            properties = mapOf(
-                "isSignificantlyDifferent" to createBooleanProperty("유의미한 차이 여부"),
-                "reason" to createStringProperty("차이 이유")
-            )
-        )
-    }
-    
-    /**
-     * LLMDirectAnswerCapability에 대한 JSON Schema
-     */
-    fun buildLLMDirectAnswerCapabilitySchema(): JsonObject {
-        return createObjectSchema(
-            required = listOf("canAnswer", "reason"),
-            properties = mapOf(
-                "canAnswer" to createBooleanProperty("직접 답변 가능 여부"),
-                "reason" to createStringProperty("이유")
-            )
-        )
-    }
-
     /**
      * ReActDecision에 대한 JSON Schema
      * execute_tree: 미니트리를 실행 (TreeExecutor 위임)

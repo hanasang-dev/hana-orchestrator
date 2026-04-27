@@ -66,6 +66,18 @@ class OllamaLLMClient(
     private val promptBuilder = LLMPromptBuilder()
 
     /**
+     * LLM 응답에서 텍스트 추출
+     * DRY: callLLM / generateDirectAnswer 중복 제거
+     */
+    private fun extractResponseText(responses: List<Message>): String {
+        return when (val firstResponse = responses.firstOrNull()) {
+            is Message.Assistant -> firstResponse.content
+            is Message.Tool.Call -> firstResponse.content
+            else -> throw Exception("LLM 응답이 비어있습니다")
+        }
+    }
+
+    /**
      * 공통 LLM 모델 생성
      * DRY: 반복되는 모델 생성 로직 공통화
      */
@@ -126,12 +138,7 @@ class OllamaLLMClient(
                     )
                 }
 
-                val responseText = when (val firstResponse = responses.firstOrNull()) {
-                    is Message.Assistant -> firstResponse.content
-                    is Message.Tool.Call -> firstResponse.content
-                    else -> throw Exception("LLM 응답이 비어있습니다")
-                }
-
+                val responseText = extractResponseText(responses)
                 val jsonText = JsonExtractor.extract(responseText)
                 lastJsonText = jsonText
                 if (logRawJson) {
@@ -172,13 +179,7 @@ class OllamaLLMClient(
             )
         }
 
-        val responseText = when (val firstResponse = responses.firstOrNull()) {
-            is Message.Assistant -> firstResponse.content
-            is Message.Tool.Call -> firstResponse.content
-            else -> throw Exception("LLM 응답이 비어있습니다")
-        }
-
-        return responseText.trim()
+        return extractResponseText(responses).trim()
     }
 
     override suspend fun reviewTree(

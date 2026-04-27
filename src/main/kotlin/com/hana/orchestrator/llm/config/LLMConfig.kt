@@ -17,7 +17,7 @@ import io.ktor.server.config.*
  */
 data class LLMConfig(
     /**
-     * 간단한 작업용 모델 (validateQueryFeasibility, extractParameters)
+     * 간단한 작업용 모델 (reviewTree)
      */
     val simpleProvider: LLMProvider,
     val simpleModelId: String,
@@ -26,7 +26,7 @@ data class LLMConfig(
     val simpleApiKey: String? = null, // 클라우드 API용 (환경변수로만 설정, 보안)
     
     /**
-     * 중간 작업용 모델 (evaluateResult, compareExecutions)
+     * 중간 작업용 모델 (generateDirectAnswer, decideNextAction)
      */
     val mediumProvider: LLMProvider,
     val mediumModelId: String,
@@ -35,7 +35,7 @@ data class LLMConfig(
     val mediumApiKey: String? = null, // 클라우드 API용 (환경변수로만 설정, 보안)
     
     /**
-     * 복잡한 작업용 모델 (createExecutionTree, suggestRetryStrategy)
+     * 복잡한 작업용 모델 (향후 확장용 예약)
      */
     val complexProvider: LLMProvider,
     val complexModelId: String,

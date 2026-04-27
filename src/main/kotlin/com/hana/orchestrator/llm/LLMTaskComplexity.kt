@@ -7,19 +7,19 @@ package com.hana.orchestrator.llm
 enum class LLMTaskComplexity {
     /**
      * 간단한 작업: 짧은 프롬프트, 빠른 응답
-     * 예: validateQueryFeasibility, extractParameters
+     * 예: reviewTree
      */
     SIMPLE,
-    
+
     /**
      * 중간 작업: 중간 프롬프트
-     * 예: evaluateResult, compareExecutions
+     * 예: generateDirectAnswer
      */
     MEDIUM,
-    
+
     /**
      * 복잡한 작업: 긴 프롬프트, 많은 컨텍스트
-     * 예: createExecutionTree, suggestRetryStrategy
+     * 향후 확장용 예약
      */
     COMPLEX
 }
