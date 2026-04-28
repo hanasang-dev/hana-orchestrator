@@ -42,6 +42,9 @@ class Orchestrator(
     /** 파일 쓰기 승인 게이트 (WebSocket 컨트롤러에서 구독, ApprovalController에서 응답) */
     val approvalGate = ApprovalGate()
 
+    /** 사용자 질문 게이트 (WebSocket 컨트롤러에서 구독, ClarificationController에서 응답) */
+    val clarificationGate = ClarificationGate()
+
     // LLM 관련
     val config: LLMConfig
     private val clientFactory: LLMClientFactory
@@ -64,13 +67,14 @@ class Orchestrator(
             historyManager = historyManager,
             statePublisher = statePublisher,
             modelSelectionStrategy = modelSelectionStrategy,
-            treeExecutor = treeExecutor
+            treeExecutor = treeExecutor,
+            clarificationGate = clarificationGate
         )
 
         // DevelopLayer에서 전략 핫로드 가능하도록 의존성 주입
         layerManager.wireReactiveExecutor(
             reactiveExecutor,
-            StrategyContext(layerManager, historyManager, statePublisher, modelSelectionStrategy, treeExecutor)
+            StrategyContext(layerManager, historyManager, statePublisher, modelSelectionStrategy, treeExecutor, clarificationGate)
         )
 
         logger.info("🚀 [Orchestrator] 초기화 시작...")

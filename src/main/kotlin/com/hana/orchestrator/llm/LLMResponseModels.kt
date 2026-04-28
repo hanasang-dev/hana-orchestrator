@@ -30,11 +30,13 @@ data class ReActStep(
  * LLM이 결정한 다음 ReAct 액션
  * action == "execute_tree" : tree (미니트리) 실행 — TreeExecutor 위임
  * action == "finish"       : result 사용 (최종 답변)
+ * action == "ask"          : 사용자에게 추가 정보 요청 — question 필드 사용
  */
 @Serializable
 data class ReActDecision(
-    val action: String,                        // "execute_tree" | "finish"
+    val action: String,                        // "execute_tree" | "finish" | "ask"
     val tree: LLMTreeResponse? = null,         // execute_tree 전용 미니트리 (LLM JSON 파싱용)
     val result: String = "",                   // finish 전용 최종 결과
-    val reasoning: String = ""
+    val reasoning: String = "",
+    val question: String = ""                  // ask 전용: 사용자에게 할 질문
 )

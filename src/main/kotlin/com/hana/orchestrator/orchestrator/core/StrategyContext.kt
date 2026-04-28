@@ -15,5 +15,6 @@ data class StrategyContext(
     val historyManager: ExecutionHistoryManager,
     val statePublisher: ExecutionStatePublisher,
     val modelSelectionStrategy: ModelSelectionStrategy,
-    val treeExecutor: TreeExecutor
+    val treeExecutor: TreeExecutor,
+    val clarificationGate: com.hana.orchestrator.orchestrator.ClarificationGate? = null
 )

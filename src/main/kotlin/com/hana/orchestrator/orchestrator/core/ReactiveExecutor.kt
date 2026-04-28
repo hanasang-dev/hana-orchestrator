@@ -16,10 +16,11 @@ class ReactiveExecutor(
     historyManager: ExecutionHistoryManager,
     statePublisher: ExecutionStatePublisher,
     modelSelectionStrategy: ModelSelectionStrategy,
-    treeExecutor: TreeExecutor
+    treeExecutor: TreeExecutor,
+    clarificationGate: com.hana.orchestrator.orchestrator.ClarificationGate? = null
 ) {
     private var strategy: ReActStrategy = DefaultReActStrategy(
-        layerManager, historyManager, statePublisher, modelSelectionStrategy, treeExecutor
+        layerManager, historyManager, statePublisher, modelSelectionStrategy, treeExecutor, clarificationGate
     )
 
     /**

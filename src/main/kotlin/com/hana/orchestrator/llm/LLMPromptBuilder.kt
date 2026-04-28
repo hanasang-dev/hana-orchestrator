@@ -183,6 +183,7 @@ $alreadyDoneNote
 2. A 결과 → B 입력이 필요한가? → A를 rootNode로, B를 A의 children에 넣고 B.args에 "{{parent}}" 사용
 3. 독립적으로 동시에 실행 가능한 작업이 2개 이상 있는가? → rootNodes 여러 개 (parallel: true)
 4. 그 외 단일 작업이 필요한가? → rootNodes 1개
+5. 목표를 수행하기에 사용자 의도가 불명확하거나 필수 정보가 부족한가? → ask 선택. 실행 가능한 정보가 있으면 ask 금지.
 
 $JSON_RULES
 
@@ -198,7 +199,10 @@ $JSON_RULES
 {"action":"execute_tree","tree":{"rootNodes":[{"layerName":"git","function":"status","args":{},"parallel":true,"children":[]},{"layerName":"git","function":"currentBranch","args":{},"parallel":true,"children":[]}]},"reasoning":"동시 실행"}
 
 목표 완전 달성 시:
-{"action":"finish","result":"(사용자에게 전달할 최종 답변)","reasoning":"완료 이유"}""".trimIndent()
+{"action":"finish","result":"(사용자에게 전달할 최종 답변)","reasoning":"완료 이유"}
+
+사용자에게 추가 정보가 필요할 때:
+{"action":"ask","question":"(사용자에게 할 구체적인 질문)","reasoning":"질문 이유"}""".trimIndent()
     }
 
     fun buildTreeReviewPrompt(

@@ -39,7 +39,8 @@ class DefaultReActStrategy(
     private val historyManager: ExecutionHistoryManager,
     private val statePublisher: ExecutionStatePublisher,
     private val modelSelectionStrategy: ModelSelectionStrategy,
-    private val treeExecutor: TreeExecutor
+    private val treeExecutor: TreeExecutor,
+    private val clarificationGate: com.hana.orchestrator.orchestrator.ClarificationGate? = null
 ) : ReActStrategy {
 
     /** runaway 방지용 절대 안전망 — 정상 작업에서는 도달하지 않아야 함 */
@@ -359,6 +360,24 @@ class DefaultReActStrategy(
                     val presentationTree = with(PresentationMapper) { domainTree.toResponse() }
                     stepHistory.add(ReActStep(step, decision.reasoning, presentationTree, stepResult, successfulFunctions))
                     if (stepResult.startsWith("ERROR")) consecutiveErrors++ else consecutiveErrors = 0
+                }
+
+                "ask" -> {
+                    val question = decision.question.ifEmpty { decision.reasoning }
+                    if (clarificationGate == null) {
+                        logger.warn("⚠️ [ReAct] ask 요청이지만 ClarificationGate 없음: $question")
+                        stepHistory.add(ReActStep(step, "사용자 질문(미처리): $question", null, "[정보 부족] $question"))
+                        consecutiveErrors = 0
+                    } else {
+                        logger.info("❓ [ReAct] 사용자에게 질문: $question")
+                        historyManager.addLogToCurrent("❓ 사용자 질문: $question")
+                        statePublisher.emitProgress(executionId, ExecutionPhase.TREE_EXECUTION, "❓ 사용자 답변 대기 중...", progressPct, System.currentTimeMillis() - startTime)
+                        val answer = clarificationGate.requestClarification(question)
+                        logger.info("💬 [ReAct] 사용자 답변: ${answer.take(80)}")
+                        historyManager.addLogToCurrent("💬 사용자 답변: ${answer.take(60)}")
+                        stepHistory.add(ReActStep(step, "사용자 질문: $question", null, "[사용자 답변] $answer"))
+                        consecutiveErrors = 0
+                    }
                 }
 
                 else -> {

@@ -1,6 +1,7 @@
 package com.hana.orchestrator.presentation.controller
 
 import com.hana.orchestrator.orchestrator.ApprovalGate
+import com.hana.orchestrator.orchestrator.ClarificationGate
 import com.hana.orchestrator.orchestrator.Orchestrator
 import com.hana.orchestrator.orchestrator.createOrchestratorLogger
 import com.hana.orchestrator.presentation.mapper.ExecutionHistoryMapper.toExecutionState
@@ -58,6 +59,13 @@ class ExecutionWebSocketController(
                         }
                     }
 
+                    // 사용자 질문 요청 구독
+                    val clarificationJob = launch {
+                        orchestrator.clarificationGate.requests.collect { request ->
+                            broadcastToAll(json.encodeToString(request))
+                        }
+                    }
+
                     // 클라이언트로부터 메시지 수신 대기 (연결 유지)
                     for (frame in incoming) {
                         if (frame is Frame.Text && frame.readText() == "refresh") {
@@ -68,6 +76,7 @@ class ExecutionWebSocketController(
                     updateJob.cancel()
                     progressJob.cancel()
                     approvalJob.cancel()
+                    clarificationJob.cancel()
                 }
             } catch (e: ClosedReceiveChannelException) {
                 // 연결 종료

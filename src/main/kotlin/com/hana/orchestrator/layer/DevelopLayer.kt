@@ -5,21 +5,25 @@ import java.io.File
 import java.net.URLClassLoader
 
 /**
- * 새 레이어 생성 및 런타임 등록 레이어
+ * 레이어 생성 / ReAct 전략 진화 담당 레이어
  *
- * ⭐ "새 레이어를 만들어줘", "XXXLayer를 만들어줘" 요청이 오면 반드시 develop.createLayer() 를 사용할 것.
+ * ━━━ [A] 새 레이어 생성 — "XXX 레이어 만들어줘" ━━━
+ * ⭐ develop.createLayer(name, description, functions) → build.compileKotlin → develop.hotLoad(name)
  *
- * 레이어 워크플로우:
- * 1. develop.createLayer(name, description, functions) → 파일 저장 완료
- * 2. 컴파일 확인 (소스 파일이 런타임에 반영되려면 컴파일 단계가 반드시 선행되어야 함)
- * 3. develop.hotLoad(name) → 런타임 즉시 등록 (서버 재시작 불필요)
+ * ━━━ [B] ReAct 전략 후보 생성 — "전략 후보", "ReAct 루프 개선", "전략을 바꿔줘" ━━━
+ * ReAct 전략 = 오케스트레이터가 쿼리를 처리하는 방식 (사고·계획·실행 루프) 을 구현하는 Kotlin 클래스.
+ * 후보를 만들 때 기존 소스를 절대 직접 수정하지 않는다.
  *
- * 전략 후보군 워크플로우:
- * 1. develop.readDefaultStrategy() → 현재 전략 소스 파악
- * 2. develop.createStrategyCandidate(name, sourceCode) → 후보 소스 저장 (src/DefaultReActStrategy.kt 건드리지 않음)
- * 3. compileKotlin → develop.hotLoadStrategy(name) → 후보 전략을 런타임에 적용
- * 4. 테스트 후 develop.promoteCandidateToCore(name) → 승격 (이때만 src/ 수정)
- * 5. 원복 필요 시 develop.rollbackStrategy() → DefaultReActStrategy로 즉시 복구
+ * ⭐ 전략 후보 워크플로우 (반드시 이 순서):
+ * 1. develop.readDefaultStrategy() → 현재 ReAct 전략 Kotlin 소스 전체 확인
+ * 2. llm.analyze(context=전략소스, query="수정사항 반영한 전체 Kotlin 소스 작성") → 새 전략 소스 생성
+ * 3. develop.createStrategyCandidate(name="후보이름", sourceCode=생성된소스) → 후보 저장
+ * 4. build.compileKotlin → develop.hotLoadStrategy(name) → 런타임 교체
+ *
+ * ⛔ 전략 후보 작업 시 절대 금지:
+ *    - file-system.writeFile 로 기존 파일을 수정하는 것
+ *    - develop.createLayer 를 전략 후보 목적으로 사용하는 것
+ *    - git.createBranch 를 사용하는 것 (전략 후보는 candidates/ 디렉토리가 격리 역할)
  */
 @Layer
 class DevelopLayer(
@@ -285,14 +289,38 @@ $functionBlocks
         }
         val classLoader = childFirstStrategyClassLoader(buildDir, fqcn, this::class.java.classLoader)
         val clazz = classLoader.loadClass(fqcn)
-        val ctor = clazz.getDeclaredConstructor(
+        // 6-param 생성자(ClarificationGate 포함)를 먼저 시도, 없으면 5-param fallback
+        val ctor6 = try {
+            clazz.getDeclaredConstructor(
+                com.hana.orchestrator.orchestrator.core.LayerManager::class.java,
+                com.hana.orchestrator.orchestrator.ExecutionHistoryManager::class.java,
+                com.hana.orchestrator.orchestrator.ExecutionStatePublisher::class.java,
+                com.hana.orchestrator.llm.strategy.ModelSelectionStrategy::class.java,
+                com.hana.orchestrator.orchestrator.core.TreeExecutor::class.java,
+                com.hana.orchestrator.orchestrator.ClarificationGate::class.java
+            )
+        } catch (_: NoSuchMethodException) { null }
+
+        if (ctor6 != null) {
+            return ctor6.newInstance(
+                ctx.layerManager,
+                ctx.historyManager,
+                ctx.statePublisher,
+                ctx.modelSelectionStrategy,
+                ctx.treeExecutor,
+                ctx.clarificationGate
+            ) as com.hana.orchestrator.orchestrator.core.ReActStrategy
+        }
+
+        // 5-param fallback (구버전 후보 전략)
+        val ctor5 = clazz.getDeclaredConstructor(
             com.hana.orchestrator.orchestrator.core.LayerManager::class.java,
             com.hana.orchestrator.orchestrator.ExecutionHistoryManager::class.java,
             com.hana.orchestrator.orchestrator.ExecutionStatePublisher::class.java,
             com.hana.orchestrator.llm.strategy.ModelSelectionStrategy::class.java,
             com.hana.orchestrator.orchestrator.core.TreeExecutor::class.java
         )
-        return ctor.newInstance(
+        return ctor5.newInstance(
             ctx.layerManager,
             ctx.historyManager,
             ctx.statePublisher,
