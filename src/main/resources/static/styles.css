@@ -497,6 +497,30 @@ textarea:disabled {
 /* ─────────────────────────────────────────────
    레이어 목록
    ───────────────────────────────────────────── */
+.layer-search-wrap {
+    margin-bottom: 10px;
+}
+.layer-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    background: var(--bg);
+    color: var(--text-1);
+    outline: none;
+    transition: border-color 0.15s;
+}
+.layer-search-input:focus {
+    border-color: var(--primary);
+}
+mark.search-hl {
+    background: #ffe066;
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+}
 .layers-list {
     display: flex;
     flex-direction: column;

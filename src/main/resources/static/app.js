@@ -744,6 +744,8 @@ async function executeEditedTree() {
 }
 
 // 레이어 목록 로드
+let allLayersData = [];
+
 async function loadLayers() {
     const layersList = document.getElementById('layersList');
     layersList.innerHTML = '<p>로딩 중...</p>';
@@ -764,19 +766,57 @@ async function loadLayers() {
 
         // 팔레트용 레이어 캐시
         treeEditorLayers = layers;
-        
-        layersList.innerHTML = layers.map(layer => `
-            <div class="layer-item">
-                <h3>${layer.name}</h3>
-                <p>${layer.description}</p>
-                <div class="functions">
-                    ${layer.functions.map(func => `<span class="function-badge">${func}</span>`).join('')}
-                </div>
-            </div>
-        `).join('');
+        allLayersData = layers;
+
+        // 검색어 유지
+        const q = document.getElementById('layerSearch')?.value || '';
+        renderLayerList(q ? allLayersData.filter(l => layerMatchesQuery(l, q)) : allLayersData);
     } catch (error) {
         layersList.innerHTML = `<div class="message error">레이어 목록을 불러오는 중 오류가 발생했습니다: ${error.message}</div>`;
     }
+}
+
+function layerMatchesQuery(layer, q) {
+    const lq = q.toLowerCase();
+    if (layer.name.toLowerCase().includes(lq)) return true;
+    if ((layer.description || '').toLowerCase().includes(lq)) return true;
+    if ((layer.functions || []).some(f => f.toLowerCase().includes(lq))) return true;
+    return false;
+}
+
+function filterLayers(q) {
+    if (!allLayersData.length) return;
+    const filtered = q ? allLayersData.filter(l => layerMatchesQuery(l, q)) : allLayersData;
+    renderLayerList(filtered, q);
+}
+
+function renderLayerList(layers, highlight) {
+    const layersList = document.getElementById('layersList');
+    if (layers.length === 0) {
+        layersList.innerHTML = '<p style="font-size:12px; color:var(--text-3); text-align:center; padding:12px 0;">일치하는 레이어 없음</p>';
+        return;
+    }
+    layersList.innerHTML = layers.map(layer => {
+        const hl = highlight?.toLowerCase();
+        const hlName = hl ? highlightText(layer.name, hl) : escapeHtml(layer.name);
+        const hlDesc = hl ? highlightText(layer.description || '', hl) : escapeHtml(layer.description || '');
+        const badges = (layer.functions || []).map(func => {
+            const hlFunc = hl ? highlightText(func, hl) : escapeHtml(func);
+            return `<span class="function-badge">${hlFunc}</span>`;
+        }).join('');
+        return `<div class="layer-item">
+            <h3>${hlName}</h3>
+            ${hlDesc ? `<p>${hlDesc}</p>` : ''}
+            <div class="functions">${badges}</div>
+        </div>`;
+    }).join('');
+}
+
+function highlightText(text, q) {
+    if (!q) return escapeHtml(text);
+    const escaped = escapeHtml(text);
+    const escapedQ = escapeHtml(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return escaped.replace(new RegExp(escapedQ, 'gi'), m => `<mark class="search-hl">${m}</mark>`);
 }
 
 // 원격 레이어 등록
