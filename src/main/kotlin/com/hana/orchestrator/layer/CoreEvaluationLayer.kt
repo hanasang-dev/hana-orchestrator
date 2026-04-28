@@ -23,11 +23,17 @@ class CoreEvaluationLayer : CommonLayerInterface {
     private val projectRoot: File = File(System.getProperty("user.dir"))
 
     private var reactiveExecutorRef: com.hana.orchestrator.orchestrator.core.ReactiveExecutor? = null
+    private var strategyContextRef: com.hana.orchestrator.orchestrator.core.StrategyContext? = null
     private val scenarioResults = mutableListOf<ScenarioResult>()
 
     /** ReactiveExecutor 참조 설정 (LayerManager에서 주입) */
     fun setReactiveExecutor(executor: com.hana.orchestrator.orchestrator.core.ReactiveExecutor) {
         reactiveExecutorRef = executor
+    }
+
+    /** StrategyContext 참조 설정 (LayerManager에서 주입) */
+    fun setStrategyContext(ctx: com.hana.orchestrator.orchestrator.core.StrategyContext) {
+        strategyContextRef = ctx
     }
 
     private data class ScenarioResult(
@@ -51,15 +57,23 @@ class CoreEvaluationLayer : CommonLayerInterface {
     @LayerFunction
     suspend fun runScenario(query: String, label: String = ""): String {
         val executor = reactiveExecutorRef ?: return "ERROR: ReactiveExecutor가 주입되지 않았습니다."
+        val ctx = strategyContextRef ?: return "ERROR: StrategyContext가 주입되지 않았습니다."
         val effectiveLabel = label.ifBlank { java.text.SimpleDateFormat("HH:mm:ss").format(java.util.Date()) }
 
         val executionId = java.util.UUID.randomUUID().toString()
         val startTime = System.currentTimeMillis()
 
+        // DefaultReActStrategy 내부에서 getCurrentExecution()!! 을 사용하므로
+        // execute() 호출 전에 반드시 currentExecution을 세팅해야 함
+        val runningHistory = com.hana.orchestrator.domain.entity.ExecutionHistory.createRunning(executionId, query, startTime)
+        ctx.historyManager.setCurrentExecution(runningHistory)
+
         val result = try {
             executor.execute(query, executionId, startTime)
         } catch (e: Exception) {
             return "ERROR: 시나리오 실행 실패: ${e.message}"
+        } finally {
+            ctx.historyManager.clearCurrentExecution()
         }
 
         val durationMs = System.currentTimeMillis() - startTime
