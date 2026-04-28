@@ -27,7 +27,7 @@ class ExecutionWebSocketController(
 ) {
     private val logger = createOrchestratorLogger(ExecutionWebSocketController::class.java, null)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val connections = mutableSetOf<DefaultWebSocketSession>()
+    private val connections = java.util.concurrent.ConcurrentHashMap.newKeySet<DefaultWebSocketSession>()
 
     fun configureRoutes(route: Route) {
         route.webSocket("/ws/executions") {

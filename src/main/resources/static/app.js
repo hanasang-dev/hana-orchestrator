@@ -965,10 +965,13 @@ function connectWebSocket() {
             const data = JSON.parse(event.data);
             console.log('WebSocket 데이터 수신:', data);
 
-            // 메시지 타입 구분 (id+path+diff = ApprovalRequest 고유 필드 조합)
-            if (data.id && data.path && data.diff !== undefined) {
+            // 메시지 타입 구분 (type 필드 우선, 없으면 필드 조합으로 판별)
+            if (data.type === 'APPROVAL_REQUIRED' || (data.id && data.path && data.diff !== undefined)) {
                 // 파일 수정 승인 요청
                 showApprovalPanel(data);
+            } else if (data.type === 'CLARIFICATION_REQUIRED' || (data.id && data.question && !data.path)) {
+                // 사용자 질문 요청
+                showClarificationModal(data);
             } else if (data.executionId && data.phase && data.message) {
                 // 진행 상태 업데이트
                 updateProgressUI(data);
@@ -1811,6 +1814,46 @@ async function handleApproval(approved) {
     document.getElementById('approvalModal').style.display = 'none';
     currentApprovalId = null;
 }
+
+// ─────────────────────────────────────────────
+// 사용자 질문 (Clarification)
+// ─────────────────────────────────────────────
+let currentClarificationId = null;
+
+function showClarificationModal(data) {
+    currentClarificationId = data.id;
+    document.getElementById('clarificationQuestion').textContent = data.question;
+    document.getElementById('clarificationAnswer').value = '';
+    document.getElementById('clarificationModal').style.display = 'flex';
+    setTimeout(() => document.getElementById('clarificationAnswer').focus(), 100);
+}
+
+async function handleClarification() {
+    if (!currentClarificationId) return;
+    const answer = document.getElementById('clarificationAnswer').value.trim();
+    if (!answer) return;
+    try {
+        await fetch(`${API_BASE}/clarification/${currentClarificationId}/answer`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ answer })
+        });
+    } catch (e) {
+        console.error('Clarification answer failed:', e);
+    }
+    document.getElementById('clarificationModal').style.display = 'none';
+    currentClarificationId = null;
+}
+
+// Enter 키로 제출 (Shift+Enter는 줄바꿈)
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('clarificationAnswer')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleClarification();
+        }
+    });
+});
 
 // 초기 로드 시 LLM 상태 확인 후 UI 표시 결정
 (async function init() {
