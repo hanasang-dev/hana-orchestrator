@@ -63,6 +63,9 @@ build/
 # Setup scripts
 setup.sh
 
+# Strategy candidates (LLM이 생성하는 임시 파일)
+src/main/kotlin/com/hana/orchestrator/orchestrator/core/candidates/
+
 # Orchestrator runtime data
 .hana/history/
 .hana/backups/
