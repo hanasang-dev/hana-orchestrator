@@ -1,0 +1,186 @@
+package com.hana.orchestrator.layer
+
+import com.hana.orchestrator.orchestrator.CandidateRegistry
+import java.io.File
+
+/**
+ * 코어 평가 레이어 — "시스템 콜" 역할
+ *
+ * rc 단계에 도달한 후보들을 평가하고 최종 선택을 위한 보고서를 생성.
+ * 선택된 rc 후보를 현재 소스에 반영하는 기능도 제공.
+ *
+ * 워크플로우:
+ * 1. develop.promote(name, stage="rc") → rc 등록
+ * 2. coreEval.listRcCandidates() → rc 목록 확인
+ * 3. coreEval.evaluateReport(name) → 후보 비교 보고서 생성
+ * 4. (선택) coreEval.applyCandidate(name, snapshotFile) → rc를 현재 소스에 반영
+ * 5. build.compileKotlin() → 컴파일 확인
+ * 6. develop.reloadLayer(name) → 런타임 반영
+ */
+@Layer
+class CoreEvaluationLayer : CommonLayerInterface {
+
+    private val projectRoot: File = File(System.getProperty("user.dir"))
+
+    /**
+     * rc 단계 후보 목록 조회
+     *
+     * @return 이름 / 스냅샷 파일 / 설명 형식의 목록
+     */
+    @LayerFunction
+    suspend fun listRcCandidates(): String {
+        val candidates = CandidateRegistry.list().filter { it.stage == "rc" }
+        if (candidates.isEmpty()) return "등록된 rc 후보가 없습니다."
+        return "🏁 rc 후보 목록 (${candidates.size}건):\n\n" + candidates.joinToString("\n") { entry ->
+            val date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date(entry.createdAt))
+            "• ${entry.name}  ($date)\n  파일: ${entry.snapshotFile}${if (entry.description.isNotBlank()) "\n  설명: ${entry.description}" else ""}"
+        }
+    }
+
+    /**
+     * 특정 대상의 모든 후보(beta/alpha/rc)를 비교한 평가 보고서 생성
+     *
+     * 각 스냅샷 파일의 라인 수, 주요 함수 목록, 최신 rc와의 diff 요약을 출력.
+     *
+     * @param name 평가할 대상 이름 (예: "DefaultReActStrategy", "GreeterLayer")
+     * @return 마크다운 형식의 평가 보고서
+     */
+    @LayerFunction
+    suspend fun evaluateReport(name: String): String {
+        val candidates = CandidateRegistry.list(name)
+        if (candidates.isEmpty()) return "ERROR: '$name' 에 등록된 후보가 없습니다. develop.promote()로 먼저 등록하세요."
+
+        val report = StringBuilder()
+        report.append("# 📋 평가 보고서: $name\n\n")
+        report.append("후보 ${candidates.size}건 (${candidates.map { it.stage }.distinct().joinToString(", ")})\n\n")
+
+        val rcCandidates = candidates.filter { it.stage == "rc" }
+        val latestRc = rcCandidates.lastOrNull()
+
+        candidates.forEachIndexed { idx, entry ->
+            val file = File(entry.snapshotFile)
+            val date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date(entry.createdAt))
+            report.append("## [${entry.stage.uppercase()}] #${idx + 1}  ($date)\n")
+            report.append("파일: `${entry.snapshotFile}`\n")
+            if (entry.description.isNotBlank()) report.append("설명: ${entry.description}\n")
+
+            if (!file.exists()) {
+                report.append("⚠️ 스냅샷 파일 없음\n\n")
+                return@forEachIndexed
+            }
+
+            val lines = file.readLines()
+            report.append("라인 수: ${lines.size}\n")
+
+            // 함수 목록 추출
+            val functions = lines.filter { it.trimStart().startsWith("fun ") || it.trimStart().startsWith("suspend fun ") }
+                .map { it.trim().removePrefix("suspend ").removePrefix("fun ").substringBefore("(") }
+                .filter { it.isNotBlank() }
+            if (functions.isNotEmpty()) report.append("함수: ${functions.joinToString(", ")}\n")
+
+            // 최신 rc와 diff (rc가 2개 이상일 때 직전 rc와 비교)
+            if (entry.stage == "rc" && latestRc != null && entry != latestRc) {
+                val prevFile = File(entry.snapshotFile)
+                val latestFile = File(latestRc.snapshotFile)
+                if (prevFile.exists() && latestFile.exists()) {
+                    val diff = simpleDiff(prevFile.readText(), latestFile.readText())
+                    if (diff.isNotBlank()) report.append("최신 rc와의 차이:\n```\n$diff\n```\n")
+                }
+            }
+            report.append("\n")
+        }
+
+        if (rcCandidates.size > 1) {
+            report.append("---\n⚡ 최신 rc: `${latestRc?.snapshotFile}`\n")
+            report.append("적용 명령: coreEval.applyCandidate(name=\"$name\", snapshotFile=\"${latestRc?.snapshotFile}\")\n")
+        } else if (latestRc != null) {
+            report.append("---\n✅ rc 후보 1건 확인됨\n")
+            report.append("적용 명령: coreEval.applyCandidate(name=\"$name\", snapshotFile=\"${latestRc.snapshotFile}\")\n")
+        }
+
+        return report.toString().trim()
+    }
+
+    /**
+     * 선택한 스냅샷을 현재 소스 파일에 반영
+     *
+     * 적용 후 build.compileKotlin() → develop.reloadLayer() 순으로 진행하세요.
+     *
+     * @param name         대상 이름 (예: "DefaultReActStrategy", "GreeterLayer")
+     * @param snapshotFile 반영할 스냅샷 파일 경로 (.hana/candidates/... 경로)
+     * @return 성공 메시지 또는 에러
+     */
+    @LayerFunction
+    suspend fun applyCandidate(name: String, snapshotFile: String): String {
+        val snapshot = File(snapshotFile)
+        if (!snapshot.exists()) return "ERROR: 스냅샷 파일이 없습니다: $snapshotFile"
+
+        val targetFile = findSourceFile(name)
+            ?: return "ERROR: '$name' 소스 파일을 찾을 수 없습니다. 레이어면 '${name}Layer.kt', 전략이면 '${name}.kt'를 확인하세요."
+
+        // 현재 소스를 백업
+        val backupDir = File(".hana/backups")
+        backupDir.mkdirs()
+        val backup = File(backupDir, "${System.currentTimeMillis()}_${targetFile.name}")
+        targetFile.copyTo(backup, overwrite = true)
+
+        // 스냅샷을 소스에 반영
+        snapshot.copyTo(targetFile, overwrite = true)
+
+        val normalized = name.removeSuffix("Layer")
+        return """SUCCESS: '$name' rc 후보 적용 완료
+원본 백업: ${backup.path}
+적용 파일: ${targetFile.path}
+
+다음 단계:
+1. build.compileKotlin() — 컴파일 확인
+2. develop.reloadLayer(name="$normalized") — 런타임 반영"""
+    }
+
+    // ── 내부 헬퍼 ────────────────────────────────────────────────────────────
+
+    private fun findSourceFile(name: String): File? {
+        val normalized = name.removeSuffix("Layer")
+        val layerDir = File(projectRoot, "src/main/kotlin/com/hana/orchestrator/layer")
+        val layerFile = File(layerDir, "${normalized}Layer.kt")
+        if (layerFile.exists()) return layerFile
+        val plainFile = File(layerDir, "$name.kt")
+        if (plainFile.exists()) return plainFile
+        return projectRoot.walkTopDown()
+            .firstOrNull { it.isFile && (it.name == "${normalized}Layer.kt" || it.name == "$name.kt") }
+    }
+
+    /**
+     * 두 텍스트의 간단한 줄 단위 diff (추가/삭제 라인만 표시, 최대 30줄)
+     */
+    private fun simpleDiff(before: String, after: String): String {
+        val beforeLines = before.lines()
+        val afterLines = after.lines()
+        val removed = beforeLines.filter { it !in afterLines }.take(15)
+        val added = afterLines.filter { it !in beforeLines }.take(15)
+        val result = StringBuilder()
+        removed.forEach { result.append("- $it\n") }
+        added.forEach { result.append("+ $it\n") }
+        return result.toString().trim()
+    }
+
+    override suspend fun describe(): LayerDescription {
+        return CoreEvaluationLayer_Description.layerDescription
+    }
+
+    override suspend fun execute(function: String, args: Map<String, Any>): String {
+        return when (function) {
+            "listRcCandidates" -> listRcCandidates()
+            "evaluateReport" -> {
+                val name = args["name"] as? String ?: return "ERROR: name 필수"
+                evaluateReport(name)
+            }
+            "applyCandidate" -> {
+                val name = args["name"] as? String ?: return "ERROR: name 필수"
+                val snapshotFile = args["snapshotFile"] as? String ?: return "ERROR: snapshotFile 필수"
+                applyCandidate(name, snapshotFile)
+            }
+            else -> "Unknown function: $function. Available: listRcCandidates, evaluateReport, applyCandidate"
+        }
+    }
+}
