@@ -9,10 +9,17 @@ import java.net.URLClassLoader
  *
  * ⭐ "새 레이어를 만들어줘", "XXXLayer를 만들어줘" 요청이 오면 반드시 develop.createLayer() 를 사용할 것.
  *
- * 워크플로우:
+ * 레이어 워크플로우:
  * 1. develop.createLayer(name, description, functions) → 파일 저장 완료
  * 2. 컴파일 확인 (소스 파일이 런타임에 반영되려면 컴파일 단계가 반드시 선행되어야 함)
  * 3. develop.hotLoad(name) → 런타임 즉시 등록 (서버 재시작 불필요)
+ *
+ * 전략 후보군 워크플로우:
+ * 1. develop.readDefaultStrategy() → 현재 전략 소스 파악
+ * 2. develop.createStrategyCandidate(name, sourceCode) → 후보 소스 저장 (src/DefaultReActStrategy.kt 건드리지 않음)
+ * 3. compileKotlin → develop.hotLoadStrategy(name) → 후보 전략을 런타임에 적용
+ * 4. 테스트 후 develop.promoteCandidateToCore(name) → 승격 (이때만 src/ 수정)
+ * 5. 원복 필요 시 develop.rollbackStrategy() → DefaultReActStrategy로 즉시 복구
  */
 @Layer
 class DevelopLayer(
@@ -40,6 +47,60 @@ class DevelopLayer(
 
     private val layerDir: File
         get() = File(projectRoot, "src/main/kotlin/com/hana/orchestrator/layer")
+
+    private val candidatesSourceDir: File
+        get() = File(projectRoot, "src/main/kotlin/com/hana/orchestrator/orchestrator/core/candidates")
+
+    /**
+     * "retry-v1" → "RetryV1Strategy", "fast-react" → "FastReactStrategy"
+     * 케밥/스네이크케이스 → PascalCase + "Strategy" 접미사
+     */
+    private fun candidateNameToClassName(name: String): String =
+        name.split("-", "_")
+            .joinToString("") { it.replaceFirstChar { c -> c.uppercase() } } + "Strategy"
+
+    /**
+     * 현재 기본 전략 소스 조회 (후보 작성 시 참고용)
+     *
+     * @return DefaultReActStrategy.kt 전체 소스
+     */
+    @LayerFunction
+    suspend fun readDefaultStrategy(): String {
+        val file = projectRoot.walkTopDown()
+            .firstOrNull { it.isFile && it.name == "DefaultReActStrategy.kt" }
+            ?: return "ERROR: DefaultReActStrategy.kt를 찾을 수 없습니다."
+        return file.readText()
+    }
+
+    /**
+     * 전략 후보 소스 저장 — src/DefaultReActStrategy.kt 는 수정하지 않음.
+     *
+     * 후보는 고유 클래스명(PascalCase + "Strategy")으로 candidates 패키지에 저장됩니다.
+     * 일반 compileKotlin으로 기존 전략과 함께 빌드되므로 별도 컴파일 불필요.
+     * 저장 후: compileKotlin → hotLoadStrategy(name) 순서로 진행.
+     *
+     * 소스 작성 규칙:
+     * - package: com.hana.orchestrator.orchestrator.core.candidates
+     * - 클래스명: {name → PascalCase}Strategy (예: "retry-v1" → RetryV1Strategy)
+     * - 생성자: LayerManager, ExecutionHistoryManager, ExecutionStatePublisher, ModelSelectionStrategy, TreeExecutor (순서 동일)
+     *
+     * @param name       후보 이름 (예: "retry-v1"). 클래스명 자동 도출.
+     * @param sourceCode 후보 전략 Kotlin 소스 전체
+     * @return 저장된 파일 경로
+     */
+    @LayerFunction
+    suspend fun createStrategyCandidate(name: String, sourceCode: String): String {
+        val className = candidateNameToClassName(name)
+        candidatesSourceDir.mkdirs()
+        val file = File(candidatesSourceDir, "$className.kt")
+        if (file.exists()) file.copyTo(File(candidatesSourceDir, "$className.kt.bak"), overwrite = true)
+        return try {
+            file.writeText(sourceCode)
+            "SUCCESS: 후보 전략 저장 완료\n파일: ${file.relativeTo(projectRoot).path}\n클래스: com.hana.orchestrator.orchestrator.core.candidates.$className\n다음: compileKotlin → hotLoadStrategy(name=\"$name\")"
+        } catch (e: Exception) {
+            "ERROR: 파일 저장 실패: ${e.message}"
+        }
+    }
 
     /**
      * 기존 레이어 파일 읽기 (패턴 참고용)
@@ -172,7 +233,7 @@ $functionBlocks
      */
     private fun loadLayerInstance(normalized: String): CommonLayerInterface {
         val buildDir = File(projectRoot, "build/classes/kotlin/main")
-        if (!buildDir.exists()) error("빌드 출력 디렉토리가 없습니다. build.compileKotlin()을 먼저 실행하세요.")
+        if (!buildDir.exists()) error("빌드 출력 디렉토리가 없습니다. 먼저 컴파일을 실행하세요.")
         val classLoader = childFirstClassLoader(buildDir, normalized, this::class.java.classLoader)
         return classLoader.loadClass("com.hana.orchestrator.layer.${normalized}Layer")
             .getDeclaredConstructor().newInstance() as CommonLayerInterface
@@ -204,8 +265,12 @@ $functionBlocks
 
     /**
      * 전략 클래스를 build 출력 디렉토리에서 로드하고 의존성을 주입해 반환.
-     * DefaultReActStrategy와 동일한 5-arg 생성자(LayerManager, ExecutionHistoryManager,
-     * ExecutionStatePublisher, ModelSelectionStrategy, TreeExecutor)를 요구한다.
+     *
+     * - "DefaultReActStrategy" → core 패키지에서 로드 (원본 복구용)
+     * - 그 외 이름            → candidates 패키지에서 로드 (후보 전략)
+     *
+     * 생성자 시그니처: (LayerManager, ExecutionHistoryManager,
+     * ExecutionStatePublisher, ModelSelectionStrategy, TreeExecutor)
      */
     private fun loadStrategyInstance(
         name: String,
@@ -213,7 +278,11 @@ $functionBlocks
     ): com.hana.orchestrator.orchestrator.core.ReActStrategy {
         val buildDir = File(projectRoot, "build/classes/kotlin/main")
         if (!buildDir.exists()) error("빌드 출력 디렉토리가 없습니다. 먼저 컴파일을 실행하세요.")
-        val fqcn = "com.hana.orchestrator.orchestrator.core.$name"
+        val fqcn = if (name == "DefaultReActStrategy") {
+            "com.hana.orchestrator.orchestrator.core.DefaultReActStrategy"
+        } else {
+            "com.hana.orchestrator.orchestrator.core.candidates.${candidateNameToClassName(name)}"
+        }
         val classLoader = childFirstStrategyClassLoader(buildDir, fqcn, this::class.java.classLoader)
         val clazz = classLoader.loadClass(fqcn)
         val ctor = clazz.getDeclaredConstructor(
@@ -279,7 +348,7 @@ $functionBlocks
                 "SUCCESS: '${desc.name}' 레이어 동적 등록 완료. 즉시 사용 가능. 함수: ${desc.functions.joinToString(", ")}"
             }
         } catch (e: IllegalStateException) { "ERROR: ${e.message}" }
-        catch (e: ClassNotFoundException) { "ERROR: 클래스를 찾을 수 없습니다. build.compileKotlin()이 성공했는지 확인하세요." }
+        catch (e: ClassNotFoundException) { "ERROR: 클래스를 찾을 수 없습니다. 먼저 컴파일을 실행하세요." }
         catch (e: NoSuchMethodException) { "ERROR: 기본 생성자(no-arg constructor)가 없습니다." }
         catch (e: ClassCastException) { "ERROR: CommonLayerInterface를 구현하지 않습니다." }
         catch (e: Exception) { "ERROR: 동적 로드 실패: ${e.message}" }
@@ -304,18 +373,17 @@ $functionBlocks
             val action = if (wasRegistered) "리로드(교체)" else "신규 등록"
             "SUCCESS: '${desc.name}' 레이어 $action 완료. 함수: ${desc.functions.joinToString(", ")}"
         } catch (e: IllegalStateException) { "ERROR: ${e.message}" }
-        catch (e: ClassNotFoundException) { "ERROR: 클래스를 찾을 수 없습니다. build.compileKotlin()이 성공했는지 확인하세요." }
+        catch (e: ClassNotFoundException) { "ERROR: 클래스를 찾을 수 없습니다. 먼저 컴파일을 실행하세요." }
         catch (e: NoSuchMethodException) { "ERROR: 기본 생성자(no-arg constructor)가 없습니다." }
         catch (e: ClassCastException) { "ERROR: CommonLayerInterface를 구현하지 않습니다." }
         catch (e: Exception) { "ERROR: 리로드 실패: ${e.message}" }
     }
 
     /**
-     * 컴파일 완료된 ReAct 전략을 런타임에 교체합니다.
-     * 전략 소스를 수정하고 컴파일이 성공한 후 호출하세요.
-     * 교체는 즉시 적용되며, 다음 실행 요청부터 새 전략이 사용됩니다.
+     * 컴파일 완료된 ReAct 전략을 런타임에 교체합니다. 다음 실행부터 즉시 적용됩니다.
+     * "DefaultReActStrategy": 원본 전략 복구. 후보 이름(예: "retry-v1"): 해당 후보 적용.
      *
-     * @param name 전략 클래스 이름 (예: "DefaultReActStrategy")
+     * @param name 후보 이름(예: "retry-v1") 또는 "DefaultReActStrategy"(원본 복구)
      */
     @LayerFunction
     suspend fun hotLoadStrategy(name: String): String {
@@ -330,6 +398,60 @@ $functionBlocks
         catch (e: NoSuchMethodException) { "ERROR: 호환 생성자가 없습니다. DefaultReActStrategy와 동일한 생성자 시그니처를 사용하세요." }
         catch (e: ClassCastException) { "ERROR: ReActStrategy를 구현하지 않습니다." }
         catch (e: Exception) { "ERROR: 전략 핫로드 실패: ${e.message}" }
+    }
+
+    /**
+     * 후보 전략을 기본 전략으로 승격 (이때만 src/DefaultReActStrategy.kt 교체됨).
+     * 이후 compileKotlin → hotLoadStrategy("DefaultReActStrategy") 순서로 진행하세요.
+     * 승격 전 원본은 .bak 파일로 자동 백업됩니다.
+     *
+     * @param name 후보 이름 (예: "retry-v1"). createStrategyCandidate로 저장한 이름과 동일.
+     * @return 성공 메시지 또는 에러
+     */
+    @LayerFunction
+    suspend fun promoteCandidateToCore(name: String): String {
+        val className = candidateNameToClassName(name)
+        val candidateFile = File(candidatesSourceDir, "$className.kt")
+        if (!candidateFile.exists()) {
+            return "ERROR: 후보 소스 없음: ${candidateFile.relativeTo(projectRoot).path}"
+        }
+        val targetFile = projectRoot.walkTopDown()
+            .firstOrNull { it.isFile && it.name == "DefaultReActStrategy.kt" }
+            ?: return "ERROR: DefaultReActStrategy.kt를 찾을 수 없습니다."
+
+        val promoted = candidateFile.readText()
+            .replace(
+                "package com.hana.orchestrator.orchestrator.core.candidates",
+                "package com.hana.orchestrator.orchestrator.core"
+            )
+            .replace(Regex("class\\s+${Regex.escape(className)}\\s*\\("), "class DefaultReActStrategy(")
+
+        val backup = File(targetFile.parent, "DefaultReActStrategy.kt.bak")
+        targetFile.copyTo(backup, overwrite = true)
+        targetFile.writeText(promoted)
+
+        return "SUCCESS: '$name'($className) → DefaultReActStrategy 승격 완료\n" +
+            "백업: ${backup.relativeTo(projectRoot).path}\n" +
+            "다음: compileKotlin → hotLoadStrategy(name=\"DefaultReActStrategy\")"
+    }
+
+    /**
+     * 현재 전략을 즉시 DefaultReActStrategy로 복구합니다.
+     * build/classes의 DefaultReActStrategy.class를 로드하므로 재컴파일 불필요.
+     *
+     * @return 성공 메시지 또는 에러
+     */
+    @LayerFunction
+    suspend fun rollbackStrategy(): String {
+        val executor = reactiveExecutorRef ?: return "ERROR: ReactiveExecutor가 주입되지 않았습니다."
+        val stratCtx = strategyContextRef ?: return "ERROR: StrategyContext가 주입되지 않았습니다."
+        return try {
+            val instance = loadStrategyInstance("DefaultReActStrategy", stratCtx)
+            executor.setStrategy(instance)
+            "SUCCESS: DefaultReActStrategy로 즉시 복구 완료."
+        } catch (e: Exception) {
+            "ERROR: 롤백 실패: ${e.message}"
+        }
     }
 
     /**
@@ -475,10 +597,21 @@ $functionBlocks
                 val name = args["name"] as? String ?: return "ERROR: name 필수"
                 reloadLayer(name)
             }
+            "readDefaultStrategy" -> readDefaultStrategy()
+            "createStrategyCandidate" -> {
+                val name = args["name"] as? String ?: return "ERROR: name 필수"
+                val sourceCode = args["sourceCode"] as? String ?: return "ERROR: sourceCode 필수"
+                createStrategyCandidate(name, sourceCode)
+            }
             "hotLoadStrategy" -> {
                 val name = args["name"] as? String ?: return "ERROR: name 필수"
                 hotLoadStrategy(name)
             }
+            "promoteCandidateToCore" -> {
+                val name = args["name"] as? String ?: return "ERROR: name 필수"
+                promoteCandidateToCore(name)
+            }
+            "rollbackStrategy" -> rollbackStrategy()
             "promote" -> {
                 val name = args["name"] as? String ?: return "ERROR: name 필수"
                 val stage = args["stage"] as? String ?: return "ERROR: stage 필수 (beta/alpha/rc)"
@@ -489,7 +622,7 @@ $functionBlocks
                 val name = args["name"] as? String ?: ""
                 listCandidates(name)
             }
-            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad, reloadLayer, hotLoadStrategy, promote, listCandidates"
+            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad, reloadLayer, readDefaultStrategy, createStrategyCandidate, hotLoadStrategy, promoteCandidateToCore, rollbackStrategy, promote, listCandidates"
         }
     }
 }

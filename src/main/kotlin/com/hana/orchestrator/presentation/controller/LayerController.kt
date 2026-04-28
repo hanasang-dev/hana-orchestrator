@@ -38,12 +38,25 @@ class LayerController(
                     call.respond(mapOf("error" to "Service is shutting down"))
                     return@post
                 }
-                
                 val layerName = call.parameters["layerName"] ?: return@post call.respond(
                     mapOf("error" to "Layer name is required")
                 )
-                val request = call.receive<ChatRequest>()
-                val result = orchestrator.executeOnLayer(layerName, "echo", mapOf("message" to request.message))
+                val request = call.receive<LayerRequest>()
+                val args = request.arguments.mapValues { it.value as Any }
+                val result = orchestrator.executeOnLayer(layerName, request.function, args)
+                call.respond(mapOf("result" to result))
+            } catch (e: Exception) {
+                call.respond(mapOf("error" to e.message))
+            }
+        }
+
+        /**
+         * 전략 긴급 롤백 — ReAct 루프를 거치지 않고 직접 DefaultReActStrategy로 복구.
+         * 후보 전략이 루프를 망가뜨렸을 때 사용.
+         */
+        route.post("/strategy/rollback") {
+            try {
+                val result = orchestrator.executeOnLayer("develop", "rollbackStrategy", emptyMap())
                 call.respond(mapOf("result" to result))
             } catch (e: Exception) {
                 call.respond(mapOf("error" to e.message))
