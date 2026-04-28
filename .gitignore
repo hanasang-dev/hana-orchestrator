@@ -63,5 +63,13 @@ build/
 # Setup scripts
 setup.sh
 
-# Orchestrator runtime data (persistent context etc.)
-.hana/layer-registry.json
+# Orchestrator runtime data
+.hana/history/
+.hana/backups/
+.hana/candidates/
+.hana/candidates.json
+.hana/context/
+.hana/restart.log
+.hana/restart.sh
+.hana/trees/
+layer-registry.json
