@@ -443,6 +443,55 @@ textarea:disabled {
     word-break: break-word;
 }
 
+#chatMessages .msg-ai-question {
+    background: #f0f4ff;
+    border-left: 3px solid var(--primary);
+    border-radius: 2px 10px 10px 2px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    max-width: 95%;
+    font-size: 13px;
+}
+#chatMessages .msg-ai-question .msg-ai-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--primary);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 4px;
+}
+#chatMessages .msg-ai-question p {
+    margin: 0 0 8px;
+    color: var(--text-1);
+    line-height: 1.5;
+}
+.clarification-inline-form {
+    display: flex;
+    gap: 6px;
+    align-items: flex-end;
+}
+.clarification-inline-form textarea {
+    flex: 1;
+    font-size: 12px;
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: white;
+    resize: none;
+    outline: none;
+    font-family: inherit;
+}
+.clarification-inline-form textarea:focus {
+    border-color: var(--primary);
+}
+.clarification-submit {
+    flex-shrink: 0;
+    padding: 5px 12px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
 #chatStatus {
     font-size: 11px;
     color: var(--text-3);

@@ -1856,24 +1856,66 @@ async function handleApproval(approved) {
 }
 
 // ─────────────────────────────────────────────
-// 사용자 질문 (Clarification)
+// 사용자 질문 (Clarification) — 채팅 인라인
 // ─────────────────────────────────────────────
 let currentClarificationId = null;
 
 function showClarificationModal(data) {
     currentClarificationId = data.id;
-    document.getElementById('clarificationQuestion').textContent = data.question;
-    document.getElementById('clarificationAnswer').value = '';
-    document.getElementById('clarificationModal').style.display = 'flex';
-    setTimeout(() => document.getElementById('clarificationAnswer').focus(), 100);
+    const chatMessages = document.getElementById('chatMessages');
+    const chatInput = document.getElementById('chatInput');
+
+    // 채팅 입력 비활성화 (답변 중)
+    chatInput.disabled = true;
+
+    const formId = `clarification-form-${data.id}`;
+    const inputId = `clarification-input-${data.id}`;
+
+    const html = `
+        <div class="msg-ai-question" id="clarification-bubble-${data.id}">
+            <span class="msg-ai-label">❓ AI 질문</span>
+            <p>${escapeHtml(data.question)}</p>
+            <div class="clarification-inline-form" id="${formId}">
+                <textarea id="${inputId}" rows="2"
+                    placeholder="답변 입력 후 Enter (Shift+Enter: 줄바꿈)"></textarea>
+                <button onclick="submitClarification('${data.id}', '${inputId}')" class="btn-success clarification-submit">✓ 제출</button>
+            </div>
+        </div>`;
+    chatMessages.insertAdjacentHTML('beforeend', html);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    const textarea = document.getElementById(inputId);
+    textarea?.focus();
+    textarea?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            submitClarification(data.id, inputId);
+        }
+    });
 }
 
-async function handleClarification() {
-    if (!currentClarificationId) return;
-    const answer = document.getElementById('clarificationAnswer').value.trim();
+async function submitClarification(id, inputId) {
+    const textarea = document.getElementById(inputId);
+    if (!textarea) return;
+    const answer = textarea.value.trim();
     if (!answer) return;
+
+    // 폼 제거 후 사용자 답변 버블 표시
+    const bubble = document.getElementById(`clarification-bubble-${id}`);
+    const form = document.getElementById(`clarification-form-${id}`);
+    if (form) form.remove();
+
+    const chatMessages = document.getElementById('chatMessages');
+    chatMessages.insertAdjacentHTML('beforeend',
+        `<div class="msg-user">${escapeHtml(answer)}</div>`);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    // 채팅 입력 재활성화
+    document.getElementById('chatInput').disabled = false;
+    currentClarificationId = null;
+
     try {
-        await fetch(`${API_BASE}/clarification/${currentClarificationId}/answer`, {
+        await fetch(`${API_BASE}/clarification/${id}/answer`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ answer })
@@ -1881,19 +1923,7 @@ async function handleClarification() {
     } catch (e) {
         console.error('Clarification answer failed:', e);
     }
-    document.getElementById('clarificationModal').style.display = 'none';
-    currentClarificationId = null;
 }
-
-// Enter 키로 제출 (Shift+Enter는 줄바꿈)
-document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('clarificationAnswer')?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleClarification();
-        }
-    });
-});
 
 // 초기 로드 시 LLM 상태 확인 후 UI 표시 결정
 (async function init() {
