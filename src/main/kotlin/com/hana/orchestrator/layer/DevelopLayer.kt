@@ -18,12 +18,12 @@ class DevelopLayer(
     private val projectRoot: File = File(System.getProperty("user.dir"))
 ) : CommonLayerInterface {
 
-    private var layerManagerRef: com.hana.orchestrator.orchestrator.LayerManager? = null
+    private var layerManagerRef: com.hana.orchestrator.orchestrator.core.LayerManager? = null
 
     /**
      * LayerManager 참조 설정 (LayerManager에서 주입)
      */
-    fun setLayerManager(layerManager: com.hana.orchestrator.orchestrator.LayerManager) {
+    fun setLayerManager(layerManager: com.hana.orchestrator.orchestrator.core.LayerManager) {
         layerManagerRef = layerManager
     }
 

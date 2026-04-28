@@ -1,10 +1,12 @@
-package com.hana.orchestrator.orchestrator
+package com.hana.orchestrator.orchestrator.core
 
 import com.hana.orchestrator.layer.CommonLayerInterface
 import com.hana.orchestrator.layer.LayerDescription
 import com.hana.orchestrator.layer.LayerFactory
 import com.hana.orchestrator.layer.LayerInfoLayer
 import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
+import com.hana.orchestrator.orchestrator.ApprovalGate
+import com.hana.orchestrator.orchestrator.createOrchestratorLogger
 
 /**
  * 레이어 관리 책임

@@ -8,12 +8,12 @@ package com.hana.orchestrator.layer
 class LayerInfoLayer : CommonLayerInterface {
     
     // LayerManager 참조는 런타임에 주입받음
-    private var layerManagerRef: com.hana.orchestrator.orchestrator.LayerManager? = null
+    private var layerManagerRef: com.hana.orchestrator.orchestrator.core.LayerManager? = null
     
     /**
      * LayerManager 참조 설정 (Orchestrator에서 주입)
      */
-    fun setLayerManager(layerManager: com.hana.orchestrator.orchestrator.LayerManager) {
+    fun setLayerManager(layerManager: com.hana.orchestrator.orchestrator.core.LayerManager) {
         layerManagerRef = layerManager
     }
     

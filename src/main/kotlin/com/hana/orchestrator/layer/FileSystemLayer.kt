@@ -342,7 +342,7 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
 
     /**
      * 변경사항 검증
-     * 보호된 파일 목록 확인
+     * 보호된 파일·디렉토리 목록 확인
      * @param content 향후 내용 기반 검증용. 현재는 경로만 검사.
      */
     @Suppress("UNUSED_PARAMETER")
@@ -353,12 +353,19 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
             "ApplicationBootstrap.kt",
             "ApplicationLifecycleManager.kt"
         )
-        
+
+        // 보호된 디렉토리 — 하위 경로 전체 차단
+        val protectedDirs = listOf(
+            "orchestrator/core"
+        )
+
         // 보호된 파일명이 경로에 포함되어 있는지 확인
-        if (protectedFiles.any { path.contains(it) }) {
-            return false
-        }
-        
+        if (protectedFiles.any { path.contains(it) }) return false
+
+        // 보호된 디렉토리 하위 경로 차단
+        val normalized = path.replace("\\", "/")
+        if (protectedDirs.any { normalized.contains(it) }) return false
+
         return true
     }
     
