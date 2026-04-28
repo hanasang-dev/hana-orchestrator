@@ -21,6 +21,18 @@ class LayerManager(
     private val layerNameMap = mutableMapOf<String, CommonLayerInterface>() // 이름 -> 레이어 매핑
     private var isInitialized = false
     private val logger = createOrchestratorLogger(LayerManager::class.java, null)
+
+    private var reactiveExecutor: ReactiveExecutor? = null
+    private var strategyContext: StrategyContext? = null
+
+    /**
+     * DevelopLayer의 전략 핫로드에 필요한 의존성을 설정한다.
+     * Orchestrator 초기화 완료 후, 첫 요청 전에 호출되어야 한다.
+     */
+    fun wireReactiveExecutor(executor: ReactiveExecutor, ctx: StrategyContext) {
+        reactiveExecutor = executor
+        strategyContext = ctx
+    }
     
     /**
      * 기본 레이어 초기화 (lazy initialization)
@@ -45,9 +57,13 @@ class LayerManager(
             }
             layers.addAll(defaultLayers)
 
-            // DevelopLayer에 LayerManager 주입 (hotLoad로 런타임 레이어 등록 가능하게 함)
+            // DevelopLayer에 LayerManager + ReactiveExecutor + StrategyContext 주입
             defaultLayers.filterIsInstance<com.hana.orchestrator.layer.DevelopLayer>()
-                .firstOrNull()?.setLayerManager(this)
+                .firstOrNull()?.also { developLayer ->
+                    developLayer.setLayerManager(this)
+                    reactiveExecutor?.let { developLayer.setReactiveExecutor(it) }
+                    strategyContext?.let { developLayer.setStrategyContext(it) }
+                }
 
             // 영속 레지스트리에서 이전에 핫로드된 레이어 복원
             val projectRoot = java.io.File(System.getProperty("user.dir"))

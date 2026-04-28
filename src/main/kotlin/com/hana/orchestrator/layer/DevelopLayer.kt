@@ -20,12 +20,22 @@ class DevelopLayer(
 ) : CommonLayerInterface {
 
     private var layerManagerRef: com.hana.orchestrator.orchestrator.core.LayerManager? = null
+    private var reactiveExecutorRef: com.hana.orchestrator.orchestrator.core.ReactiveExecutor? = null
+    private var strategyContextRef: com.hana.orchestrator.orchestrator.core.StrategyContext? = null
 
-    /**
-     * LayerManager 참조 설정 (LayerManager에서 주입)
-     */
+    /** LayerManager 참조 설정 (LayerManager에서 주입) */
     fun setLayerManager(layerManager: com.hana.orchestrator.orchestrator.core.LayerManager) {
         layerManagerRef = layerManager
+    }
+
+    /** ReactiveExecutor 참조 설정 (LayerManager에서 주입) */
+    fun setReactiveExecutor(executor: com.hana.orchestrator.orchestrator.core.ReactiveExecutor) {
+        reactiveExecutorRef = executor
+    }
+
+    /** 전략 핫로드에 필요한 의존성 컨텍스트 설정 (LayerManager에서 주입) */
+    fun setStrategyContext(ctx: com.hana.orchestrator.orchestrator.core.StrategyContext) {
+        strategyContextRef = ctx
     }
 
     private val layerDir: File
@@ -193,6 +203,60 @@ $functionBlocks
     }
 
     /**
+     * 전략 클래스를 build 출력 디렉토리에서 로드하고 의존성을 주입해 반환.
+     * DefaultReActStrategy와 동일한 5-arg 생성자(LayerManager, ExecutionHistoryManager,
+     * ExecutionStatePublisher, ModelSelectionStrategy, TreeExecutor)를 요구한다.
+     */
+    private fun loadStrategyInstance(
+        name: String,
+        ctx: com.hana.orchestrator.orchestrator.core.StrategyContext
+    ): com.hana.orchestrator.orchestrator.core.ReActStrategy {
+        val buildDir = File(projectRoot, "build/classes/kotlin/main")
+        if (!buildDir.exists()) error("빌드 출력 디렉토리가 없습니다. 먼저 컴파일을 실행하세요.")
+        val fqcn = "com.hana.orchestrator.orchestrator.core.$name"
+        val classLoader = childFirstStrategyClassLoader(buildDir, fqcn, this::class.java.classLoader)
+        val clazz = classLoader.loadClass(fqcn)
+        val ctor = clazz.getDeclaredConstructor(
+            com.hana.orchestrator.orchestrator.core.LayerManager::class.java,
+            com.hana.orchestrator.orchestrator.ExecutionHistoryManager::class.java,
+            com.hana.orchestrator.orchestrator.ExecutionStatePublisher::class.java,
+            com.hana.orchestrator.llm.strategy.ModelSelectionStrategy::class.java,
+            com.hana.orchestrator.orchestrator.core.TreeExecutor::class.java
+        )
+        return ctor.newInstance(
+            ctx.layerManager,
+            ctx.historyManager,
+            ctx.statePublisher,
+            ctx.modelSelectionStrategy,
+            ctx.treeExecutor
+        ) as com.hana.orchestrator.orchestrator.core.ReActStrategy
+    }
+
+    /**
+     * 전략 클래스 전용 child-first URLClassLoader.
+     * fqcn 접두사를 가진 클래스(중첩/람다 포함)는 buildDir에서 먼저 탐색한다.
+     */
+    private fun childFirstStrategyClassLoader(
+        buildDir: File,
+        fqcn: String,
+        parent: ClassLoader
+    ): URLClassLoader {
+        return object : URLClassLoader(arrayOf(buildDir.toURI().toURL()), parent) {
+            override fun loadClass(name: String, resolve: Boolean): Class<*> {
+                if (name.startsWith(fqcn)) {
+                    synchronized(getClassLoadingLock(name)) {
+                        findLoadedClass(name)?.let { return it }
+                        try {
+                            return findClass(name).also { if (resolve) resolveClass(it) }
+                        } catch (_: ClassNotFoundException) { }
+                    }
+                }
+                return super.loadClass(name, resolve)
+            }
+        }
+    }
+
+    /**
      * 컴파일 완료된 레이어를 런타임에 즉시 등록합니다 (신규 레이어 전용).
      * 이미 등록된 레이어를 교체하려면 reloadLayer()를 사용하세요.
      * 소스 파일 저장 후 컴파일이 성공한 경우에 호출하세요.
@@ -244,6 +308,28 @@ $functionBlocks
         catch (e: NoSuchMethodException) { "ERROR: 기본 생성자(no-arg constructor)가 없습니다." }
         catch (e: ClassCastException) { "ERROR: CommonLayerInterface를 구현하지 않습니다." }
         catch (e: Exception) { "ERROR: 리로드 실패: ${e.message}" }
+    }
+
+    /**
+     * 컴파일 완료된 ReAct 전략을 런타임에 교체합니다.
+     * 전략 소스를 수정하고 컴파일이 성공한 후 호출하세요.
+     * 교체는 즉시 적용되며, 다음 실행 요청부터 새 전략이 사용됩니다.
+     *
+     * @param name 전략 클래스 이름 (예: "DefaultReActStrategy")
+     */
+    @LayerFunction
+    suspend fun hotLoadStrategy(name: String): String {
+        val executor = reactiveExecutorRef ?: return "ERROR: ReactiveExecutor가 주입되지 않았습니다."
+        val stratCtx = strategyContextRef ?: return "ERROR: StrategyContext가 주입되지 않았습니다."
+        return try {
+            val instance = loadStrategyInstance(name, stratCtx)
+            executor.setStrategy(instance)
+            "SUCCESS: '$name' 전략 핫로드 완료. 다음 실행부터 새 전략이 적용됩니다."
+        } catch (e: IllegalStateException) { "ERROR: ${e.message}" }
+        catch (e: ClassNotFoundException) { "ERROR: 클래스를 찾을 수 없습니다: $name. 컴파일이 성공했는지 확인하세요." }
+        catch (e: NoSuchMethodException) { "ERROR: 호환 생성자가 없습니다. DefaultReActStrategy와 동일한 생성자 시그니처를 사용하세요." }
+        catch (e: ClassCastException) { "ERROR: ReActStrategy를 구현하지 않습니다." }
+        catch (e: Exception) { "ERROR: 전략 핫로드 실패: ${e.message}" }
     }
 
     /**
@@ -389,6 +475,10 @@ $functionBlocks
                 val name = args["name"] as? String ?: return "ERROR: name 필수"
                 reloadLayer(name)
             }
+            "hotLoadStrategy" -> {
+                val name = args["name"] as? String ?: return "ERROR: name 필수"
+                hotLoadStrategy(name)
+            }
             "promote" -> {
                 val name = args["name"] as? String ?: return "ERROR: name 필수"
                 val stage = args["stage"] as? String ?: return "ERROR: stage 필수 (beta/alpha/rc)"
@@ -399,7 +489,7 @@ $functionBlocks
                 val name = args["name"] as? String ?: ""
                 listCandidates(name)
             }
-            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad, reloadLayer, promote, listCandidates"
+            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad, reloadLayer, hotLoadStrategy, promote, listCandidates"
         }
     }
 }

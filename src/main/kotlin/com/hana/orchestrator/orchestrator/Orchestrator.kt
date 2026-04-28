@@ -2,6 +2,7 @@ package com.hana.orchestrator.orchestrator
 
 import com.hana.orchestrator.orchestrator.core.LayerManager
 import com.hana.orchestrator.orchestrator.core.ReactiveExecutor
+import com.hana.orchestrator.orchestrator.core.StrategyContext
 import com.hana.orchestrator.orchestrator.core.TreeExecutor
 import com.hana.orchestrator.layer.CommonLayerInterface
 import com.hana.orchestrator.layer.LayerDescription
@@ -64,6 +65,12 @@ class Orchestrator(
             statePublisher = statePublisher,
             modelSelectionStrategy = modelSelectionStrategy,
             treeExecutor = treeExecutor
+        )
+
+        // DevelopLayer에서 전략 핫로드 가능하도록 의존성 주입
+        layerManager.wireReactiveExecutor(
+            reactiveExecutor,
+            StrategyContext(layerManager, historyManager, statePublisher, modelSelectionStrategy, treeExecutor)
         )
 
         logger.info("🚀 [Orchestrator] 초기화 시작...")
