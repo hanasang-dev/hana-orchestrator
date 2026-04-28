@@ -64,23 +64,6 @@
 
             <div class="section-resize-handle" id="resizeHandle0"></div>
 
-            <!-- 원격 레이어 등록 -->
-            <div class="card" id="registerCard">
-                <h2>🔗 원격 레이어 등록</h2>
-                <div class="card-content">
-                    <div id="registerMessage"></div>
-                    <form id="registerForm">
-                        <div class="form-group">
-                            <label for="baseUrl">원격 서버 URL</label>
-                            <input type="url" id="baseUrl" placeholder="http://localhost:8081" required>
-                        </div>
-                        <button type="submit">등록</button>
-                    </form>
-                </div>
-            </div>
-
-            <div class="section-resize-handle" id="resizeHandle1"></div>
-
             <!-- 레이어 목록 -->
             <div class="card resizable" id="layersCard">
                 <h2>
@@ -94,6 +77,26 @@
                                oninput="filterLayers(this.value)">
                     </div>
                     <div id="layersList" class="layers-list"></div>
+                </div>
+            </div>
+
+            <div class="section-resize-handle" id="resizeHandle1"></div>
+
+            <!-- 원격 레이어 등록 (기본 접힘) -->
+            <div class="card card-collapsible collapsed" id="registerCard">
+                <h2 onclick="toggleCard('registerCard')">
+                    🔗 원격 레이어 등록
+                    <span class="collapse-arrow">▸</span>
+                </h2>
+                <div class="card-content">
+                    <div id="registerMessage"></div>
+                    <form id="registerForm">
+                        <div class="form-group">
+                            <label for="baseUrl">원격 서버 URL</label>
+                            <input type="url" id="baseUrl" placeholder="http://localhost:8081" required>
+                        </div>
+                        <button type="submit">등록</button>
+                    </form>
                 </div>
             </div>
 

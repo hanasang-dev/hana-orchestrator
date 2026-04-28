@@ -556,6 +556,30 @@ textarea:disabled {
    ───────────────────────────────────────────── */
 #registerCard { flex: 0 0 auto; }
 
+/* 접기/펼치기 카드 */
+.card-collapsible h2 {
+    cursor: pointer;
+    user-select: none;
+}
+.card-collapsible h2:hover {
+    color: var(--primary);
+}
+.collapse-arrow {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-3);
+    transition: transform 0.2s;
+}
+.card-collapsible.collapsed .collapse-arrow {
+    transform: rotate(0deg);
+}
+.card-collapsible:not(.collapsed) .collapse-arrow {
+    transform: rotate(90deg);
+}
+.card-collapsible.collapsed .card-content {
+    display: none;
+}
+
 /* ─────────────────────────────────────────────
    레이어 목록
    ───────────────────────────────────────────── */

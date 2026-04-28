@@ -744,6 +744,10 @@ async function executeEditedTree() {
 }
 
 // 레이어 목록 로드
+function toggleCard(id) {
+    document.getElementById(id)?.classList.toggle('collapsed');
+}
+
 let allLayersData = [];
 
 async function loadLayers() {
