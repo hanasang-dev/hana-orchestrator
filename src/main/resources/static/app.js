@@ -959,10 +959,10 @@ function updateProgressUI(progress) {
         stopProgressLiveTimer();
         progressTime.textContent = (progress.elapsedMs / 1000).toFixed(1) + '초';
         setTimeout(() => {
-            progressContainer.style.display = 'none';
+            progressContainer.classList.remove('active');
         }, 2000);
     } else {
-        progressContainer.style.display = 'block';
+        progressContainer.classList.add('active');
         // 라이브 타이머: 서버 메시지 없는 구간에도 계속 증가 (FIX 5)
         const startMs = Date.now() - progress.elapsedMs;
         startProgressLiveTimer(startMs);

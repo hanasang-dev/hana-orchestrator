@@ -20,6 +20,14 @@
         <div class="header-sep"></div>
         <p>AI Agent Dashboard</p>
         <div class="header-sep"></div>
+        <!-- 진행 상태 (헤더 인라인) -->
+        <div id="progressContainer">
+            <span id="progressMessage">준비 중...</span>
+            <div id="progressBarTrack"><div id="progressBar"></div></div>
+            <span id="progressTime">0.0초</span>
+        </div>
+
+        <div class="header-spacer"></div>
         <div id="llmStatus"><span id="llmStatusText">LLM 상태 확인 중...</span></div>
     </header>
 
@@ -51,14 +59,6 @@
                             required></textarea>
                     </form>
                     <div id="chatStatus"></div>
-                    <!-- 진행 상태 -->
-                    <div id="progressContainer">
-                        <div id="progressMessage">준비 중...</div>
-                        <div id="progressBarTrack">
-                            <div id="progressBar"></div>
-                        </div>
-                        <div id="progressTime">0.0초</div>
-                    </div>
                 </div>
             </div>
 
