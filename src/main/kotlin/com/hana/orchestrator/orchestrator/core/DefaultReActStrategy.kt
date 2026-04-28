@@ -49,6 +49,12 @@ class DefaultReActStrategy(
     private val maxConsecutiveErrors = 3
     private val logger = createOrchestratorLogger(DefaultReActStrategy::class.java, historyManager)
 
+    /** 로그 추가 + WebSocket 즉시 broadcast */
+    private fun logAndEmit(message: String) {
+        historyManager.addLogToCurrent(message)
+        historyManager.getCurrentExecution()?.let { statePublisher.emitExecutionUpdateAsync(it) }
+    }
+
     // ── 인수(args) 포함 노드 식별 키 생성 헬퍼 ──────────────────────────────
 
     /** 도메인 노드 식별 키 (레이어.함수(args)) — 중복 감지용 */
@@ -179,7 +185,7 @@ class DefaultReActStrategy(
             // 진행률: 스텝마다 5%씩 올라가다 85%에서 수렴 (작업량 불확정이므로 점근)
             val progressPct = minOf(15 + step * 5, 85)
             logger.info("🔄 [ReAct] 스텝 #$step 시작")
-            historyManager.addLogToCurrent("🔄 ReAct 스텝 #$step")
+            logAndEmit("🔄 스텝 #$step — LLM 결정 요청 중...")
             statePublisher.emitProgress(
                 executionId, ExecutionPhase.TREE_EXECUTION,
                 "🤔 스텝 #$step 결정 중...", progressPct, System.currentTimeMillis() - startTime
@@ -272,6 +278,7 @@ class DefaultReActStrategy(
             }
 
             logger.info("🤔 [ReAct] 스텝 #$step 결정: action=${decision.action}, reasoning=${decision.reasoning.take(80)}")
+            logAndEmit("🤔 #$step → ${decision.action}: ${decision.reasoning.take(80).replace('\n', ' ')}")
 
             when (decision.action) {
                 "finish" -> {
@@ -282,7 +289,7 @@ class DefaultReActStrategy(
                         ?: lastSuccessResult
                         ?: "작업 완료"
                     logger.info("✅ [ReAct] 완료 (${step}스텝): ${finalResult.take(100)}")
-                    historyManager.addLogToCurrent("✅ ReAct 완료 (${step}스텝)")
+                    logAndEmit("✅ 완료 (${step}스텝)")
                     statePublisher.emitProgress(
                         executionId, ExecutionPhase.COMPLETED, "✅ 완료", 100,
                         System.currentTimeMillis() - startTime
@@ -338,7 +345,7 @@ class DefaultReActStrategy(
 
                     val treeDesc = domainTree.rootNodes.joinToString(", ") { "${it.layerName}.${it.function}" }
                     logger.info("🌳 [ReAct] 스텝 #$step 미니트리 실행: [$treeDesc]")
-                    historyManager.addLogToCurrent("🌳 미니트리: [$treeDesc]")
+                    logAndEmit("🌳 실행: [$treeDesc]")
 
                     val treeExecResult = try {
                         val currentHistory = historyManager.getCurrentExecution()!!
@@ -355,7 +362,7 @@ class DefaultReActStrategy(
                         ?: emptyList()
 
                     logger.info("📋 [ReAct] 스텝 #$step 결과: ${stepResult.take(120)}")
-                    historyManager.addLogToCurrent("📋 결과: ${stepResult.take(60)}")
+                    logAndEmit("📋 #$step 결과: ${stepResult.take(80).replace('\n', ' ')}")
 
                     val presentationTree = with(PresentationMapper) { domainTree.toResponse() }
                     stepHistory.add(ReActStep(step, decision.reasoning, presentationTree, stepResult, successfulFunctions))
@@ -370,11 +377,11 @@ class DefaultReActStrategy(
                         consecutiveErrors = 0
                     } else {
                         logger.info("❓ [ReAct] 사용자에게 질문: $question")
-                        historyManager.addLogToCurrent("❓ 사용자 질문: $question")
+                        logAndEmit("❓ 질문: $question")
                         statePublisher.emitProgress(executionId, ExecutionPhase.TREE_EXECUTION, "❓ 사용자 답변 대기 중...", progressPct, System.currentTimeMillis() - startTime)
                         val answer = clarificationGate.requestClarification(question)
                         logger.info("💬 [ReAct] 사용자 답변: ${answer.take(80)}")
-                        historyManager.addLogToCurrent("💬 사용자 답변: ${answer.take(60)}")
+                        logAndEmit("💬 답변: ${answer.take(60)}")
                         stepHistory.add(ReActStep(step, "사용자 질문: $question", null, "[사용자 답변] $answer"))
                         consecutiveErrors = 0
                     }
