@@ -65,6 +65,12 @@ class LayerManager(
                     strategyContext?.let { developLayer.setStrategyContext(it) }
                 }
 
+            // CoreEvaluationLayer에 ReactiveExecutor 주입 (runScenario용)
+            defaultLayers.filterIsInstance<com.hana.orchestrator.layer.CoreEvaluationLayer>()
+                .firstOrNull()?.also { coreEvalLayer ->
+                    reactiveExecutor?.let { coreEvalLayer.setReactiveExecutor(it) }
+                }
+
             // 영속 레지스트리에서 이전에 핫로드된 레이어 복원
             val projectRoot = java.io.File(System.getProperty("user.dir"))
             val persistedLayers = com.hana.orchestrator.layer.LayerRegistry.loadAll(

@@ -22,6 +22,115 @@ class CoreEvaluationLayer : CommonLayerInterface {
 
     private val projectRoot: File = File(System.getProperty("user.dir"))
 
+    private var reactiveExecutorRef: com.hana.orchestrator.orchestrator.core.ReactiveExecutor? = null
+    private val scenarioResults = mutableListOf<ScenarioResult>()
+
+    /** ReactiveExecutor 참조 설정 (LayerManager에서 주입) */
+    fun setReactiveExecutor(executor: com.hana.orchestrator.orchestrator.core.ReactiveExecutor) {
+        reactiveExecutorRef = executor
+    }
+
+    private data class ScenarioResult(
+        val label: String,
+        val query: String,
+        val stepCount: Int,
+        val durationMs: Long,
+        val resultSummary: String,
+        val error: String?,
+        val successfulFunctions: List<String>,
+        val createdAt: Long = System.currentTimeMillis()
+    )
+
+    /**
+     * 현재 활성 전략으로 시나리오를 실행하고 결과를 기록합니다.
+     * 전략을 교체한 뒤 동일한 쿼리로 다시 호출하면 비교용 데이터가 누적됩니다.
+     *
+     * @param query 실행할 시나리오 쿼리
+     * @param label 결과를 구분할 레이블 (예: "baseline", "candidate-v2"). 생략 시 시간으로 자동 부여.
+     */
+    @LayerFunction
+    suspend fun runScenario(query: String, label: String = ""): String {
+        val executor = reactiveExecutorRef ?: return "ERROR: ReactiveExecutor가 주입되지 않았습니다."
+        val effectiveLabel = label.ifBlank { java.text.SimpleDateFormat("HH:mm:ss").format(java.util.Date()) }
+
+        val executionId = java.util.UUID.randomUUID().toString()
+        val startTime = System.currentTimeMillis()
+
+        val result = try {
+            executor.execute(query, executionId, startTime)
+        } catch (e: Exception) {
+            return "ERROR: 시나리오 실행 실패: ${e.message}"
+        }
+
+        val durationMs = System.currentTimeMillis() - startTime
+        val functions = result.stepHistory.flatMap { it.successfulFunctions }.distinct()
+        val scenarioResult = ScenarioResult(
+            label = effectiveLabel,
+            query = query,
+            stepCount = result.stepHistory.size,
+            durationMs = durationMs,
+            resultSummary = result.result.take(200),
+            error = result.error,
+            successfulFunctions = functions
+        )
+        synchronized(scenarioResults) { scenarioResults.add(scenarioResult) }
+
+        return buildString {
+            append("📊 시나리오 결과 [$effectiveLabel]\n")
+            append("쿼리: $query\n")
+            append("스텝 수: ${scenarioResult.stepCount}\n")
+            append("소요 시간: ${durationMs}ms\n")
+            append("실행 함수: ${functions.joinToString(", ").ifBlank { "없음" }}\n")
+            if (result.error != null) append("❌ 에러: ${result.error}\n")
+            else append("✅ 결과: ${result.result.take(200)}\n")
+            append("\n저장됨 — compareScenarioResults()로 비교 가능.")
+        }
+    }
+
+    /**
+     * 저장된 시나리오 결과 목록을 조회합니다.
+     */
+    @LayerFunction
+    suspend fun listScenarioResults(): String {
+        val results = synchronized(scenarioResults) { scenarioResults.toList() }
+        if (results.isEmpty()) return "저장된 시나리오 결과가 없습니다. runScenario()로 먼저 실행하세요."
+        return "📋 시나리오 결과 (${results.size}건):\n\n" + results.mapIndexed { i, r ->
+            val date = java.text.SimpleDateFormat("HH:mm:ss").format(java.util.Date(r.createdAt))
+            val status = if (r.error != null) "❌" else "✅"
+            "$status #${i + 1} [${r.label}] ($date)  스텝: ${r.stepCount}  시간: ${r.durationMs}ms\n" +
+                "   함수: ${r.successfulFunctions.joinToString(", ").ifBlank { "없음" }}"
+        }.joinToString("\n")
+    }
+
+    /**
+     * 저장된 두 시나리오 결과를 나란히 비교합니다.
+     * 스텝 수·소요 시간·실행 함수·결과를 항목별로 비교해 판정합니다.
+     *
+     * @param labelA 비교할 첫 번째 레이블
+     * @param labelB 비교할 두 번째 레이블
+     */
+    @LayerFunction
+    suspend fun compareScenarioResults(labelA: String, labelB: String): String {
+        val results = synchronized(scenarioResults) { scenarioResults.toList() }
+        val a = results.lastOrNull { it.label == labelA }
+            ?: return "ERROR: '$labelA' 레이블의 결과를 찾을 수 없습니다."
+        val b = results.lastOrNull { it.label == labelB }
+            ?: return "ERROR: '$labelB' 레이블의 결과를 찾을 수 없습니다."
+
+        return buildString {
+            append("# ⚡ 시나리오 비교: [$labelA] vs [$labelB]\n\n")
+            append("| 항목 | $labelA | $labelB | 판정 |\n")
+            append("|------|---------|---------|------|\n")
+            append("| 스텝 수 | ${a.stepCount} | ${b.stepCount} | 🏆 ${if (a.stepCount <= b.stepCount) labelA else labelB} |\n")
+            append("| 소요 시간 | ${a.durationMs}ms | ${b.durationMs}ms | 🏆 ${if (a.durationMs <= b.durationMs) labelA else labelB} |\n")
+            append("| 성공 여부 | ${if (a.error == null) "✅" else "❌"} | ${if (b.error == null) "✅" else "❌"} | - |\n\n")
+            append("**[$labelA] 실행 함수**: ${a.successfulFunctions.joinToString(", ").ifBlank { "없음" }}\n")
+            append("**[$labelB] 실행 함수**: ${b.successfulFunctions.joinToString(", ").ifBlank { "없음" }}\n\n")
+            if (a.resultSummary.isNotBlank()) append("**[$labelA] 결과**: ${a.resultSummary}\n")
+            if (b.resultSummary.isNotBlank()) append("**[$labelB] 결과**: ${b.resultSummary}\n")
+        }.trim()
+    }
+
     /**
      * rc 단계 후보 목록 조회
      *
@@ -168,6 +277,17 @@ class CoreEvaluationLayer : CommonLayerInterface {
 
     override suspend fun execute(function: String, args: Map<String, Any>): String {
         return when (function) {
+            "runScenario" -> {
+                val query = args["query"] as? String ?: return "ERROR: query 필수"
+                val label = args["label"] as? String ?: ""
+                runScenario(query, label)
+            }
+            "listScenarioResults" -> listScenarioResults()
+            "compareScenarioResults" -> {
+                val labelA = args["labelA"] as? String ?: return "ERROR: labelA 필수"
+                val labelB = args["labelB"] as? String ?: return "ERROR: labelB 필수"
+                compareScenarioResults(labelA, labelB)
+            }
             "listRcCandidates" -> listRcCandidates()
             "evaluateReport" -> {
                 val name = args["name"] as? String ?: return "ERROR: name 필수"
@@ -178,7 +298,7 @@ class CoreEvaluationLayer : CommonLayerInterface {
                 val snapshotFile = args["snapshotFile"] as? String ?: return "ERROR: snapshotFile 필수"
                 applyCandidate(name, snapshotFile)
             }
-            else -> "Unknown function: $function. Available: listRcCandidates, evaluateReport, applyCandidate"
+            else -> "Unknown function: $function. Available: runScenario, listScenarioResults, compareScenarioResults, listRcCandidates, evaluateReport, applyCandidate"
         }
     }
 }
