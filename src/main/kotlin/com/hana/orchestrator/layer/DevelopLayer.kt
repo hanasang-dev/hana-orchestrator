@@ -11,7 +11,7 @@ import java.net.URLClassLoader
  *
  * 워크플로우:
  * 1. develop.createLayer(name, description, functions) → 파일 저장 완료
- * 2. build.compileKotlin() → 컴파일 확인
+ * 2. 컴파일 확인 (소스 파일이 런타임에 반영되려면 컴파일 단계가 반드시 선행되어야 함)
  * 3. develop.hotLoad(name) → 런타임 즉시 등록 (서버 재시작 불필요)
  */
 @Layer
@@ -141,7 +141,7 @@ $functionBlocks
      *
      * "레이어 만들어줘" 요청에 사용. 호출 한 번으로 파일 저장 완료.
      * ⚠️ 이 함수 호출 후 writeLayerCode()를 추가로 호출하지 말 것 (이미 저장됨).
-     * 이후에는 build.compileKotlin()으로 컴파일 확인.
+     * 이후에는 컴파일 확인 후 hotLoad(name)으로 런타임 등록.
      *
      * @param name 레이어 이름 (예: "Greeting"). "Layer" 접미사 불필요.
      * @param description 레이어 목적 설명
@@ -195,6 +195,7 @@ $functionBlocks
     /**
      * 컴파일 완료된 레이어를 런타임에 즉시 등록합니다 (신규 레이어 전용).
      * 이미 등록된 레이어를 교체하려면 reloadLayer()를 사용하세요.
+     * 소스 파일 저장 후 컴파일이 성공한 경우에 호출하세요.
      *
      * @param name 레이어 이름 (예: "Farewell"). "Layer" 접미사 불필요.
      */
@@ -222,7 +223,7 @@ $functionBlocks
 
     /**
      * 기존 레이어를 새 컴파일 결과로 교체합니다 (신규 등록에도 사용 가능).
-     * 레이어 코드 수정 후 build.compileKotlin() 성공 시 호출하세요.
+     * 소스 파일을 수정하고 컴파일이 성공한 후 호출하세요.
      *
      * @param name 레이어 이름 (예: "Farewell"). "Layer" 접미사 불필요.
      */

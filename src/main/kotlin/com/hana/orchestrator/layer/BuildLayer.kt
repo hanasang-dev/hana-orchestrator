@@ -28,7 +28,12 @@ class BuildLayer(
 
     private fun gradlewName(): String = if (isWindows) "gradlew.bat" else "gradlew"
 
-    /** Gradle: Kotlin 소스만 컴파일 (compileKotlin) */
+    /**
+     * Kotlin 소스를 컴파일합니다 (gradlew compileKotlin).
+     *
+     * 소스 파일(.kt)을 변경한 후, 그 변경이 런타임에 반영되려면 반드시 이 단계가 선행되어야 합니다.
+     * 컴파일 성공 후에야 런타임 등록·교체가 가능합니다.
+     */
     @LayerFunction
     suspend fun compileKotlin(): String = runGradle("compileKotlin")
 

@@ -92,13 +92,13 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
     }
     
     /**
-     * 파일 쓰기 (자동 백업 포함)
-     * 
-     * @param path 쓸 파일 경로 (상대 경로 사용 필수)
-     *   - 올바른 예: "test_file.txt", "src/main/kotlin/App.kt", "./output.txt"
-     *   - 잘못된 예: "/test_file.txt", "/path/to/file.txt" (절대 경로 사용 금지)
-     *   - 현재 작업 디렉토리 기준으로 상대 경로를 해석합니다
-     * @param content 파일 내용
+     * 파일 쓰기 (자동 백업 포함).
+     * ⚠️ content는 이미 처리·생성이 완료된 최종 내용이어야 합니다.
+     * 코드를 수정해야 한다면 먼저 코드를 생성·변환한 뒤 그 결과를 content로 전달하세요.
+     * 기존 파일 내용을 그대로 전달하면 변경 없음이 됩니다.
+     *
+     * @param path 쓸 파일 경로 (상대 경로 사용 필수, 절대 경로 금지)
+     * @param content 파일에 쓸 최종 완성된 내용
      * @return 실행 결과 메시지
      */
     @LayerFunction

@@ -11,11 +11,11 @@ import java.io.File
  *
  * 워크플로우:
  * 1. develop.promote(name, stage="rc") → rc 등록
- * 2. coreEval.listRcCandidates() → rc 목록 확인
- * 3. coreEval.evaluateReport(name) → 후보 비교 보고서 생성
- * 4. (선택) coreEval.applyCandidate(name, snapshotFile) → rc를 현재 소스에 반영
- * 5. build.compileKotlin() → 컴파일 확인
- * 6. develop.reloadLayer(name) → 런타임 반영
+ * 2. listRcCandidates() → rc 목록 확인
+ * 3. evaluateReport(name) → 후보 비교 보고서 생성
+ * 4. (선택) applyCandidate(name, snapshotFile) → rc를 현재 소스에 반영
+ * 5. 컴파일 확인 (소스 변경이 런타임에 반영되려면 컴파일이 선행되어야 함)
+ * 6. 런타임 반영 (컴파일 성공 후 레이어를 교체해야 변경이 적용됨)
  */
 @Layer
 class CoreEvaluationLayer : CommonLayerInterface {
@@ -104,7 +104,7 @@ class CoreEvaluationLayer : CommonLayerInterface {
     /**
      * 선택한 스냅샷을 현재 소스 파일에 반영
      *
-     * 적용 후 build.compileKotlin() → develop.reloadLayer() 순으로 진행하세요.
+     * 적용 후 컴파일 확인 → 런타임 레이어 교체 순으로 진행하세요.
      *
      * @param name         대상 이름 (예: "DefaultReActStrategy", "GreeterLayer")
      * @param snapshotFile 반영할 스냅샷 파일 경로 (.hana/candidates/... 경로)
@@ -132,9 +132,7 @@ class CoreEvaluationLayer : CommonLayerInterface {
 원본 백업: ${backup.path}
 적용 파일: ${targetFile.path}
 
-다음 단계:
-1. build.compileKotlin() — 컴파일 확인
-2. develop.reloadLayer(name="$normalized") — 런타임 반영"""
+[필수후속] 소스 반영 완료 — 컴파일 후 레이어 교체 필수. finish 불가."""
     }
 
     // ── 내부 헬퍼 ────────────────────────────────────────────────────────────
