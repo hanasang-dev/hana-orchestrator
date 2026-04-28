@@ -1,5 +1,6 @@
 package com.hana.orchestrator.layer
 
+import com.hana.orchestrator.orchestrator.CandidateRegistry
 import java.io.File
 import java.net.URLClassLoader
 
@@ -295,6 +296,61 @@ $functionBlocks
         }
     }
 
+    /**
+     * 현재 소스 파일의 스냅샷을 저장하고 beta/alpha/rc 단계로 마킹
+     *
+     * @param name  대상 이름 (레이어면 "Layer" 접미사 생략 가능. 예: "Greeter", "DefaultReActStrategy")
+     * @param stage 단계 — "beta" | "alpha" | "rc"
+     * @param description 이번 스냅샷의 변경 내용 요약 (선택)
+     * @return 저장된 스냅샷 경로 또는 에러 메시지
+     */
+    @LayerFunction
+    suspend fun promote(name: String, stage: String, description: String = ""): String {
+        val stageEnum = try {
+            CandidateRegistry.Stage.valueOf(stage.lowercase())
+        } catch (_: IllegalArgumentException) {
+            return "ERROR: stage는 beta/alpha/rc 중 하나여야 합니다: $stage"
+        }
+        val sourceFile = resolveSourceFile(name)
+            ?: return "ERROR: '$name' 소스 파일을 찾을 수 없습니다. 레이어면 '${name}Layer.kt', 전략이면 '${name}.kt'를 확인하세요."
+        val snapshotPath = CandidateRegistry.promote(name, stageEnum, sourceFile, description)
+        return if (snapshotPath.startsWith("ERROR")) snapshotPath
+        else "SUCCESS: '$name' → $stage 마킹 완료\n스냅샷: $snapshotPath"
+    }
+
+    /**
+     * 등록된 후보 목록 조회
+     *
+     * @param name 필터할 이름 (생략 시 전체)
+     * @return 후보 목록 (이름 / 단계 / 설명 / 날짜)
+     */
+    @LayerFunction
+    suspend fun listCandidates(name: String = ""): String {
+        val filter = name.ifBlank { null }
+        val list = CandidateRegistry.list(filter)
+        if (list.isEmpty()) return "등록된 후보가 없습니다."
+        return list.joinToString("\n") { entry ->
+            val date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date(entry.createdAt))
+            "[${entry.stage.uppercase()}] ${entry.name}  ($date)${if (entry.description.isNotBlank()) "\n  └ ${entry.description}" else ""}"
+        }
+    }
+
+    /**
+     * 이름으로 소스 파일 탐색 (레이어 디렉토리 → 프로젝트 전체 순)
+     */
+    private fun resolveSourceFile(name: String): File? {
+        val normalized = name.removeSuffix("Layer")
+        // 1. 레이어 디렉토리에서 XxxLayer.kt 탐색
+        val layerFile = File(layerDir, "${normalized}Layer.kt")
+        if (layerFile.exists()) return layerFile
+        // 2. 레이어 디렉토리에서 Xxx.kt 탐색 (전략 등)
+        val plainFile = File(layerDir, "${name}.kt")
+        if (plainFile.exists()) return plainFile
+        // 3. 프로젝트 전체에서 파일명으로 탐색
+        return projectRoot.walkTopDown()
+            .firstOrNull { it.isFile && (it.name == "${normalized}Layer.kt" || it.name == "$name.kt") }
+    }
+
     private fun listLayerNames(): String =
         layerDir.listFiles { f -> f.name.endsWith("Layer.kt") && f.name != "DevelopLayer.kt" }
             ?.map { it.nameWithoutExtension }
@@ -332,7 +388,17 @@ $functionBlocks
                 val name = args["name"] as? String ?: return "ERROR: name 필수"
                 reloadLayer(name)
             }
-            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad, reloadLayer"
+            "promote" -> {
+                val name = args["name"] as? String ?: return "ERROR: name 필수"
+                val stage = args["stage"] as? String ?: return "ERROR: stage 필수 (beta/alpha/rc)"
+                val description = args["description"] as? String ?: ""
+                promote(name, stage, description)
+            }
+            "listCandidates" -> {
+                val name = args["name"] as? String ?: ""
+                listCandidates(name)
+            }
+            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad, reloadLayer, promote, listCandidates"
         }
     }
 }
