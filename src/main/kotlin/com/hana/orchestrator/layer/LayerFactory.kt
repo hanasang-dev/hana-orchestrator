@@ -90,6 +90,13 @@ object LayerFactory {
     }
 
     /**
+     * 코어 평가 레이어 생성 (rc 후보 비교·평가·적용)
+     */
+    fun createCoreEvaluationLayer(): CoreEvaluationLayer {
+        return CoreEvaluationLayer()
+    }
+
+    /**
      * 모든 기본 레이어 생성
      */
     fun createDefaultLayers(
@@ -103,7 +110,8 @@ object LayerFactory {
             createFileSystemLayer(approvalGate),
             createBuildLayer(),
             createGitLayer(),
-            createDevelopLayer()
+            createDevelopLayer(),
+            createCoreEvaluationLayer()
         )
         
         // LLMLayer는 ModelSelectionStrategy가 필요하므로 선택적으로 추가
