@@ -169,7 +169,7 @@ class TreeExecutor(
             logger.info(execStartMsg)
             val nodeStartTime = System.currentTimeMillis()
             val resolvedArgs = resolveArgs(node.args, context, parentNodeId)
-            val execResult = layer.execute(node.function, resolvedArgs)
+            val execResult = layerManager.executeOnLayer(node.layerName, node.function, resolvedArgs, node.autoApprove)
             val nodeDuration = System.currentTimeMillis() - nodeStartTime
             val execCompleteMsg = "${indent}✅ [TreeExecutor] ${node.layerName}.${node.function} 완료: ${execResult.take(50)}... (${nodeDuration}ms)"
             logger.info(execCompleteMsg)

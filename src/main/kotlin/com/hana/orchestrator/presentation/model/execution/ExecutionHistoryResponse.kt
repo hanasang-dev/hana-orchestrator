@@ -17,6 +17,7 @@ data class ExecutionTreeNodeResponse(
     val args: Map<String, String> = emptyMap(),
     val children: List<ExecutionTreeNodeResponse> = emptyList(),
     val parallel: Boolean = false,
+    val autoApprove: Boolean = false,
     val id: String
 )
 

@@ -10,6 +10,9 @@ import com.hana.orchestrator.context.InMemoryContextStore
 import com.hana.orchestrator.context.PersistenceKind
 import com.hana.orchestrator.layer.EchoLayer
 import com.hana.orchestrator.orchestrator.Orchestrator
+import com.hana.orchestrator.orchestrator.JobRepository
+import com.hana.orchestrator.orchestrator.JobScheduler
+import com.hana.orchestrator.orchestrator.TreeRepository
 import com.hana.orchestrator.orchestrator.createOrchestratorLogger
 import com.hana.orchestrator.llm.config.LLMConfig
 import com.hana.orchestrator.service.PortAllocator
@@ -150,9 +153,15 @@ class ApplicationBootstrap {
         // Application scope 생성
         val applicationScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         val heartbeatJob = lifecycleManager.startHeartbeat(applicationScope, serviceInfo.id)
-        
+
+        // 스케줄러 초기화 + 시작
+        val jobRepository = JobRepository()
+        val treeRepository = TreeRepository()
+        val jobScheduler = JobScheduler(jobRepository, treeRepository, orchestrator, applicationScope)
+        jobScheduler.start()
+
         // 서버 생성 및 시작
-        val server = createAndStartServer(port, orchestrator, serviceInfo, applicationScope)
+        val server = createAndStartServer(port, orchestrator, serviceInfo, applicationScope, jobRepository, jobScheduler)
 
         // Shutdown hook 설정
         lifecycleManager.setupShutdownHooks(server, serviceInfo.id, heartbeatJob, applicationScope, orchestrator)
@@ -174,14 +183,18 @@ class ApplicationBootstrap {
         port: Int,
         orchestrator: Orchestrator,
         serviceInfo: ServiceInfo,
-        applicationScope: CoroutineScope
+        applicationScope: CoroutineScope,
+        jobRepository: JobRepository,
+        jobScheduler: JobScheduler
     ): EmbeddedServer<*, *> {
         val serverConfigurator = ServerConfigurator(
             port = port,
             orchestrator = orchestrator,
             serviceInfo = serviceInfo,
             lifecycleManager = lifecycleManager,
-            applicationScope = applicationScope
+            applicationScope = applicationScope,
+            jobRepository = jobRepository,
+            jobScheduler = jobScheduler
         )
         
         val server = serverConfigurator.createServer()

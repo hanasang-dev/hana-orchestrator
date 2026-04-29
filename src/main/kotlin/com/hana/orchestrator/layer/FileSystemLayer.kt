@@ -102,7 +102,9 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
      * @return 실행 결과 메시지
      */
     @LayerFunction
-    suspend fun writeFile(path: String, content: String): String {
+    suspend fun writeFile(path: String, content: String): String = writeFile(path, content, false)
+
+    suspend fun writeFile(path: String, content: String, autoApprove: Boolean): String {
         return try {
             // 1. 경로 자동 해석: 파일이 현재 경로에 없으면 기존 파일 위치 탐색
             val resolvedPath = resolveWritePath(path)
@@ -114,10 +116,10 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
 
             val file = File(resolvedPath)
 
-            // 2. 승인 게이트: 파일 쓰기 전 사용자 확인 대기 (approvalGate가 설정된 경우)
+            // 3. 승인 게이트: 파일 쓰기 전 사용자 확인 대기 (autoApprove=true면 즉시 통과)
             if (approvalGate != null) {
                 val oldContent = if (file.exists()) file.readText() else null
-                val approved = approvalGate.requestApproval(path, oldContent, content)
+                val approved = approvalGate.requestApproval(path, oldContent, content, autoApprove)
                 if (!approved) {
                     return "REJECTED: 사용자가 파일 수정을 거절했습니다: $path"
                 }
@@ -382,7 +384,8 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
             "writeFile" -> {
                 val path = (args["path"] as? String) ?: ""
                 val content = (args["content"] as? String) ?: ""
-                writeFile(path, content)
+                val autoApprove = args["__autoApprove"] as? Boolean ?: false
+                writeFile(path, content, autoApprove)
             }
             "listDirectory" -> {
                 val path = (args["path"] as? String) ?: "."

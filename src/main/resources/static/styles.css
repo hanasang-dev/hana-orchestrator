@@ -547,6 +547,20 @@ textarea:disabled {
     white-space: nowrap;
     flex-shrink: 0;
 }
+#cancelBtn {
+    background: none;
+    border: none;
+    color: var(--text-3);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+    flex-shrink: 0;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+}
+#cancelBtn:hover { opacity: 1; color: var(--danger); }
+#cancelBtn:disabled { opacity: 0.3; cursor: default; }
 .header-spacer {
     flex: 1;
 }
@@ -829,6 +843,7 @@ mark.search-hl {
 .status-completed { background: var(--success-light); color: #065f46; }
 .status-failed    { background: var(--danger-light);  color: #7f1d1d; }
 .status-retrying  { background: var(--warning-light); color: #92400e; }
+.status-cancelled { background: #fef3c7; color: #92400e; }
 
 /* ─────────────────────────────────────────────
    Node stats
@@ -1509,3 +1524,22 @@ mark.search-hl {
 
 /* 마우스 수평 드래그 중 텍스트 선택 방지 */
 .swipe-dragging, .swipe-dragging * { user-select: none !important; cursor: grabbing !important; }
+
+/* ─────────────────────────────────────────────
+   스케줄러 잡 아이템
+   ───────────────────────────────────────────── */
+.job-item {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.job-header { display: flex; align-items: center; gap: 8px; }
+.job-name { font-size: 13px; font-weight: 600; color: var(--text-1); flex: 1; }
+.job-query { font-size: 12px; color: var(--text-3); }
+.job-meta { display: flex; gap: 12px; font-size: 11px; color: var(--text-3); }
+.job-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }

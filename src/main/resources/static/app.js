@@ -11,7 +11,7 @@ function escapeHtml(text) {
 
 const API_BASE = window.location.origin;
 
-const STATUS_LABELS = { running: '실행 중', completed: '완료', failed: '실패', retrying: '재시도 중' };
+const STATUS_LABELS = { running: '실행 중', completed: '완료', failed: '실패', retrying: '재시도 중', cancelled: '취소됨' };
 function getStatusLabel(status) { return STATUS_LABELS[(status || '').toLowerCase()] || status || ''; }
 function formatNodeStats(exec) {
     return (exec.nodeCount > 0 ? `<span class="node-stat">전체: <strong>${exec.nodeCount}</strong></span>` : '') +
@@ -149,6 +149,17 @@ function showNodeEditor(nodeId) {
         }).join('');
     }
 
+    // autoApprove 토글
+    const autoApprove = node.data('autoApprove') || false;
+    fields.innerHTML += `
+        <div class="node-field" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                <input type="checkbox" id="nodeAutoApprove" ${autoApprove ? 'checked' : ''}>
+                <span>🔓 자동 승인 (autoApprove)</span>
+            </label>
+            <p style="font-size:10px;color:var(--text-3);margin:2px 0 0 22px;">체크 시 이 노드는 승인 없이 즉시 실행됩니다</p>
+        </div>`;
+
     document.getElementById('nodeEditorPanel').style.display = 'block';
 }
 
@@ -198,9 +209,13 @@ function applyNodeArgs() {
     });
 
     node.data('args', newArgs);
-    // 라벨 갱신: args 일부 표시 (FIX 4: truncate)
+    const autoApproveChk = document.getElementById('nodeAutoApprove');
+    const autoApprove = autoApproveChk ? autoApproveChk.checked : false;
+    node.data('autoApprove', autoApprove);
+    // 라벨 갱신
     const argsStr = Object.entries(newArgs).slice(0, 2).map(([k, v]) => `${k}=${truncateArgVal(v)}`).join('\n');
-    node.data('label', `${layerName}.${fnName}${argsStr ? '\n' + argsStr : ''}`);
+    const autoApproveBadge = autoApprove ? ' 🔓' : '';
+    node.data('label', `${layerName}.${fnName}${argsStr ? '\n' + argsStr : ''}${autoApproveBadge}`);
 
     markModified();
     closeNodeEditor();
@@ -474,7 +489,9 @@ function treeToElements(executionTree) {
         const nodeId = node.id || `node_${nodeCounter++}`;
         const argsStr = node.args ? Object.entries(node.args).slice(0, 2).map(([k, v]) => `${k}=${truncateArgVal(v)}`).join('\n') : '';
         const label = `${node.layerName}.${node.function}${argsStr ? '\n' + argsStr : ''}`;
-        elements.push({ data: { id: nodeId, label, layerName: node.layerName, function: node.function, args: node.args || {} } });
+        const autoApproveBadge = node.autoApprove ? ' 🔓' : '';
+        const labelFull = `${node.layerName}.${node.function}${argsStr ? '\n' + argsStr : ''}${autoApproveBadge}`;
+        elements.push({ data: { id: nodeId, label: labelFull, layerName: node.layerName, function: node.function, args: node.args || {}, parallel: node.parallel || false, autoApprove: node.autoApprove || false } });
         if (parentId) elements.push({ data: { id: `${parentId}_${nodeId}`, source: parentId, target: nodeId } });
         (node.children || []).forEach(child => walk(child, nodeId));
     }
@@ -509,7 +526,8 @@ function elementsToTree() {
             function: n.data('function'),
             args: n.data('args') || {},
             children: (childrenMap.get(nodeId) || []).map(buildNode),
-            parallel: false
+            parallel: n.data('parallel') || false,
+            autoApprove: n.data('autoApprove') || false
         };
     }
 
@@ -745,7 +763,11 @@ async function executeEditedTree() {
 
 // 레이어 목록 로드
 function toggleCard(id) {
-    document.getElementById(id)?.classList.toggle('collapsed');
+    const card = document.getElementById(id);
+    if (!card) return;
+    card.classList.toggle('collapsed');
+    // 스케줄러 카드 열릴 때 자동 로드
+    if (id === 'schedulerCard' && !card.classList.contains('collapsed')) loadJobs();
 }
 
 let allLayersData = [];
@@ -958,8 +980,9 @@ function updateProgressUI(progress) {
     }
 
     // 진행 중일 때만 표시
-    if (progress.phase === 'COMPLETED' || progress.phase === 'FAILED') {
-        // 완료/실패 시 라이브 타이머 중단 후 잠시 표시 후 숨김 (FIX 5)
+    const isDone = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(progress.phase);
+    if (isDone) {
+        // 완료/실패/취소 시 라이브 타이머 중단 후 잠시 표시 후 숨김 (FIX 5)
         stopProgressLiveTimer();
         progressTime.textContent = (progress.elapsedMs / 1000).toFixed(1) + '초';
         setTimeout(() => {
@@ -984,9 +1007,23 @@ function updateProgressUI(progress) {
         'TREE_VALIDATION': 'linear-gradient(90deg, #4facfe 0%, #00f2fe 100%)',
         'TREE_EXECUTION':  'linear-gradient(90deg, #43e97b 0%, #38f9d7 100%)',
         'COMPLETED':       'linear-gradient(90deg, #30cfd0 0%, #330867 100%)',
-        'FAILED':          'linear-gradient(90deg, #eb3349 0%, #f45c43 100%)'
+        'FAILED':          'linear-gradient(90deg, #eb3349 0%, #f45c43 100%)',
+        'CANCELLED':       'linear-gradient(90deg, #f7971e 0%, #ffd200 100%)'
     };
     progressBar.style.background = colors[progress.phase] || colors['STARTING'];
+}
+
+// 실행 취소
+async function cancelExecution() {
+    const btn = document.getElementById('cancelBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '...'; }
+    try {
+        await fetch('/execution/current/cancel', { method: 'POST' });
+    } catch (e) {
+        console.error('취소 요청 실패:', e);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '✕'; }
+    }
 }
 
 // WebSocket 연결 (실시간 업데이트)
@@ -998,6 +1035,7 @@ function connectWebSocket() {
     
     wsConnection.onopen = () => {
         console.log('WebSocket 연결됨');
+        loadExecutions();
     };
     
     wsConnection.onmessage = (event) => {
@@ -1944,6 +1982,161 @@ async function submitClarification(id, inputId) {
 })();
 
 setInterval(loadLLMStatus, 10000); // 10초마다 갱신
+
+// ─────────────────────────────────────────────
+// 스케줄러
+// ─────────────────────────────────────────────
+
+let editingJobId = null;
+
+async function loadJobs() {
+    const res = await fetch('/jobs');
+    const jobs = await res.json();
+    renderJobs(jobs);
+}
+
+function renderJobs(jobs) {
+    const el = document.getElementById('jobsList');
+    if (!el) return;
+    if (!jobs.length) {
+        el.innerHTML = '<p style="color:var(--text-3);font-size:13px;padding:8px 0">등록된 작업 없음</p>';
+        return;
+    }
+    el.innerHTML = jobs.map(job => {
+        const nextRun = job.nextRunAt ? new Date(job.nextRunAt).toLocaleString('ko-KR') : '—';
+        const lastRun = job.lastRunAt ? new Date(job.lastRunAt).toLocaleString('ko-KR') : '—';
+        const statusColor = { SUCCESS: '#16a34a', FAILED: '#dc2626', CANCELLED: '#d97706' }[job.lastStatus] || 'var(--text-3)';
+        const enabledBadge = job.enabled
+            ? '<span style="color:#16a34a;font-size:11px">● 활성</span>'
+            : '<span style="color:var(--text-3);font-size:11px">○ 비활성</span>';
+        return `
+        <div class="job-item">
+            <div class="job-header">
+                <span class="job-name">${escapeHtml(job.name)}</span>
+                ${enabledBadge}
+                ${job.lastStatus ? `<span style="font-size:11px;color:${statusColor}">${job.lastStatus}</span>` : ''}
+            </div>
+            <div class="job-query">${escapeHtml(job.query.slice(0, 60))}${job.query.length > 60 ? '…' : ''}</div>
+            <div class="job-meta">
+                <span>다음: ${nextRun}</span>
+                <span>최근: ${lastRun}</span>
+            </div>
+            <div class="job-actions">
+                <button onclick="triggerJob('${job.id}')" class="btn-ghost" style="font-size:11px;padding:2px 8px">▶ 지금 실행</button>
+                <button onclick="openJobForm('${job.id}')" class="btn-ghost" style="font-size:11px;padding:2px 8px">✎ 수정</button>
+                <button onclick="toggleJob('${job.id}', ${!job.enabled})" class="btn-ghost" style="font-size:11px;padding:2px 8px">${job.enabled ? '⏸ 비활성' : '▶ 활성'}</button>
+                <button onclick="deleteJob('${job.id}')" class="btn-danger" style="font-size:11px;padding:2px 8px">🗑</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function triggerJob(id) {
+    await fetch(`/jobs/${id}/trigger`, { method: 'POST' });
+    alert('실행 요청 전송됨');
+}
+
+async function toggleJob(id, enabled) {
+    await fetch(`/jobs/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled })
+    });
+    loadJobs();
+}
+
+async function deleteJob(id) {
+    if (!confirm('삭제하시겠습니까?')) return;
+    await fetch(`/jobs/${id}`, { method: 'DELETE' });
+    loadJobs();
+}
+
+function openJobForm(id = null) {
+    editingJobId = id;
+    const modal = document.getElementById('jobFormModal');
+    const title = document.getElementById('jobFormTitle');
+    modal.style.display = 'flex';
+
+    if (id) {
+        title.textContent = '📅 작업 수정';
+        fetch(`/jobs/${id}`).then(r => r.json()).then(job => {
+            document.getElementById('jobFormId').value = job.id;
+            document.getElementById('jobFormName').value = job.name;
+            document.getElementById('jobFormQuery').value = job.query;
+            document.getElementById('jobFormTreeId').value = job.treeId || '';
+            document.getElementById('jobFormEnabled').checked = job.enabled;
+            const sel = document.getElementById('jobFormScheduleType');
+            sel.value = job.schedule.type;
+            onScheduleTypeChange(job.schedule);
+        });
+    } else {
+        title.textContent = '📅 새 작업';
+        document.getElementById('jobFormId').value = '';
+        document.getElementById('jobFormName').value = '';
+        document.getElementById('jobFormQuery').value = '';
+        document.getElementById('jobFormTreeId').value = '';
+        document.getElementById('jobFormEnabled').checked = true;
+        document.getElementById('jobFormScheduleType').value = 'interval';
+        onScheduleTypeChange();
+    }
+}
+
+function closeJobForm() {
+    document.getElementById('jobFormModal').style.display = 'none';
+    editingJobId = null;
+}
+
+function onScheduleTypeChange(existing = null) {
+    const type = document.getElementById('jobFormScheduleType').value;
+    const fields = document.getElementById('jobFormScheduleFields');
+    if (type === 'interval') {
+        const mins = existing ? Math.round(existing.intervalMs / 60000) : 60;
+        fields.innerHTML = `<label style="font-size:12px;color:var(--text-2)">반복 간격 (분)
+            <input id="jobFormInterval" type="number" min="1" value="${mins}" class="layer-search-input" style="margin-top:4px;width:100%"></label>`;
+    } else if (type === 'daily') {
+        const h = existing ? existing.hour : 2;
+        const m = existing ? (existing.minute || 0) : 0;
+        fields.innerHTML = `<label style="font-size:12px;color:var(--text-2)">실행 시각 (시:분)
+            <div style="display:flex;gap:8px;margin-top:4px">
+                <input id="jobFormHour" type="number" min="0" max="23" value="${h}" class="layer-search-input" style="width:60px" placeholder="시">
+                <input id="jobFormMinute" type="number" min="0" max="59" value="${m}" class="layer-search-input" style="width:60px" placeholder="분">
+            </div></label>`;
+    } else {
+        const ts = existing ? existing.at : (Date.now() + 3600000);
+        const local = new Date(ts).toISOString().slice(0, 16);
+        fields.innerHTML = `<label style="font-size:12px;color:var(--text-2)">실행 시각
+            <input id="jobFormAt" type="datetime-local" value="${local}" class="layer-search-input" style="margin-top:4px;width:100%"></label>`;
+    }
+}
+
+async function saveJob() {
+    const type = document.getElementById('jobFormScheduleType').value;
+    let schedule;
+    if (type === 'interval') {
+        schedule = { type: 'interval', intervalMs: parseInt(document.getElementById('jobFormInterval').value) * 60000 };
+    } else if (type === 'daily') {
+        schedule = { type: 'daily', hour: parseInt(document.getElementById('jobFormHour').value), minute: parseInt(document.getElementById('jobFormMinute').value) };
+    } else {
+        schedule = { type: 'once', at: new Date(document.getElementById('jobFormAt').value).getTime() };
+    }
+
+    const body = {
+        name: document.getElementById('jobFormName').value,
+        query: document.getElementById('jobFormQuery').value,
+        treeId: document.getElementById('jobFormTreeId').value || null,
+        schedule,
+        enabled: document.getElementById('jobFormEnabled').checked
+    };
+
+    const id = editingJobId;
+    if (id) {
+        await fetch(`/jobs/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else {
+        await fetch('/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    }
+    closeJobForm();
+    loadJobs();
+}
 
 // 다른 곳 클릭 시 열려 있는 스와이프 닫기
 document.addEventListener('click', function(e) {

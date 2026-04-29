@@ -185,6 +185,11 @@ $alreadyDoneNote
 4. 그 외 단일 작업이 필요한가? → rootNodes 1개
 5. 목표를 수행하기에 사용자 의도가 불명확하거나 필수 정보가 부족한가? → ask 선택. 실행 가능한 정보가 있으면 ask 금지.
 
+autoApprove 규칙:
+- 각 노드에 "autoApprove" 필드를 설정할 수 있습니다 (기본값: false).
+- autoApprove: false → 해당 동작 전 사용자 승인 대기 (되돌리기 어려운 작업, 파일 수정, 시스템 변경 등)
+- autoApprove: true  → 즉시 실행 (조회·읽기·분석 등 되돌릴 수 있는 작업)
+
 $JSON_RULES
 
 반드시 다음 JSON 형식 중 하나로만 응답하세요. 다른 텍스트는 포함하지 마세요.

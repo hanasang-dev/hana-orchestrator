@@ -21,6 +21,13 @@ import com.hana.orchestrator.presentation.model.metrics.OrchestratorMetrics
 import com.hana.orchestrator.presentation.model.execution.ExecutionPhase
 import com.hana.orchestrator.presentation.mapper.ExecutionTreeMapper
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.isActive
 
 /**
  * 오케스트레이터 Facade
@@ -38,6 +45,12 @@ class Orchestrator(
     private val statePublisher: ExecutionStatePublisher
     private val treeExecutor: TreeExecutor
     private val reactiveExecutor: ReactiveExecutor
+
+    /** ReAct 루프를 독립 코루틴으로 실행하는 스코프 (취소 지원) */
+    private val orchestratorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** 현재 실행 중인 ReAct Job (취소용) */
+    @Volatile private var currentJob: Deferred<com.hana.orchestrator.domain.entity.ExecutionResult>? = null
 
     /** 파일 쓰기 승인 게이트 (WebSocket 컨트롤러에서 구독, ApprovalController에서 응답) */
     val approvalGate = ApprovalGate()
@@ -95,6 +108,18 @@ class Orchestrator(
         return historyManager.deleteHistory(id)
     }
 
+    /**
+     * 현재 실행 중인 ReAct 루프를 취소한다.
+     * @return 취소 요청이 전달되면 true, 실행 중이 아니면 false
+     */
+    fun cancelCurrentExecution(): Boolean {
+        val job = currentJob ?: return false
+        return if (job.isActive) {
+            job.cancel()
+            true
+        } else false
+    }
+
     fun getCurrentExecution(): ExecutionHistory? {
         return historyManager.getCurrentExecution()
     }
@@ -142,8 +167,13 @@ class Orchestrator(
             if (kotlinFileIndex.isNotEmpty()) put("kotlinFileIndex", kotlinFileIndex)
         }
 
+        val deferred = orchestratorScope.async {
+            reactiveExecutor.execute(query, executionId, startTime, projectContext)
+        }
+        currentJob = deferred
+
         return try {
-            val result = reactiveExecutor.execute(query, executionId, startTime, projectContext)
+            val result = deferred.await()
             val elapsed = System.currentTimeMillis() - startTime
             // 안전망: ReactiveExecutor가 어떤 경로로 종료되든 항상 최종 상태를 emit
             if (result.error != null && result.result.isEmpty()) {
@@ -167,6 +197,18 @@ class Orchestrator(
             statePublisher.emitExecutionUpdate(history)
             historyManager.clearCurrentExecution()
             result
+        } catch (e: CancellationException) {
+            // deferred가 취소됐지만 현재 코루틴(Ktor 핸들러)은 살아있는 경우 → 사용자 취소
+            deferred.cancel()
+            val elapsed = System.currentTimeMillis() - startTime
+            statePublisher.emitProgress(executionId, ExecutionPhase.CANCELLED, "🚫 취소됨", 100, elapsed)
+            val cancelledHistory = ExecutionHistory.createCancelled(
+                executionId, query, startTime, logs = historyManager.getCurrentLogs()
+            )
+            historyManager.addHistory(cancelledHistory)
+            statePublisher.emitExecutionUpdate(cancelledHistory)
+            historyManager.clearCurrentExecution()
+            ExecutionResult(result = "", error = "사용자가 실행을 취소했습니다")
         } catch (e: Exception) {
             val elapsed = System.currentTimeMillis() - startTime
             statePublisher.emitProgress(executionId, ExecutionPhase.FAILED, "❌ 실패", 100, elapsed)
@@ -177,6 +219,8 @@ class Orchestrator(
             statePublisher.emitExecutionUpdate(failedHistory)
             historyManager.clearCurrentExecution()
             ExecutionResult(result = "", error = e.message)
+        } finally {
+            currentJob = null
         }
     }
 

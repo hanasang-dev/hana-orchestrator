@@ -48,5 +48,6 @@ enum class ExecutionPhase {
     TREE_VALIDATION,    // 트리 검증
     TREE_EXECUTION,     // 트리 실행
     COMPLETED,          // 완료
-    FAILED              // 실패
+    FAILED,             // 실패
+    CANCELLED           // 사용자 취소
 }

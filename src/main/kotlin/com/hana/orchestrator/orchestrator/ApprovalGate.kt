@@ -1,6 +1,7 @@
 package com.hana.orchestrator.orchestrator
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -35,9 +36,18 @@ class ApprovalGate {
 
     /**
      * 승인 요청: 사용자가 approve/reject 할 때까지 suspend됨
-     * @return true=승인, false=거절
+     * autoApprove=true면 즉시 true 반환 (야간 자율실행 등)
+     * 타임아웃(기본 5분) 초과 시 자동 거절
+     * @return true=승인, false=거절(또는 타임아웃)
      */
-    suspend fun requestApproval(path: String, oldContent: String?, newContent: String): Boolean {
+    suspend fun requestApproval(
+        path: String,
+        oldContent: String?,
+        newContent: String,
+        autoApprove: Boolean = false,
+        timeoutMs: Long = 5 * 60 * 1000L
+    ): Boolean {
+        if (autoApprove) return true
         val id = UUID.randomUUID().toString().take(8)
         val diff = buildDiff(oldContent ?: "", newContent, path)
         val request = ApprovalRequest(id = id, path = path, diff = diff)
@@ -45,7 +55,7 @@ class ApprovalGate {
         pending[id] = PendingApproval(request, deferred)
         _requests.emit(request)
         return try {
-            deferred.await()
+            withTimeoutOrNull(timeoutMs) { deferred.await() } ?: false
         } finally {
             pending.remove(id)
         }

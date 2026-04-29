@@ -83,6 +83,27 @@ data class ExecutionHistory(
         }
 
         /**
+         * 사용자 취소 이력 생성
+         */
+        fun createCancelled(
+            id: String,
+            query: String,
+            startTime: Long,
+            endTime: Long = System.currentTimeMillis(),
+            logs: MutableList<String> = mutableListOf()
+        ): ExecutionHistory {
+            return ExecutionHistory(
+                id = id,
+                query = query,
+                result = ExecutionResult(result = "", error = "사용자가 실행을 취소했습니다"),
+                startTime = startTime,
+                endTime = endTime,
+                status = ExecutionStatus.CANCELLED,
+                logs = logs
+            )
+        }
+
+        /**
          * 재시도 예정 이력 생성 (UI에 "재시도 중" 표시용, FAILED로 끝난 게 아님)
          */
         fun createRetrying(
@@ -144,6 +165,12 @@ data class ExecutionHistory(
      */
     val isRetrying: Boolean
         get() = status == ExecutionStatus.RETRYING
+
+    /**
+     * 취소 여부 확인
+     */
+    val isCancelled: Boolean
+        get() = status == ExecutionStatus.CANCELLED
     
     /**
      * 성공적으로 완료되었는지 확인 (실패가 아닌 완료)
@@ -157,5 +184,7 @@ enum class ExecutionStatus {
     COMPLETED,
     FAILED,
     /** 재시도 예정(아직 최종 실패 아님), UI는 계속 대기 */
-    RETRYING
+    RETRYING,
+    /** 사용자가 명시적으로 취소 */
+    CANCELLED
 }

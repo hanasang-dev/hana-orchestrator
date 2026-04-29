@@ -25,6 +25,7 @@
             <span id="progressMessage">준비 중...</span>
             <div id="progressBarTrack"><div id="progressBar"></div></div>
             <span id="progressTime">0.0초</span>
+            <button id="cancelBtn" onclick="cancelExecution()" title="실행 취소">✕</button>
         </div>
 
         <div class="header-spacer"></div>
@@ -115,6 +116,56 @@
                 </h2>
                 <div class="card-content">
                     <div id="executionsList"></div>
+                </div>
+            </div>
+
+            <!-- 스케줄러 -->
+            <div class="card card-collapsible collapsed" id="schedulerCard">
+                <h2 onclick="toggleCard('schedulerCard')">
+                    📅 스케줄러
+                    <button class="refresh-btn" onclick="event.stopPropagation(); loadJobs()">새로고침</button>
+                    <button class="refresh-btn" onclick="event.stopPropagation(); openJobForm()">＋ 추가</button>
+                    <span class="collapse-arrow">▸</span>
+                </h2>
+                <div class="card-content">
+                    <div id="jobsList"></div>
+                </div>
+            </div>
+
+            <!-- 잡 생성/수정 폼 -->
+            <div id="jobFormModal" class="approval-modal-backdrop" style="display:none">
+                <div class="approval-modal-box">
+                    <div class="modal-header">
+                        <span class="modal-title" id="jobFormTitle">📅 새 작업</span>
+                        <button onclick="closeJobForm()" class="modal-close">✕</button>
+                    </div>
+                    <div style="padding:16px;display:flex;flex-direction:column;gap:10px;">
+                        <input type="hidden" id="jobFormId">
+                        <label style="font-size:12px;color:var(--text-2)">이름
+                            <input id="jobFormName" class="layer-search-input" style="margin-top:4px;width:100%" placeholder="야간 자가개선">
+                        </label>
+                        <label style="font-size:12px;color:var(--text-2)">쿼리 (자연어 요청)
+                            <textarea id="jobFormQuery" class="layer-search-input" rows="3" style="margin-top:4px;width:100%;resize:vertical" placeholder="개선 가능한 레이어를 찾아서 개선해줘"></textarea>
+                        </label>
+                        <label style="font-size:12px;color:var(--text-2)">저장된 트리 이름 (선택 — 비우면 ReAct)
+                            <input id="jobFormTreeId" class="layer-search-input" style="margin-top:4px;width:100%" placeholder="my-tree">
+                        </label>
+                        <label style="font-size:12px;color:var(--text-2)">스케줄 타입
+                            <select id="jobFormScheduleType" class="layer-search-input" style="margin-top:4px;width:100%" onchange="onScheduleTypeChange()">
+                                <option value="interval">반복 (N분마다)</option>
+                                <option value="daily">매일 특정 시각</option>
+                                <option value="once">1회 (특정 시각)</option>
+                            </select>
+                        </label>
+                        <div id="jobFormScheduleFields"></div>
+                        <label style="font-size:12px;color:var(--text-2);display:flex;align-items:center;gap:6px;">
+                            <input type="checkbox" id="jobFormEnabled" checked> 활성화
+                        </label>
+                    </div>
+                    <div class="modal-footer">
+                        <button onclick="closeJobForm()" class="btn-ghost">취소</button>
+                        <button onclick="saveJob()" class="btn-success">💾 저장</button>
+                    </div>
                 </div>
             </div>
 

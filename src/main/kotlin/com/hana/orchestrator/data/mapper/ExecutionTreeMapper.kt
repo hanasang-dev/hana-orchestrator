@@ -29,10 +29,11 @@ object ExecutionTreeMapper {
             layerName = response.layerName,
             function = response.function,
             args = (response.args as? JsonObject)?.mapValues { jsonElementToAny(it.value) } ?: emptyMap(),
-            children = response.children.mapIndexed { index, child -> 
+            children = response.children.mapIndexed { index, child ->
                 toExecutionNode(child, "$currentPath[$index]")
             },
             parallel = response.parallel,
+            autoApprove = response.autoApprove,
             id = nodeId
         )
     }

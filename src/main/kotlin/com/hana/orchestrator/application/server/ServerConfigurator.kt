@@ -5,6 +5,10 @@ import com.hana.orchestrator.orchestrator.Orchestrator
 import com.hana.orchestrator.presentation.controller.ApprovalController
 import com.hana.orchestrator.presentation.controller.ClarificationController
 import com.hana.orchestrator.presentation.controller.ChatController
+import com.hana.orchestrator.presentation.controller.ExecutionController
+import com.hana.orchestrator.presentation.controller.SchedulerController
+import com.hana.orchestrator.orchestrator.JobRepository
+import com.hana.orchestrator.orchestrator.JobScheduler
 import com.hana.orchestrator.presentation.controller.HealthController
 import com.hana.orchestrator.presentation.controller.LayerController
 import com.hana.orchestrator.presentation.controller.MetricsController
@@ -36,7 +40,9 @@ class ServerConfigurator(
     private val orchestrator: Orchestrator,
     private val serviceInfo: ServiceInfo,
     private val lifecycleManager: ApplicationLifecycleManager,
-    private val applicationScope: CoroutineScope
+    private val applicationScope: CoroutineScope,
+    private val jobRepository: JobRepository,
+    private val jobScheduler: JobScheduler
 ) {
     
     fun createServer(): EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration> {
@@ -76,6 +82,8 @@ class ServerConfigurator(
                 LayerController(orchestrator, lifecycleManager).configureRoutes(this)
                 ExecutionWebSocketController(orchestrator).configureRoutes(this)
                 TreeController(orchestrator, TreeRepository()).configureRoutes(this)
+                ExecutionController(orchestrator).configureRoutes(this)
+                SchedulerController(jobRepository, jobScheduler).configureRoutes(this)
                 ApprovalController(orchestrator.approvalGate).configureRoutes(this)
                 ClarificationController(orchestrator.clarificationGate).configureRoutes(this)
                 MetricsController(orchestrator).configureRoutes(this)

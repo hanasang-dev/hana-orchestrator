@@ -194,6 +194,7 @@ class ExecutionTreeValidator(
             args = fixedArgs,
             children = fixedChildren,
             parallel = node.parallel,
+            autoApprove = node.autoApprove,
             id = node.id
         )
     }

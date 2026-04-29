@@ -26,7 +26,7 @@ class OrchestratorLogger(
      */
     fun info(message: String) {
         logger.info(message)
-        historyManager?.addLogToCurrent(message)
+        // INFO는 개발자 로그 — UI 노출 없음. 사용자용 로그는 logAndEmit() 사용
     }
     
     /**
@@ -57,8 +57,7 @@ class OrchestratorLogger(
      * 성능 측정 로그 (PERF)
      */
     fun perf(message: String) {
-        logger.debug(message) // 성능 로그는 DEBUG 레벨
-        historyManager?.addLogToCurrent(message)
+        logger.debug(message) // 성능 로그는 DEBUG 레벨 — UI 노출 없음
     }
 }
 

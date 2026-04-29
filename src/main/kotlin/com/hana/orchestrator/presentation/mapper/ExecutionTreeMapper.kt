@@ -40,6 +40,7 @@ object ExecutionTreeMapper {
             args = args.mapValues { it.value.toString() },
             children = children.map { it.toResponse() },
             parallel = parallel,
+            autoApprove = autoApprove,
             id = id
         )
     }
@@ -54,6 +55,7 @@ object ExecutionTreeMapper {
             args = args,
             children = children.map { it.toDomain() },
             parallel = parallel,
+            autoApprove = autoApprove,
             id = id
         )
     }

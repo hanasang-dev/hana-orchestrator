@@ -160,16 +160,18 @@ class LayerManager(
     
     /**
      * 레이어에서 함수 실행
+     * autoApprove=true면 해당 호출에서 승인 게이트를 건너뜀 (레이어가 __autoApprove 키로 읽음)
      */
-    suspend fun executeOnLayer(layerName: String, function: String, args: Map<String, Any> = emptyMap()): String {
+    suspend fun executeOnLayer(layerName: String, function: String, args: Map<String, Any> = emptyMap(), autoApprove: Boolean = false): String {
         ensureInitialized()
         val targetLayer = findLayerByName(layerName)
-        
+
         if (targetLayer == null) {
             val availableLayers = layerNameMap.keys.toList()
             return "Layer '$layerName' not found. Available layers: $availableLayers"
         }
-        
-        return targetLayer.execute(function, args)
+
+        val enrichedArgs = if (autoApprove) args + ("__autoApprove" to true) else args
+        return targetLayer.execute(function, enrichedArgs)
     }
 }

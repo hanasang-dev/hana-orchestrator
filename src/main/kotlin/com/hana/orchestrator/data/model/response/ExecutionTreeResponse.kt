@@ -36,5 +36,6 @@ data class ExecutionNodeResponse(
     /** LLM이 문자열·배열·숫자 등 혼합으로 보낼 수 있으므로 JsonElement로 받고, 매퍼에서 Map<String, Any>로 변환 */
     val args: JsonElement = buildJsonObject { },
     val children: List<ExecutionNodeResponse> = emptyList(),
-    val parallel: Boolean = false
+    val parallel: Boolean = false,
+    val autoApprove: Boolean = false
 )
