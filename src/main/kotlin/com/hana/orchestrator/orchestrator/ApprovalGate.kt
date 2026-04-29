@@ -52,7 +52,7 @@ class ApprovalGate {
     ): Boolean {
         if (autoApprove) return true
         val id = UUID.randomUUID().toString().take(8)
-        val diff = buildDiff(oldContent ?: "", newContent, path)
+        val diff = if (kind == ApprovalKind.FILE) buildDiff(oldContent ?: "", newContent, path) else newContent
         val request = ApprovalRequest(id = id, path = path, diff = diff, kind = kind)
         val deferred = CompletableDeferred<Boolean>()
         pending[id] = PendingApproval(request, deferred)

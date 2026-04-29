@@ -1879,17 +1879,21 @@ function showApprovalPanel(data) {
     document.querySelector('#approvalModal .approval-confirm-text').textContent = meta.confirm;
 
     const diffEl = document.getElementById('approvalDiff');
-    diffEl.innerHTML = (data.diff || '').split('\n').map(line => {
-        if (line.startsWith('+')) {
-            return `<span style="background:#d3f9d8; display:block; padding:0 2px;">${escapeHtml(line)}</span>`;
-        } else if (line.startsWith('-')) {
-            return `<span style="background:#ffe3e3; display:block; padding:0 2px;">${escapeHtml(line)}</span>`;
-        } else if (line.startsWith('@')) {
-            return `<span style="color:#868e96; display:block; padding:0 2px;">${escapeHtml(line)}</span>`;
-        } else {
-            return `<span style="display:block; padding:0 2px;">${escapeHtml(line)}</span>`;
-        }
-    }).join('');
+    if (data.kind === 'FILE') {
+        diffEl.innerHTML = (data.diff || '').split('\n').map(line => {
+            if (line.startsWith('+')) {
+                return `<span style="background:#d3f9d8; display:block; padding:0 2px;">${escapeHtml(line)}</span>`;
+            } else if (line.startsWith('-')) {
+                return `<span style="background:#ffe3e3; display:block; padding:0 2px;">${escapeHtml(line)}</span>`;
+            } else if (line.startsWith('@')) {
+                return `<span style="color:#868e96; display:block; padding:0 2px;">${escapeHtml(line)}</span>`;
+            } else {
+                return `<span style="display:block; padding:0 2px;">${escapeHtml(line)}</span>`;
+            }
+        }).join('');
+    } else {
+        diffEl.innerHTML = `<span style="display:block; padding:4px 2px; color:#495057;">${escapeHtml(data.diff || '')}</span>`;
+    }
 
     document.getElementById('approvalModal').style.display = 'flex';
 }

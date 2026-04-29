@@ -51,7 +51,7 @@ class ServerConfigurator(
                 json(Json {
                     ignoreUnknownKeys = true
                     isLenient = true
-                    encodeDefaults = false
+                    encodeDefaults = true
                     prettyPrint = false
                     // 한글 등 비ASCII 문자를 그대로 출력하도록 설정
                 })
