@@ -3,6 +3,18 @@ package com.hana.orchestrator.layer
 import kotlinx.serialization.Serializable
 
 /**
+ * 승인 게이트에 표시할 미리보기 정보
+ * @param path 작업 대상 경로 또는 "layerName.function" 형태의 식별자
+ * @param oldContent 변경 전 내용 (diff 표시용, null이면 diff 없이 newContent만 표시)
+ * @param newContent 변경 후 내용 또는 실행할 args 텍스트
+ */
+data class ApprovalPreview(
+    val path: String,
+    val oldContent: String?,
+    val newContent: String
+)
+
+/**
  * 오케스트레이션 시스템의 모든 레이어가 구현해야 할 기본 인터페이스
  *
  * 온톨로지적 성격:
@@ -31,6 +43,15 @@ interface CommonLayerInterface {
      * @return 작업 결과 (문자열)
      */
     suspend fun execute(function: String, args: Map<String, Any> = emptyMap()): String
+
+    /**
+     * 승인 게이트에 표시할 미리보기 정보 반환
+     * 기본 구현: args를 텍스트로 포맷. 파일 쓰기 등 diff가 필요한 레이어는 override.
+     */
+    suspend fun approvalPreview(function: String, args: Map<String, Any>): ApprovalPreview {
+        val preview = args.entries.joinToString("\n") { "${it.key}: ${it.value}" }
+        return ApprovalPreview(path = function, oldContent = null, newContent = preview)
+    }
 }
 
 /**

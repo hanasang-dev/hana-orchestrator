@@ -1,6 +1,5 @@
 package com.hana.orchestrator.layer
 
-import com.hana.orchestrator.orchestrator.ApprovalGate
 import java.io.File
 import java.nio.file.FileSystems
 import java.nio.file.Files
@@ -22,7 +21,7 @@ import java.nio.file.Paths
  * 예: 파일 읽기 → 분석 → 수정 → 다시 읽기 → 검증
  */
 @Layer
-class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLayerInterface {
+class FileSystemLayer : CommonLayerInterface {
     
     private val backupDir = File(".hana/backups")
     
@@ -102,9 +101,7 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
      * @return 실행 결과 메시지
      */
     @LayerFunction
-    suspend fun writeFile(path: String, content: String): String = writeFile(path, content, false)
-
-    suspend fun writeFile(path: String, content: String, autoApprove: Boolean): String {
+    suspend fun writeFile(path: String, content: String): String {
         return try {
             // 1. 경로 자동 해석: 파일이 현재 경로에 없으면 기존 파일 위치 탐색
             val resolvedPath = resolveWritePath(path)
@@ -115,15 +112,6 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
             }
 
             val file = File(resolvedPath)
-
-            // 3. 승인 게이트: 파일 쓰기 전 사용자 확인 대기 (autoApprove=true면 즉시 통과)
-            if (approvalGate != null) {
-                val oldContent = if (file.exists()) file.readText() else null
-                val approved = approvalGate.requestApproval(path, oldContent, content, autoApprove)
-                if (!approved) {
-                    return "REJECTED: 사용자가 파일 수정을 거절했습니다: $path"
-                }
-            }
 
             // 3. 기존 파일이 있을 때만 백업 (신규 파일이면 백업 생략)
             val backupPath = if (file.exists()) backupFile(resolvedPath) else "신규 파일"
@@ -136,6 +124,20 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
         } catch (e: Exception) {
             "ERROR: 파일 쓰기 실패: ${e.message}"
         }
+    }
+
+    /**
+     * writeFile은 파일 diff를 미리보기로 제공
+     */
+    override suspend fun approvalPreview(function: String, args: Map<String, Any>): ApprovalPreview {
+        if (function == "writeFile") {
+            val path = args["path"] as? String ?: ""
+            val content = args["content"] as? String ?: ""
+            val resolvedPath = resolveWritePath(path)
+            val oldContent = try { File(resolvedPath).takeIf { it.exists() }?.readText() } catch (e: Exception) { null }
+            return ApprovalPreview(path = resolvedPath, oldContent = oldContent, newContent = content)
+        }
+        return super.approvalPreview(function, args)
     }
     
     /**
@@ -384,8 +386,7 @@ class FileSystemLayer(private val approvalGate: ApprovalGate? = null) : CommonLa
             "writeFile" -> {
                 val path = (args["path"] as? String) ?: ""
                 val content = (args["content"] as? String) ?: ""
-                val autoApprove = args["__autoApprove"] as? Boolean ?: false
-                writeFile(path, content, autoApprove)
+                writeFile(path, content)
             }
             "listDirectory" -> {
                 val path = (args["path"] as? String) ?: "."

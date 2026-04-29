@@ -1,6 +1,5 @@
 package com.hana.orchestrator.layer
 
-import com.hana.orchestrator.orchestrator.ApprovalGate
 import io.ktor.client.*
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -64,8 +63,8 @@ object LayerFactory {
     /**
      * 파일 시스템 레이어 생성
      */
-    fun createFileSystemLayer(approvalGate: ApprovalGate? = null): FileSystemLayer {
-        return FileSystemLayer(approvalGate)
+    fun createFileSystemLayer(): FileSystemLayer {
+        return FileSystemLayer()
     }
 
     /**
@@ -107,14 +106,13 @@ object LayerFactory {
      * 모든 기본 레이어 생성
      */
     fun createDefaultLayers(
-        modelSelectionStrategy: com.hana.orchestrator.llm.strategy.ModelSelectionStrategy? = null,
-        approvalGate: ApprovalGate? = null
+        modelSelectionStrategy: com.hana.orchestrator.llm.strategy.ModelSelectionStrategy? = null
     ): List<CommonLayerInterface> {
         val layers = mutableListOf<CommonLayerInterface>(
             createEchoLayer(),
             createTextTransformerLayer(),
             createTextValidatorLayer(),
-            createFileSystemLayer(approvalGate),
+            createFileSystemLayer(),
             createBuildLayer(),
             createGitLayer(),
             createDevelopLayer(),

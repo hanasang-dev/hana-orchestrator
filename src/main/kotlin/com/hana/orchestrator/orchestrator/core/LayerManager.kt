@@ -48,7 +48,7 @@ class LayerManager(
             logger.debug("  - 레이어 인스턴스 생성됨: LayerInfoLayer")
             
             // 기본 레이어 등록
-            val defaultLayers = LayerFactory.createDefaultLayers(modelSelectionStrategy, approvalGate)
+            val defaultLayers = LayerFactory.createDefaultLayers(modelSelectionStrategy)
             logger.info("🔧 [LayerManager] 기본 레이어 초기화: ${defaultLayers.size}개 레이어 등록")
             defaultLayers.forEach { layer ->
                 logger.debug("  - 레이어 인스턴스 생성됨: ${layer::class.simpleName}")
@@ -160,18 +160,25 @@ class LayerManager(
     
     /**
      * 레이어에서 함수 실행
-     * autoApprove=true면 해당 호출에서 승인 게이트를 건너뜀 (레이어가 __autoApprove 키로 읽음)
+     * autoApprove=false이고 게이트가 설정된 경우, 실행 전 사용자 승인을 요청.
+     * 레이어가 approvalPreview()를 override하면 해당 정보를 게이트에 표시.
      */
     suspend fun executeOnLayer(layerName: String, function: String, args: Map<String, Any> = emptyMap(), autoApprove: Boolean = false): String {
         ensureInitialized()
         val targetLayer = findLayerByName(layerName)
+            ?: return "Layer '$layerName' not found. Available layers: ${layerNameMap.keys.toList()}"
 
-        if (targetLayer == null) {
-            val availableLayers = layerNameMap.keys.toList()
-            return "Layer '$layerName' not found. Available layers: $availableLayers"
+        if (!autoApprove && approvalGate != null) {
+            val preview = targetLayer.approvalPreview(function, args)
+            val approved = approvalGate.requestApproval(
+                path = preview.path,
+                oldContent = preview.oldContent,
+                newContent = preview.newContent,
+                autoApprove = false
+            )
+            if (!approved) return "REJECTED: 사용자가 실행을 거절했습니다: $layerName.$function"
         }
 
-        val enrichedArgs = if (autoApprove) args + ("__autoApprove" to true) else args
-        return targetLayer.execute(function, enrichedArgs)
+        return targetLayer.execute(function, args)
     }
 }
