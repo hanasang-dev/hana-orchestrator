@@ -17,7 +17,8 @@ data class ExecutionHistory(
     val endTime: Long? = null,
     val status: ExecutionStatus,
     val logs: MutableList<String> = mutableListOf(),
-    val executionTree: ExecutionTreeResponse? = null   // ReAct 미니트리 체인 (직렬화 가능)
+    val executionTree: ExecutionTreeResponse? = null,  // ReAct 미니트리 체인 (직렬화 가능)
+    val nodeResults: List<NodeResultSummary> = emptyList()  // 노드별 실행 결과 요약 (레이어 단위 메트릭용)
 ) {
     companion object {
         /**
@@ -56,7 +57,8 @@ data class ExecutionHistory(
                 endTime = endTime,
                 status = status,
                 logs = logs,
-                executionTree = executionTree
+                executionTree = executionTree,
+                nodeResults = result.nodeResults
             )
         }
         

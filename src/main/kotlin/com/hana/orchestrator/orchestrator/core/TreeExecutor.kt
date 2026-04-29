@@ -93,11 +93,24 @@ class TreeExecutor(
             "실행 완료 (결과 없음)"
         }
         
+        // 노드 결과 요약 수집 (레이어 단위 메트릭 persist용)
+        val nodeResultSummaries = context.getAllResults().values
+            .filter { it.status != NodeStatus.RUNNING }
+            .map { r ->
+                com.hana.orchestrator.domain.entity.NodeResultSummary(
+                    layerName = r.node.layerName,
+                    function = r.node.function,
+                    status = r.status.name,
+                    error = r.error
+                )
+            }
+
         // 최종 결과 계산
         val finalResult = ExecutionResult(
             result = resultText,
             executionTree = tree,
-            context = context
+            context = context,
+            nodeResults = nodeResultSummaries
         )
         
         // 실행 중인 경우 현재 실행 상태 업데이트 (노드 레벨 정보 포함)

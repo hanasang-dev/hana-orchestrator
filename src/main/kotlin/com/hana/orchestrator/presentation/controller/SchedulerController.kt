@@ -18,7 +18,8 @@ data class CreateJobRequest(
     val query: String,
     val treeId: String? = null,
     val schedule: JobSchedule,
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val includeMetrics: Boolean = false
 )
 
 @Serializable
@@ -27,7 +28,8 @@ data class UpdateJobRequest(
     val query: String? = null,
     val treeId: String? = null,
     val schedule: JobSchedule? = null,
-    val enabled: Boolean? = null
+    val enabled: Boolean? = null,
+    val includeMetrics: Boolean? = null
 )
 
 /**
@@ -61,7 +63,8 @@ class SchedulerController(
                 query = req.query,
                 treeId = req.treeId,
                 schedule = req.schedule,
-                enabled = req.enabled
+                enabled = req.enabled,
+                includeMetrics = req.includeMetrics
             )
             val scheduled = jobScheduler.scheduleNext(job)
             jobRepository.save(scheduled)
@@ -78,7 +81,8 @@ class SchedulerController(
                 query = req.query ?: existing.query,
                 treeId = if (req.treeId != null) req.treeId else existing.treeId,
                 schedule = req.schedule ?: existing.schedule,
-                enabled = req.enabled ?: existing.enabled
+                enabled = req.enabled ?: existing.enabled,
+                includeMetrics = req.includeMetrics ?: existing.includeMetrics
             )
             val rescheduled = if (req.schedule != null) jobScheduler.scheduleNext(updated) else updated
             jobRepository.save(rescheduled)

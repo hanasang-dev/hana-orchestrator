@@ -13,7 +13,18 @@ data class OrchestratorMetrics(
     val autoNextStepRate: Double,
     val errorStepRate: Double,
     val avgDurationMs: Long,
-    val recentExecutions: List<ExecutionSummary>
+    val recentExecutions: List<ExecutionSummary>,
+    val layerStats: Map<String, LayerStats> = emptyMap()  // "layerName.function" → stats
+)
+
+@Serializable
+data class LayerStats(
+    val totalCalls: Int,
+    val successCount: Int,
+    val failedCount: Int,
+    val skippedCount: Int,
+    val successRate: Double,
+    val recentErrors: List<String> = emptyList()  // 최근 에러 메시지 (최대 3개)
 )
 
 @Serializable

@@ -19,7 +19,8 @@ data class ScheduledJob(
     val enabled: Boolean = true,
     val lastRunAt: Long? = null,
     val nextRunAt: Long? = null,
-    val lastStatus: String? = null   // "SUCCESS" | "FAILED" | "CANCELLED"
+    val lastStatus: String? = null,  // "SUCCESS" | "FAILED" | "CANCELLED"
+    val includeMetrics: Boolean = false  // true면 실행 직전 메트릭 스냅샷을 쿼리에 주입
 )
 
 @Serializable

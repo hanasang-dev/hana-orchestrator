@@ -3,6 +3,7 @@ package com.hana.orchestrator.orchestrator
 import com.hana.orchestrator.domain.entity.ExecutionHistory
 import com.hana.orchestrator.domain.entity.ExecutionStatus
 import com.hana.orchestrator.presentation.model.metrics.ExecutionSummary
+import com.hana.orchestrator.presentation.model.metrics.LayerStats
 import com.hana.orchestrator.presentation.model.metrics.OrchestratorMetrics
 
 class MetricsService {
@@ -38,6 +39,28 @@ class MetricsService {
             )
         }
 
+        // 레이어별 집계 ("layerName.function" 키)
+        val layerStats = finished
+            .flatMap { it.nodeResults }
+            .groupBy { "${it.layerName}.${it.function}" }
+            .mapValues { (_, nodes) ->
+                val success = nodes.count { it.status == "SUCCESS" }
+                val failed = nodes.count { it.status == "FAILED" }
+                val skipped = nodes.count { it.status == "SKIPPED" }
+                val total = nodes.size
+                val recentErrors = nodes.filter { it.status == "FAILED" }
+                    .takeLast(3)
+                    .mapNotNull { it.error }
+                LayerStats(
+                    totalCalls = total,
+                    successCount = success,
+                    failedCount = failed,
+                    skippedCount = skipped,
+                    successRate = if (total > 0) success.toDouble() / total else 0.0,
+                    recentErrors = recentErrors
+                )
+            }
+
         return OrchestratorMetrics(
             totalExecutions = finished.size,
             completedCount = completed.size,
@@ -48,7 +71,8 @@ class MetricsService {
             autoNextStepRate = autoNextStepRate,
             errorStepRate = errorStepRate,
             avgDurationMs = avgDurationMs,
-            recentExecutions = recentExecutions
+            recentExecutions = recentExecutions,
+            layerStats = layerStats
         )
     }
 }

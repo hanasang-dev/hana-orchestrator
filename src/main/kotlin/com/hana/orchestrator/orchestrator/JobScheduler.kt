@@ -84,7 +84,35 @@ class JobScheduler(
     }
 
     private suspend fun runReActJob(job: ScheduledJob) {
-        orchestrator.executeOrchestration(ChatDto(message = job.query))
+        val finalQuery = if (job.includeMetrics) {
+            val metrics = orchestrator.computeMetrics()
+            buildMetricsContext(metrics) + "\n\n" + job.query
+        } else {
+            job.query
+        }
+        orchestrator.executeOrchestration(ChatDto(message = finalQuery))
+    }
+
+    private fun buildMetricsContext(metrics: com.hana.orchestrator.presentation.model.metrics.OrchestratorMetrics): String {
+        val sb = StringBuilder()
+        sb.appendLine("[시스템 메트릭 스냅샷]")
+        sb.appendLine("- 총 실행: ${metrics.totalExecutions}건 (성공 ${metrics.completedCount} / 실패 ${metrics.failedCount})")
+        sb.appendLine("- 성공률: ${"%.1f".format(metrics.completionRate * 100)}%")
+        sb.appendLine("- 평균 ReAct 스텝: ${"%.1f".format(metrics.avgStepsToFinish)}")
+        sb.appendLine("- 에러 스텝 비율: ${"%.1f".format(metrics.errorStepRate * 100)}%")
+        sb.appendLine("- 최대 스텝 초과: ${metrics.maxStepsHitCount}건")
+        sb.appendLine("- 평균 실행 시간: ${metrics.avgDurationMs}ms")
+        if (metrics.layerStats.isNotEmpty()) {
+            sb.appendLine("- 레이어별 실패율 (실패 있는 것만):")
+            metrics.layerStats
+                .filter { it.value.failedCount > 0 }
+                .entries.sortedByDescending { it.value.failedCount }
+                .forEach { (key, stat) ->
+                    sb.appendLine("  · $key: ${stat.failedCount}/${stat.totalCalls} 실패" +
+                        if (stat.recentErrors.isNotEmpty()) " — 최근 에러: ${stat.recentErrors.last().take(80)}" else "")
+                }
+        }
+        return sb.toString().trimEnd()
     }
 
     private suspend fun runTreeJob(job: ScheduledJob) {
