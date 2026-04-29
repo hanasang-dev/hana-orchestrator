@@ -3,6 +3,15 @@ package com.hana.orchestrator.layer
 import kotlinx.serialization.Serializable
 
 /**
+ * 승인 게이트의 작업 유형
+ */
+@Serializable
+enum class ApprovalKind {
+    FILE,       // 파일 읽기·쓰기 작업
+    EXECUTION   // 셸·빌드 등 일반 실행 작업
+}
+
+/**
  * 승인 게이트에 표시할 미리보기 정보
  * @param path 작업 대상 경로 또는 "layerName.function" 형태의 식별자
  * @param oldContent 변경 전 내용 (diff 표시용, null이면 diff 없이 newContent만 표시)
@@ -11,7 +20,8 @@ import kotlinx.serialization.Serializable
 data class ApprovalPreview(
     val path: String,
     val oldContent: String?,
-    val newContent: String
+    val newContent: String,
+    val kind: ApprovalKind = ApprovalKind.EXECUTION
 )
 
 /**

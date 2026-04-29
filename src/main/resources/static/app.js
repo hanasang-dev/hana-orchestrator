@@ -1865,9 +1865,18 @@ async function loadLLMStatus() {
 // ─────────────────────────────────────────────
 let currentApprovalId = null;
 
+const APPROVAL_KIND_META = {
+    FILE:      { title: '📝 파일 수정 승인',  confirm: '변경사항을 실제로 적용하시겠습니까?' },
+    EXECUTION: { title: '⚡ 실행 승인',        confirm: '이 작업을 실행하시겠습니까?' },
+};
+
 function showApprovalPanel(data) {
     currentApprovalId = data.id;
     document.getElementById('approvalPath').textContent = data.path;
+
+    const meta = APPROVAL_KIND_META[data.kind] || APPROVAL_KIND_META.EXECUTION;
+    document.getElementById('approvalTitle').textContent = meta.title;
+    document.querySelector('#approvalModal .approval-confirm-text').textContent = meta.confirm;
 
     const diffEl = document.getElementById('approvalDiff');
     diffEl.innerHTML = (data.diff || '').split('\n').map(line => {

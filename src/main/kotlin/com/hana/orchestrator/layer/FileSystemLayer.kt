@@ -135,7 +135,7 @@ class FileSystemLayer : CommonLayerInterface {
             val content = args["content"] as? String ?: ""
             val resolvedPath = resolveWritePath(path)
             val oldContent = try { File(resolvedPath).takeIf { it.exists() }?.readText() } catch (e: Exception) { null }
-            return ApprovalPreview(path = resolvedPath, oldContent = oldContent, newContent = content)
+            return ApprovalPreview(path = resolvedPath, oldContent = oldContent, newContent = content, kind = ApprovalKind.FILE)
         }
         return super.approvalPreview(function, args)
     }

@@ -176,7 +176,8 @@ class LayerManager(
                 path = displayPath,
                 oldContent = preview.oldContent,
                 newContent = preview.newContent,
-                autoApprove = false
+                autoApprove = false,
+                kind = preview.kind
             )
             if (!approved) return "REJECTED: 사용자가 실행을 거절했습니다: $layerName.$function"
         }

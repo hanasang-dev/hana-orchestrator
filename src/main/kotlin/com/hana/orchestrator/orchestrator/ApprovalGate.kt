@@ -1,5 +1,6 @@
 package com.hana.orchestrator.orchestrator
 
+import com.hana.orchestrator.layer.ApprovalKind
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -21,7 +22,8 @@ class ApprovalGate {
         val type: String = "APPROVAL_REQUIRED",
         val id: String,
         val path: String,
-        val diff: String
+        val diff: String,
+        val kind: ApprovalKind = ApprovalKind.EXECUTION
     )
 
     private data class PendingApproval(
@@ -45,12 +47,13 @@ class ApprovalGate {
         oldContent: String?,
         newContent: String,
         autoApprove: Boolean = false,
-        timeoutMs: Long = 5 * 60 * 1000L
+        timeoutMs: Long = 5 * 60 * 1000L,
+        kind: ApprovalKind = ApprovalKind.EXECUTION
     ): Boolean {
         if (autoApprove) return true
         val id = UUID.randomUUID().toString().take(8)
         val diff = buildDiff(oldContent ?: "", newContent, path)
-        val request = ApprovalRequest(id = id, path = path, diff = diff)
+        val request = ApprovalRequest(id = id, path = path, diff = diff, kind = kind)
         val deferred = CompletableDeferred<Boolean>()
         pending[id] = PendingApproval(request, deferred)
         _requests.emit(request)
