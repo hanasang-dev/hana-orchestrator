@@ -97,6 +97,13 @@ object LayerFactory {
     }
 
     /**
+     * 셸 명령 실행 레이어 생성
+     */
+    fun createShellLayer(projectRoot: java.io.File? = null): ShellLayer {
+        return if (projectRoot != null) ShellLayer(projectRoot) else ShellLayer()
+    }
+
+    /**
      * 모든 기본 레이어 생성
      */
     fun createDefaultLayers(
@@ -111,6 +118,7 @@ object LayerFactory {
             createBuildLayer(),
             createGitLayer(),
             createDevelopLayer(),
+            createShellLayer(),
             createCoreEvaluationLayer()
         )
         
