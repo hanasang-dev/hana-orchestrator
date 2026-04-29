@@ -170,8 +170,10 @@ class LayerManager(
 
         if (!autoApprove && approvalGate != null) {
             val preview = targetLayer.approvalPreview(function, args)
+            // 레이어가 별도 path를 지정하지 않은 경우(함수명만 반환) layerName.function 형태로 보완
+            val displayPath = if (preview.path == function) "$layerName.$function" else preview.path
             val approved = approvalGate.requestApproval(
-                path = preview.path,
+                path = displayPath,
                 oldContent = preview.oldContent,
                 newContent = preview.newContent,
                 autoApprove = false
