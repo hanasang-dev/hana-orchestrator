@@ -8,10 +8,13 @@ import java.net.URLClassLoader
  * 레이어 생성 / 개선 / ReAct 전략 진화 담당 레이어
  *
  * ━━━ [A] 레이어 개선 — "레이어 개선해줘", "XXX 개선해줘", "코드 품질 개선" ━━━
- * ⭐ develop.improveLayer() 하나로 완료 — 추가 준비 작업 없이 즉시 실행
- *    - layerName 비워두면 자동 선택. 레이어 목록 조회·파일 읽기 불필요.
- *    - 내부에서 읽기 → LLM 분석 → 저장 → 컴파일 → 리로드 자동 처리
- *    - 반환값: "SUCCESS: XxxLayer 개선·컴파일 완료" 또는 "ERROR: ..."
+ * ⭐ 2단계 워크플로우 (원본 보호):
+ * 1. develop.improveLayer()              → LLM 개선안 생성 → .hana/candidates/ 에 후보 저장 (원본 미수정)
+ * 2. develop.applyLayerCandidate(name)   → 후보 검토 후 원본 교체 + 컴파일 + 리로드
+ *    또는 develop.rejectLayerCandidate(name) → 후보 파기
+ *
+ *    layerName 비워두면 자동 선택. 레이어 목록 조회·파일 읽기 불필요.
+ *    improveLayer() 반환값에 diff와 다음 호출할 함수명이 포함됨.
  *
  * ━━━ [B] 새 레이어 생성 — "XXX 레이어 만들어줘" ━━━
  * ⭐ develop.createLayer(name, description, functions) → build.compileKotlin → develop.hotLoad(name)
@@ -66,6 +69,9 @@ class DevelopLayer(
 
     private val candidatesSourceDir: File
         get() = File(projectRoot, "src/main/kotlin/com/hana/orchestrator/orchestrator/core/candidates")
+
+    private val candidateLayerDir: File
+        get() = File(projectRoot, ".hana/candidates")
 
     /**
      * "retry-v1" → "RetryV1Strategy", "fast-react" → "FastReactStrategy"
@@ -201,40 +207,37 @@ class DevelopLayer(
     }
 
     /**
-     * ⭐ "레이어 개선" 요청이 오면 이 함수를 즉시 호출하세요. 인자 없이 호출 가능.
+     * ⭐ "레이어 개선" 요청 → 즉시 호출. 인자 없이 사용 가능.
      *
-     * layerName 비워두면 레이어 자동 선택 — 목록 조회·파일 읽기 불필요.
-     * 내부에서 읽기 → LLM 분석 → 저장 → 컴파일 → 리로드 전부 처리.
-     * 이 함수 하나로 전체 개선 파이프라인 완료.
+     * LLM으로 개선안 생성 → .hana/candidates/ 에 후보 저장 (원본 미수정) → diff 반환.
+     * 이후 applyLayerCandidate(layerName) 로 적용하거나 rejectLayerCandidate(layerName) 로 파기.
      *
      * @param layerName 개선할 레이어 이름 (예: "Echo", "Git"). 비워두면 자동 선택.
      * @param goal 개선 목표. 기본값: "코드 품질 및 가독성 개선"
-     * @return "SUCCESS: XxxLayer 개선·컴파일 완료" 또는 "ERROR: ..."
+     * @return diff 및 후보 경로, 또는 "ERROR: ..."
      */
     @LayerFunction
     suspend fun improveLayer(layerName: String = "", goal: String = "코드 품질 및 가독성 개선"): String {
         val factory = llmClientFactoryRef ?: return "ERROR: LLMClientFactory가 주입되지 않았습니다."
 
         val resolvedName = if (layerName.isBlank()) {
-            // 생성자 파라미터 없는 레이어만 자동 선택 (생성자 파라미터 있으면 핫리로드 불가 → 안전)
             val candidates = layerDir.listFiles { f ->
                 f.name.endsWith("Layer.kt") &&
                 f.name != "DevelopLayer.kt" &&
-                !f.name.endsWith(".bak")
+                !f.name.endsWith(".bak") &&
+                !f.name.endsWith(".candidate.kt")
             }?.filter { f ->
                 val classLine = f.readLines().firstOrNull { it.trimStart().startsWith("class ") } ?: ""
-                // "class XxxLayer :" 또는 "class XxxLayer(" 에서 () 안이 비어있는지 확인
                 val parenContent = classLine.substringAfter("(", "").substringBefore(")", "").trim()
-                parenContent.isEmpty() // no-arg constructor만 선택
+                parenContent.isEmpty()
             }?.map { it.nameWithoutExtension.removeSuffix("Layer") } ?: emptyList()
-            if (candidates.isEmpty()) return "ERROR: 개선할 레이어 파일이 없습니다 (no-arg constructor 레이어 없음)."
+            if (candidates.isEmpty()) return "ERROR: 개선할 레이어가 없습니다 (no-arg constructor 레이어 없음)."
             candidates.random()
-        } else layerName
+        } else layerName.removeSuffix("Layer")
 
         val source = readLayerExample(resolvedName)
         if (source.startsWith("ERROR")) return source
 
-        // 원본 클래스 선언 추출 (생성자 보존 검증용)
         val originalClassDecl = source.lines().firstOrNull { it.trimStart().startsWith("class ") }?.trim() ?: ""
 
         val prompt = """아래 Kotlin 소스 코드를 분석하고 개선된 버전을 작성하세요.
@@ -262,17 +265,57 @@ $source
         }
 
         val extracted = extractKotlinCode(improved)
-        val writeResult = developLayer(resolvedName, extracted)
-        if (!writeResult.startsWith("SUCCESS")) return writeResult
-
-        // 컴파일 (내부 실행 — 별도 레이어 호출 불필요)
-        val compileResult = runGradleTask("compileKotlin")
-        if (compileResult.contains("BUILD FAILED") || compileResult.startsWith("ERROR")) {
-            return "ERROR: 개선 코드 컴파일 실패 — 백업(.bak)에서 복구 필요\n$compileResult"
+        if (!extracted.trimStart().startsWith("package ")) {
+            return "ERROR: LLM 출력이 유효한 Kotlin 소스가 아닙니다. 'package' 선언으로 시작해야 합니다."
         }
 
-        // 리로드 시도 (no-arg constructor 없는 레이어는 컴파일만으로 완료)
-        val reloadRaw = try { reloadLayer(resolvedName) } catch (e: Exception) { e.message ?: "skip" }
+        // 후보 파일 저장 (원본 미수정)
+        candidateLayerDir.mkdirs()
+        val candidateFile = File(candidateLayerDir, "${resolvedName}Layer.candidate.kt")
+        candidateFile.writeText(extracted)
+
+        val originalFile = File(layerDir, "${resolvedName}Layer.kt")
+        val diff = computeDiff(originalFile, candidateFile)
+
+        return buildString {
+            appendLine("CANDIDATE: ${resolvedName}Layer 개선 후보 저장 완료 (원본 미수정)")
+            appendLine("후보: ${candidateFile.relativeTo(projectRoot).path}")
+            appendLine()
+            appendLine("=== DIFF (원본 → 후보) ===")
+            appendLine(diff.take(1500))
+            if (diff.length > 1500) appendLine("...[diff 잘림, 전체 ${diff.length}자]")
+            appendLine()
+            append("적용: applyLayerCandidate(layerName=\"$resolvedName\") | 거부: rejectLayerCandidate(layerName=\"$resolvedName\")")
+        }
+    }
+
+    /**
+     * 후보 레이어를 원본에 적용 (원본 교체 + 컴파일 + 리로드).
+     * improveLayer() 로 생성된 후보를 검토 후 호출.
+     *
+     * @param layerName 적용할 레이어 이름 (improveLayer와 동일)
+     * @return "SUCCESS: ..." 또는 "ERROR: ..."
+     */
+    @LayerFunction
+    suspend fun applyLayerCandidate(layerName: String): String {
+        val normalized = layerName.removeSuffix("Layer")
+        val candidateFile = File(candidateLayerDir, "${normalized}Layer.candidate.kt")
+        if (!candidateFile.exists()) {
+            return "ERROR: 후보 없음: ${candidateFile.relativeTo(projectRoot).path}. improveLayer()를 먼저 실행하세요."
+        }
+
+        val content = candidateFile.readText()
+        val writeResult = developLayer(normalized, content)
+        if (!writeResult.startsWith("SUCCESS")) return writeResult
+
+        candidateFile.delete()
+
+        val compileResult = runGradleTask("compileKotlin")
+        if (compileResult.contains("BUILD FAILED") || compileResult.startsWith("ERROR")) {
+            return "ERROR: 컴파일 실패 — 백업(.bak)에서 복구 가능\n$compileResult"
+        }
+
+        val reloadRaw = try { reloadLayer(normalized) } catch (e: Exception) { e.message ?: "skip" }
         val reloadSummary = when {
             reloadRaw.startsWith("SUCCESS") -> reloadRaw
             reloadRaw.contains("no-arg") || reloadRaw.contains("기본 생성자") ->
@@ -280,7 +323,58 @@ $source
             else -> "컴파일 완료 (리로드: $reloadRaw)"
         }
 
-        return "SUCCESS: ${resolvedName}Layer 개선·컴파일 완료. $reloadSummary ← 목표 달성. finish 선택."
+        return "SUCCESS: ${normalized}Layer 후보 적용·컴파일 완료. $reloadSummary ← 목표 달성. finish 선택."
+    }
+
+    /**
+     * 후보 레이어 파기 (원본 유지, 후보 파일 삭제).
+     *
+     * @param layerName 파기할 레이어 이름
+     * @return "SUCCESS: ..." 또는 "ERROR: ..."
+     */
+    @LayerFunction
+    suspend fun rejectLayerCandidate(layerName: String): String {
+        val normalized = layerName.removeSuffix("Layer")
+        val candidateFile = File(candidateLayerDir, "${normalized}Layer.candidate.kt")
+        return if (candidateFile.exists()) {
+            candidateFile.delete()
+            "SUCCESS: ${normalized}Layer 후보 파기 완료. 원본 유지됨."
+        } else {
+            "ERROR: 후보 없음: ${candidateFile.relativeTo(projectRoot).path}"
+        }
+    }
+
+    /**
+     * 현재 대기 중인 레이어 후보 목록 조회.
+     *
+     * @return 후보 목록 또는 "대기 중인 후보 없음"
+     */
+    @LayerFunction
+    suspend fun listLayerCandidates(): String {
+        val files = candidateLayerDir.listFiles { f -> f.name.endsWith(".candidate.kt") }
+            ?: return "대기 중인 후보 없음"
+        if (files.isEmpty()) return "대기 중인 후보 없음"
+        return files.sortedBy { it.name }.joinToString("\n") { f ->
+            val name = f.nameWithoutExtension.removeSuffix(".candidate")
+            "  - $name  (${f.length()} bytes, ${java.text.SimpleDateFormat("MM-dd HH:mm").format(java.util.Date(f.lastModified()))})"
+        }
+    }
+
+    /** unified diff 생성 (diff 커맨드 사용, 실패 시 간단 비교로 폴백) */
+    private fun computeDiff(original: File, candidate: File): String {
+        return try {
+            val process = ProcessBuilder("diff", "-u", original.absolutePath, candidate.absolutePath)
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor()
+            output.ifBlank { "(변경 없음)" }
+        } catch (_: Exception) {
+            // diff 명령어 없는 환경 폴백
+            val origLines = original.readLines().size
+            val candLines = candidate.readLines().size
+            "(diff 생성 불가 — 원본 ${origLines}줄 → 후보 ${candLines}줄)"
+        }
     }
 
     /**
@@ -814,7 +908,16 @@ $functionBlocks
                 val goal = args["goal"] as? String ?: "코드 품질 및 가독성 개선"
                 improveLayer(layerName, goal)
             }
-            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad, reloadLayer, readDefaultStrategy, createStrategyCandidate, hotLoadStrategy, promoteCandidateToCore, rollbackStrategy, promote, listCandidates, developLayer, improveLayer"
+            "applyLayerCandidate" -> {
+                val layerName = args["layerName"] as? String ?: return "ERROR: layerName 필수"
+                applyLayerCandidate(layerName)
+            }
+            "rejectLayerCandidate" -> {
+                val layerName = args["layerName"] as? String ?: return "ERROR: layerName 필수"
+                rejectLayerCandidate(layerName)
+            }
+            "listLayerCandidates" -> listLayerCandidates()
+            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad, reloadLayer, readDefaultStrategy, createStrategyCandidate, hotLoadStrategy, promoteCandidateToCore, rollbackStrategy, promote, listCandidates, developLayer, improveLayer, applyLayerCandidate, rejectLayerCandidate, listLayerCandidates"
         }
     }
 }
