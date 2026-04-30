@@ -11,6 +11,7 @@ import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.llm.config.LLMConfig
 import com.hana.orchestrator.layer.LayerDescription
 import com.hana.orchestrator.orchestrator.createOrchestratorLogger
+import ai.koog.prompt.params.LLMParams
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
@@ -128,6 +129,10 @@ class OllamaLLMClient(
 
                 val promptDsl = Prompt.build(id = "llm-call") {
                     user(enhancedPrompt)
+                }.let { p ->
+                    if (schema != null) {
+                        p.withUpdatedParams { this.schema = LLMParams.Schema.JSON.Basic("react-decision", schema) }
+                    } else p
                 }
 
                 val responses = withTimeout(timeoutMs) {

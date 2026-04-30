@@ -41,12 +41,12 @@ class EchoLayer : CommonLayerInterface {
     override suspend fun execute(function: String, args: Map<String, Any>): String {
         return when (function) {
             "echo" -> {
-                val message = (args["message"] as? String) ?: (args["query"] as? String) ?: ""
+                val message = args.getOrDefault("message", "") as? String ?: args.getOrDefault("query", "") as? String ?: ""
                 echo(message)
             }
             "repeat" -> {
-                val message = (args["message"] as? String) ?: (args["query"] as? String) ?: ""
-                val times = (args["times"] as? String)?.toIntOrNull() ?: (args["times"] as? Int) ?: 1
+                val message = args.getOrDefault("message", "") as? String ?: args.getOrDefault("query", "") as? String ?: ""
+                val times = (args.getOrDefault("times", 1) as? String)?.toIntOrNull() ?: (args.getOrDefault("times", 1) as? Int) ?: 1
                 repeat(message, times)
             }
             else -> "Unknown function: $function. Available: echo, repeat"

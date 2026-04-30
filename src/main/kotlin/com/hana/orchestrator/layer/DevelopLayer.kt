@@ -285,7 +285,8 @@ $source
             appendLine(diff.take(1500))
             if (diff.length > 1500) appendLine("...[diff 잘림, 전체 ${diff.length}자]")
             appendLine()
-            append("적용: applyLayerCandidate(layerName=\"$resolvedName\") | 거부: rejectLayerCandidate(layerName=\"$resolvedName\")")
+            appendLine("적용: applyLayerCandidate(layerName=\"$resolvedName\") | 거부: rejectLayerCandidate(layerName=\"$resolvedName\")")
+            append("[필수후속] develop.applyLayerCandidate(layerName=\"$resolvedName\") 또는 develop.rejectLayerCandidate(layerName=\"$resolvedName\") 반드시 호출")
         }
     }
 
