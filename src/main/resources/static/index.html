@@ -152,6 +152,7 @@
                         </label>
                         <label style="font-size:12px;color:var(--text-2)">스케줄 타입
                             <select id="jobFormScheduleType" class="layer-search-input" style="margin-top:4px;width:100%" onchange="onScheduleTypeChange()">
+                                <option value="loop">🔁 루프 (완료 후 즉시 재실행)</option>
                                 <option value="interval">반복 (N분마다)</option>
                                 <option value="daily">매일 특정 시각</option>
                                 <option value="once">1회 (특정 시각)</option>
@@ -160,6 +161,12 @@
                         <div id="jobFormScheduleFields"></div>
                         <label style="font-size:12px;color:var(--text-2);display:flex;align-items:center;gap:6px;">
                             <input type="checkbox" id="jobFormEnabled" checked> 활성화
+                        </label>
+                        <label style="font-size:12px;color:var(--text-2);display:flex;align-items:center;gap:6px;">
+                            <input type="checkbox" id="jobFormIncludeMetrics"> 실행 전 메트릭 주입 (자가평가용)
+                        </label>
+                        <label style="font-size:12px;color:var(--text-2);display:flex;align-items:center;gap:6px;">
+                            <input type="checkbox" id="jobFormAutoApprove"> 🔓 승인 게이트 자동 통과 (무인 실행용)
                         </label>
                     </div>
                     <div class="modal-footer">

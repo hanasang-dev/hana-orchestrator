@@ -2016,17 +2016,24 @@ function renderJobs(jobs) {
         return;
     }
     el.innerHTML = jobs.map(job => {
-        const nextRun = job.nextRunAt ? new Date(job.nextRunAt).toLocaleString('ko-KR') : '—';
+        const schedType = job.schedule?.type || '?';
+        const schedLabel = { loop: '🔁 루프', interval: '⏱ 반복', daily: '📆 매일', once: '1회' }[schedType] || schedType;
+        const nextRun = job.nextRunAt ? new Date(job.nextRunAt).toLocaleString('ko-KR') : (schedType === 'loop' ? '실행 중' : '—');
         const lastRun = job.lastRunAt ? new Date(job.lastRunAt).toLocaleString('ko-KR') : '—';
         const statusColor = { SUCCESS: '#16a34a', FAILED: '#dc2626', CANCELLED: '#d97706' }[job.lastStatus] || 'var(--text-3)';
         const enabledBadge = job.enabled
             ? '<span style="color:#16a34a;font-size:11px">● 활성</span>'
             : '<span style="color:var(--text-3);font-size:11px">○ 비활성</span>';
+        const metricsBadge = job.includeMetrics ? '<span style="font-size:11px;color:#7c3aed">📊 메트릭</span>' : '';
+        const autoApproveBadge = job.autoApprove ? '<span style="font-size:11px;color:#b45309">🔓 자동승인</span>' : '';
         return `
         <div class="job-item">
             <div class="job-header">
                 <span class="job-name">${escapeHtml(job.name)}</span>
                 ${enabledBadge}
+                <span style="font-size:11px;color:var(--text-3)">${schedLabel}</span>
+                ${metricsBadge}
+                ${autoApproveBadge}
                 ${job.lastStatus ? `<span style="font-size:11px;color:${statusColor}">${job.lastStatus}</span>` : ''}
             </div>
             <div class="job-query">${escapeHtml(job.query.slice(0, 60))}${job.query.length > 60 ? '…' : ''}</div>
@@ -2078,6 +2085,8 @@ function openJobForm(id = null) {
             document.getElementById('jobFormQuery').value = job.query;
             document.getElementById('jobFormTreeId').value = job.treeId || '';
             document.getElementById('jobFormEnabled').checked = job.enabled;
+            document.getElementById('jobFormIncludeMetrics').checked = job.includeMetrics || false;
+            document.getElementById('jobFormAutoApprove').checked = job.autoApprove || false;
             const sel = document.getElementById('jobFormScheduleType');
             sel.value = job.schedule.type;
             onScheduleTypeChange(job.schedule);
@@ -2089,7 +2098,9 @@ function openJobForm(id = null) {
         document.getElementById('jobFormQuery').value = '';
         document.getElementById('jobFormTreeId').value = '';
         document.getElementById('jobFormEnabled').checked = true;
-        document.getElementById('jobFormScheduleType').value = 'interval';
+        document.getElementById('jobFormIncludeMetrics').checked = false;
+        document.getElementById('jobFormAutoApprove').checked = false;
+        document.getElementById('jobFormScheduleType').value = 'loop';
         onScheduleTypeChange();
     }
 }
@@ -2102,7 +2113,12 @@ function closeJobForm() {
 function onScheduleTypeChange(existing = null) {
     const type = document.getElementById('jobFormScheduleType').value;
     const fields = document.getElementById('jobFormScheduleFields');
-    if (type === 'interval') {
+    if (type === 'loop') {
+        const secs = existing ? Math.round(existing.delayMs / 1000) : 0;
+        fields.innerHTML = `<label style="font-size:12px;color:var(--text-2)">완료 후 대기 시간 (초, 0=즉시)
+            <input id="jobFormLoopDelay" type="number" min="0" value="${secs}" class="layer-search-input" style="margin-top:4px;width:100%"></label>
+            <div style="font-size:11px;color:var(--text-3);margin-top:4px">⚠️ 비활성화하거나 삭제해야 멈춥니다</div>`;
+    } else if (type === 'interval') {
         const mins = existing ? Math.round(existing.intervalMs / 60000) : 60;
         fields.innerHTML = `<label style="font-size:12px;color:var(--text-2)">반복 간격 (분)
             <input id="jobFormInterval" type="number" min="1" value="${mins}" class="layer-search-input" style="margin-top:4px;width:100%"></label>`;
@@ -2125,7 +2141,9 @@ function onScheduleTypeChange(existing = null) {
 async function saveJob() {
     const type = document.getElementById('jobFormScheduleType').value;
     let schedule;
-    if (type === 'interval') {
+    if (type === 'loop') {
+        schedule = { type: 'loop', delayMs: parseInt(document.getElementById('jobFormLoopDelay').value) * 1000 };
+    } else if (type === 'interval') {
         schedule = { type: 'interval', intervalMs: parseInt(document.getElementById('jobFormInterval').value) * 60000 };
     } else if (type === 'daily') {
         schedule = { type: 'daily', hour: parseInt(document.getElementById('jobFormHour').value), minute: parseInt(document.getElementById('jobFormMinute').value) };
@@ -2138,7 +2156,9 @@ async function saveJob() {
         query: document.getElementById('jobFormQuery').value,
         treeId: document.getElementById('jobFormTreeId').value || null,
         schedule,
-        enabled: document.getElementById('jobFormEnabled').checked
+        enabled: document.getElementById('jobFormEnabled').checked,
+        includeMetrics: document.getElementById('jobFormIncludeMetrics').checked,
+        autoApprove: document.getElementById('jobFormAutoApprove').checked
     };
 
     const id = editingJobId;

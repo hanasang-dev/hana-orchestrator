@@ -4,7 +4,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
+import org.slf4j.LoggerFactory
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -14,6 +16,10 @@ import java.util.concurrent.ConcurrentHashMap
  * SRP: 질문 요청 생성, 대기, 답변 처리만 담당
  */
 class ClarificationGate {
+    private val logger = LoggerFactory.getLogger(ClarificationGate::class.java)
+
+    /** 스케줄러 무인 실행 중 — "ask" 액션을 빈 문자열로 자동 통과 (루프 진행 유지) */
+    @Volatile var scheduledBypass: Boolean = false
 
     @Serializable
     data class ClarificationRequest(
@@ -34,16 +40,25 @@ class ClarificationGate {
 
     /**
      * 질문 요청: 사용자가 answer()를 호출할 때까지 suspend됨
+     * scheduledBypass=true면 즉시 빈 문자열 반환 (무인 실행 — LLM이 스스로 진행)
+     * timeoutMs 초과 시 빈 문자열 반환 (기본 5분)
      * @return 사용자 답변 문자열
      */
-    suspend fun requestClarification(question: String): String {
+    suspend fun requestClarification(question: String, timeoutMs: Long = 5 * 60 * 1000L): String {
+        if (scheduledBypass) {
+            logger.info("📅 [ClarificationGate] bypass — 질문 자동 통과: $question")
+            return ""
+        }
         val id = UUID.randomUUID().toString().take(8)
         val request = ClarificationRequest(id = id, question = question)
         val deferred = CompletableDeferred<String>()
         pending[id] = PendingClarification(request, deferred)
         _requests.emit(request)
         return try {
-            deferred.await()
+            withTimeoutOrNull(timeoutMs) { deferred.await() } ?: run {
+                logger.warn("⏰ [ClarificationGate] 타임아웃 — 빈 답변으로 진행: $question")
+                ""
+            }
         } finally {
             pending.remove(id)
         }

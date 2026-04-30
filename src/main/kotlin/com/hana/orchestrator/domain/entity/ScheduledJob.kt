@@ -20,7 +20,8 @@ data class ScheduledJob(
     val lastRunAt: Long? = null,
     val nextRunAt: Long? = null,
     val lastStatus: String? = null,  // "SUCCESS" | "FAILED" | "CANCELLED"
-    val includeMetrics: Boolean = false  // true면 실행 직전 메트릭 스냅샷을 쿼리에 주입
+    val includeMetrics: Boolean = false,  // true면 실행 직전 메트릭 스냅샷을 쿼리에 주입
+    val autoApprove: Boolean = false      // true면 모든 승인 게이트 자동 통과 (무인 실행용)
 )
 
 @Serializable
@@ -39,4 +40,9 @@ sealed class JobSchedule {
     @Serializable
     @SerialName("daily")
     data class Daily(val hour: Int, val minute: Int = 0) : JobSchedule()
+
+    /** 완료 직후 재실행 (루프) — delayMs: 다음 실행까지 대기 시간 */
+    @Serializable
+    @SerialName("loop")
+    data class Loop(val delayMs: Long = 0) : JobSchedule()
 }

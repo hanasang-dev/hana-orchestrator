@@ -42,6 +42,9 @@ class ApprovalGate {
      * 타임아웃(기본 5분) 초과 시 자동 거절
      * @return true=승인, false=거절(또는 타임아웃)
      */
+    /** 스케줄러가 무인 실행 중일 때 true — 모든 승인 요청을 자동 통과 */
+    @Volatile var scheduledBypass: Boolean = false
+
     suspend fun requestApproval(
         path: String,
         oldContent: String?,
@@ -50,7 +53,7 @@ class ApprovalGate {
         timeoutMs: Long = 5 * 60 * 1000L,
         kind: ApprovalKind = ApprovalKind.EXECUTION
     ): Boolean {
-        if (autoApprove) return true
+        if (autoApprove || scheduledBypass) return true
         val id = UUID.randomUUID().toString().take(8)
         val diff = if (kind == ApprovalKind.FILE) buildDiff(oldContent ?: "", newContent, path) else newContent
         val request = ApprovalRequest(id = id, path = path, diff = diff, kind = kind)
