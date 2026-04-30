@@ -37,6 +37,22 @@
 - LLM 라우팅 개선이 필요하면 → 해당 레이어의 KDoc을 수정한다. 프롬프트에 우겨넣지 않는다.
 - 세부 규칙 → [`llm/CLAUDE.md`](src/main/kotlin/com/hana/orchestrator/llm/CLAUDE.md)
 
+## 자가개선 루프 규칙 (절대 위반 금지)
+
+### 후보 게이트 원칙
+- `improveLayer()`는 반드시 `.hana/candidates/`에 저장 — 원본 직접 덮어쓰기 금지
+- `applyLayerCandidate()` 호출 전까지 원본은 항상 보존됨
+- `improveLayer()` 리턴값에는 반드시 `[필수후속]` 태그 포함 — LLM이 apply/reject 없이 finish 불가하도록 강제
+
+### LLM 출력 포맷 강제
+- ReAct 결정은 반드시 `LLMParams.Schema.JSON.Basic`으로 Ollama `format` 필드에 스킴 전달
+- `callLLM`에서 `schema` 파라미터를 드롭하면 안 됨 — `Prompt.withUpdatedParams { this.schema = ... }` 경유
+
+### 컨텍스트 트리 (미구현 — 다음 우선순위)
+- 현재: 파일 하나씩 봄 → 표면적 개선
+- 목표: 관련 파일 묶음을 슬롯 단위로 관리 → 구조적 개선 가능
+- 구현 전까지 루프 품질 한계 있음
+
 ## 개발 워크플로우
 - 빌드 가능한 단위로 작업 후 반드시 빌드 확인
 - 빌드 성공 확인 후 브라우저/API 테스트
