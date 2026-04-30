@@ -1,0 +1,16 @@
+{
+    "id": "de21e71b-d579-48dd-a6f5-259e4d9fcbf4",
+    "name": "자가평가 루프",
+    "query": "레이어 하나를 개선해줘.",
+    "treeId": null,
+    "schedule": {
+        "type": "loop",
+        "delayMs": 5000
+    },
+    "enabled": true,
+    "lastRunAt": 1777527168360,
+    "nextRunAt": 1777527173360,
+    "lastStatus": "SUCCESS",
+    "includeMetrics": false,
+    "autoApprove": true
+}

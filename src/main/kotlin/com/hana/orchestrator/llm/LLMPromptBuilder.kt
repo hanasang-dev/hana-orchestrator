@@ -100,8 +100,8 @@ internal class LLMPromptBuilder {
         } else {
             stepHistory.joinToString("\n") { step ->
                 val treeDesc = step.tree?.rootNodes?.joinToString(", ") { "${it.layerName}.${it.function}" } ?: "(알 수 없음)"
-                val result = if (step.result.length > 200) {
-                    "${step.result.take(100)}...[전체 ${step.result.length}자 — 데이터가 이미 로드됨. 다시 읽기 금지]"
+                val result = if (step.result.length > 2000) {
+                    "${step.result.take(2000)}...[전체 ${step.result.length}자 — 데이터가 이미 로드됨. 다시 읽기 금지]"
                 } else {
                     step.result
                 }

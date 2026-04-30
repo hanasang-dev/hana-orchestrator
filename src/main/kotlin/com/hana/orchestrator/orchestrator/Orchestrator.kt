@@ -89,6 +89,7 @@ class Orchestrator(
             reactiveExecutor,
             StrategyContext(layerManager, historyManager, statePublisher, modelSelectionStrategy, treeExecutor, clarificationGate)
         )
+        layerManager.wireLlmClientFactory(clientFactory)
 
         logger.info("🚀 [Orchestrator] 초기화 시작...")
         logger.info("ℹ️ [Orchestrator] 레이어 초기화는 첫 실행 시 수행됩니다")

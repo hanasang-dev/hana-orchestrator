@@ -7,56 +7,46 @@ package com.hana.orchestrator.layer
  */
 @Layer
 class TextValidatorLayer : CommonLayerInterface {
-    
+
     /**
      * 텍스트 길이 검증
      */
     @LayerFunction
     suspend fun validateLength(text: String, minLength: Int = 0, maxLength: Int = Int.MAX_VALUE): String {
         val length = text.length
-        if (length < minLength) {
-            throw IllegalArgumentException("Text length $length is less than minimum $minLength")
-        }
-        if (length > maxLength) {
-            throw IllegalArgumentException("Text length $length exceeds maximum $maxLength")
-        }
+        require(length >= minLength) { "Text length $length is less than minimum $minLength" }
+        require(length <= maxLength) { "Text length $length exceeds maximum $maxLength" }
         return "Valid: length=$length"
     }
-    
+
     /**
      * 텍스트 패턴 검증 (간단한 버전)
      */
     @LayerFunction
     suspend fun validatePattern(text: String, pattern: String = ".*"): String {
         val regex = pattern.toRegex()
-        if (!regex.matches(text)) {
-            throw IllegalArgumentException("Text does not match pattern: $pattern")
-        }
+        require(regex.matches(text)) { "Text does not match pattern: $pattern" }
         return "Valid: matches pattern=$pattern"
     }
-    
+
     /**
      * 텍스트가 비어있지 않은지 검증
      */
     @LayerFunction
     suspend fun validateNotEmpty(text: String): String {
-        if (text.isBlank()) {
-            throw IllegalArgumentException("Text is empty or blank")
-        }
+        require(!text.isBlank()) { "Text is empty or blank" }
         return "Valid: text is not empty"
     }
-    
+
     /**
      * 텍스트에 특정 문자열 포함 여부 검증
      */
     @LayerFunction
     suspend fun validateContains(text: String, substring: String): String {
-        if (!text.contains(substring)) {
-            throw IllegalArgumentException("Text does not contain: $substring")
-        }
+        require(text.contains(substring)) { "Text does not contain: $substring" }
         return "Valid: contains '$substring'"
     }
-    
+
     /**
      * 조건부 실패 (테스트용)
      * failIf 파라미터가 true이면 실패
@@ -72,15 +62,13 @@ class TextValidatorLayer : CommonLayerInterface {
     override suspend fun describe(): LayerDescription {
         return TextValidatorLayer_Description.layerDescription
     }
-    
+
     override suspend fun execute(function: String, args: Map<String, Any>): String {
         return when (function) {
             "validateLength" -> {
                 val text = (args["text"] as? String) ?: ""
-                val minLength = (args["minLength"] as? String)?.toIntOrNull() 
-                    ?: (args["minLength"] as? Int) ?: 0
-                val maxLength = (args["maxLength"] as? String)?.toIntOrNull() 
-                    ?: (args["maxLength"] as? Int) ?: Int.MAX_VALUE
+                val minLength = (args["minLength"] as? Int) ?: 0
+                val maxLength = (args["maxLength"] as? Int) ?: Int.MAX_VALUE
                 validateLength(text, minLength, maxLength)
             }
             "validatePattern" -> {
@@ -99,8 +87,7 @@ class TextValidatorLayer : CommonLayerInterface {
             }
             "conditionalValidate" -> {
                 val text = (args["text"] as? String) ?: ""
-                val failIf = (args["failIf"] as? String)?.toBooleanStrictOrNull() 
-                    ?: (args["failIf"] as? Boolean) ?: false
+                val failIf = (args["failIf"] as? Boolean) ?: false
                 conditionalValidate(text, failIf)
             }
             else -> "Unknown function: $function. Available: validateLength, validatePattern, validateNotEmpty, validateContains, conditionalValidate"

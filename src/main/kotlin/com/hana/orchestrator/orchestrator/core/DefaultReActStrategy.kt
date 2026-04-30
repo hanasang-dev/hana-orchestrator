@@ -375,7 +375,13 @@ class DefaultReActStrategy(
                         statePublisher.emitProgress(executionId, ExecutionPhase.TREE_EXECUTION, "❓ 사용자 답변 대기 중...", progressPct, System.currentTimeMillis() - startTime)
                         val answer = clarificationGate.requestClarification(question)
                         logAndEmit("💬 답변: ${answer.take(60)}")
-                        stepHistory.add(ReActStep(step, "사용자 질문: $question", null, "[사용자 답변] $answer"))
+                        if (answer.contains("[자율 실행]")) {
+                            // 자율 실행 bypass — 질문/답변 대신 원래 목표를 상기시켜 컨텍스트 오염 방지
+                            stepHistory.add(ReActStep(step, "자율 실행 모드 — 추가 정보 없이 계속", null,
+                                "[자율 실행] 원래 목표: \"$query\" — 사용 가능한 레이어와 함수를 이용해 즉시 실행하세요."))
+                        } else {
+                            stepHistory.add(ReActStep(step, "사용자 질문: $question", null, "[사용자 답변] $answer"))
+                        }
                         consecutiveErrors = 0
                     }
                 }

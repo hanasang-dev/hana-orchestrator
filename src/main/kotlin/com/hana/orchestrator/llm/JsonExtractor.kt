@@ -42,9 +42,10 @@ internal object JsonExtractor {
         // 코드블록 밖 평문에서도 수집
         val plainCandidates = collectAll(jsonBlockRegex.replace(trimmed, " "))
 
-        // 전체 후보 중 "finish" action 포함 블록 우선 선택
+        // 전체 후보 중 우선순위: finish 포함 > action 키 포함 > 첫 번째
         val allCandidates = blockCandidates + plainCandidates
         extractedJson = allCandidates.firstOrNull { it.contains("\"finish\"") }
+            ?: allCandidates.firstOrNull { it.contains("\"action\"") }
             ?: allCandidates.firstOrNull()
         
         // JSON이 아닌 경우 에러

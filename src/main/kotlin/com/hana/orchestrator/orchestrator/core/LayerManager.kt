@@ -24,6 +24,7 @@ class LayerManager(
 
     private var reactiveExecutor: ReactiveExecutor? = null
     private var strategyContext: StrategyContext? = null
+    private var llmClientFactory: com.hana.orchestrator.llm.factory.LLMClientFactory? = null
 
     /**
      * DevelopLayer의 전략 핫로드에 필요한 의존성을 설정한다.
@@ -32,6 +33,13 @@ class LayerManager(
     fun wireReactiveExecutor(executor: ReactiveExecutor, ctx: StrategyContext) {
         reactiveExecutor = executor
         strategyContext = ctx
+    }
+
+    /**
+     * DevelopLayer의 내부 LLM 호출에 필요한 팩토리를 설정한다.
+     */
+    fun wireLlmClientFactory(factory: com.hana.orchestrator.llm.factory.LLMClientFactory) {
+        llmClientFactory = factory
     }
     
     /**
@@ -57,12 +65,13 @@ class LayerManager(
             }
             layers.addAll(defaultLayers)
 
-            // DevelopLayer에 LayerManager + ReactiveExecutor + StrategyContext 주입
+            // DevelopLayer에 LayerManager + ReactiveExecutor + StrategyContext + LLMClientFactory 주입
             defaultLayers.filterIsInstance<com.hana.orchestrator.layer.DevelopLayer>()
                 .firstOrNull()?.also { developLayer ->
                     developLayer.setLayerManager(this)
                     reactiveExecutor?.let { developLayer.setReactiveExecutor(it) }
                     strategyContext?.let { developLayer.setStrategyContext(it) }
+                    llmClientFactory?.let { developLayer.setLlmClientFactory(it) }
                 }
 
             // CoreEvaluationLayer에 ReactiveExecutor + StrategyContext 주입 (runScenario용)

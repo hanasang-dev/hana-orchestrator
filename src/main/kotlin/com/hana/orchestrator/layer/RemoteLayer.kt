@@ -14,30 +14,38 @@ class RemoteLayer(
     val baseUrl: String,
     private val httpClient: HttpClient
 ) : CommonLayerInterface {
-    
+
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
     }
-    
+
     override suspend fun describe(): LayerDescription {
-        val response = httpClient.get("$baseUrl/describe").bodyAsText()
-        return json.decodeFromString(LayerDescription.serializer(), response)
+        try {
+            val response = httpClient.get("$baseUrl/describe").bodyAsText()
+            return json.decodeFromString(LayerDescription.serializer(), response)
+        } catch (e: Exception) {
+            throw LayerExecutionException("Failed to describe layer: ${e.message}")
+        }
     }
-    
+
     override suspend fun execute(function: String, args: Map<String, Any>): String {
-        val stringArgs = args.mapValues { it.value.toString() }
-        val request = LayerRequest(function, stringArgs)
-        val response = httpClient.post("$baseUrl/do") {
-            setBody(request)
-            contentType(ContentType.Application.Json)
-        }.bodyAsText()
-        
-        val layerResponse = json.decodeFromString(LayerResponse.serializer(), response)
-        return if (layerResponse.success) {
-            layerResponse.result
-        } else {
-            throw LayerExecutionException(layerResponse.error ?: "Unknown error")
+        val requestBody = LayerRequest(function, args.mapValues { it.value.toString() })
+
+        try {
+            val response = httpClient.post("$baseUrl/do") {
+                setBody(requestBody)
+                contentType(ContentType.Application.Json)
+            }.bodyAsText()
+
+            val layerResponse = json.decodeFromString(LayerResponse.serializer(), response)
+            return if (layerResponse.success) {
+                layerResponse.result ?: "" // Handle null result
+            } else {
+                throw LayerExecutionException(layerResponse.error ?: "Unknown error")
+            }
+        } catch (e: Exception) {
+            throw LayerExecutionException("Failed to execute function: ${e.message}")
         }
     }
 }

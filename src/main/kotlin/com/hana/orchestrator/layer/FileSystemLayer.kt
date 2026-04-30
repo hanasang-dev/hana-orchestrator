@@ -116,9 +116,20 @@ class FileSystemLayer : CommonLayerInterface {
             // 3. 기존 파일이 있을 때만 백업 (신규 파일이면 백업 생략)
             val backupPath = if (file.exists()) backupFile(resolvedPath) else "신규 파일"
 
-            // 4. 파일 쓰기
+            // 4. 파일 쓰기 (마크다운 코드펜스 자동 제거)
+            val sanitized = content
+                .trimStart()
+                .let { if (it.startsWith("```")) it.lines().drop(1).joinToString("\n") else it }
+                .trimEnd()
+                .let { if (it.endsWith("```")) it.dropLast(3).trimEnd() else it }
+
+            // 5. Kotlin 파일 유효성 검증: package 선언으로 시작해야 함
+            if (resolvedPath.endsWith(".kt") && !sanitized.trimStart().startsWith("package ")) {
+                return "ERROR: .kt 파일에 유효하지 않은 내용 — 'package' 선언으로 시작해야 합니다. Kotlin 소스 코드만 쓸 수 있습니다."
+            }
+
             file.parentFile?.mkdirs()
-            file.writeText(content)
+            file.writeText(sanitized)
 
             "SUCCESS: 파일 수정 완료\n경로: $resolvedPath\n백업: $backupPath"
         } catch (e: Exception) {

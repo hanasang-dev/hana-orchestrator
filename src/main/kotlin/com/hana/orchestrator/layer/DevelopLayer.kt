@@ -5,12 +5,18 @@ import java.io.File
 import java.net.URLClassLoader
 
 /**
- * 레이어 생성 / ReAct 전략 진화 담당 레이어
+ * 레이어 생성 / 개선 / ReAct 전략 진화 담당 레이어
  *
- * ━━━ [A] 새 레이어 생성 — "XXX 레이어 만들어줘" ━━━
+ * ━━━ [A] 레이어 개선 — "레이어 개선해줘", "XXX 개선해줘", "코드 품질 개선" ━━━
+ * ⭐ develop.improveLayer() 하나로 완료 — 추가 준비 작업 없이 즉시 실행
+ *    - layerName 비워두면 자동 선택. 레이어 목록 조회·파일 읽기 불필요.
+ *    - 내부에서 읽기 → LLM 분석 → 저장 → 컴파일 → 리로드 자동 처리
+ *    - 반환값: "SUCCESS: XxxLayer 개선·컴파일 완료" 또는 "ERROR: ..."
+ *
+ * ━━━ [B] 새 레이어 생성 — "XXX 레이어 만들어줘" ━━━
  * ⭐ develop.createLayer(name, description, functions) → build.compileKotlin → develop.hotLoad(name)
  *
- * ━━━ [B] ReAct 전략 후보 생성 — "전략 후보", "ReAct 루프 개선", "전략을 바꿔줘" ━━━
+ * ━━━ [C] ReAct 전략 후보 생성 — "전략 후보", "ReAct 루프 개선", "전략을 바꿔줘" ━━━
  * ReAct 전략 = 오케스트레이터가 쿼리를 처리하는 방식 (사고·계획·실행 루프) 을 구현하는 Kotlin 클래스.
  * 후보를 만들 때 기존 소스를 절대 직접 수정하지 않는다.
  *
@@ -33,6 +39,7 @@ class DevelopLayer(
     private var layerManagerRef: com.hana.orchestrator.orchestrator.core.LayerManager? = null
     private var reactiveExecutorRef: com.hana.orchestrator.orchestrator.core.ReactiveExecutor? = null
     private var strategyContextRef: com.hana.orchestrator.orchestrator.core.StrategyContext? = null
+    private var llmClientFactoryRef: com.hana.orchestrator.llm.factory.LLMClientFactory? = null
 
     /** LayerManager 참조 설정 (LayerManager에서 주입) */
     fun setLayerManager(layerManager: com.hana.orchestrator.orchestrator.core.LayerManager) {
@@ -47,6 +54,11 @@ class DevelopLayer(
     /** 전략 핫로드에 필요한 의존성 컨텍스트 설정 (LayerManager에서 주입) */
     fun setStrategyContext(ctx: com.hana.orchestrator.orchestrator.core.StrategyContext) {
         strategyContextRef = ctx
+    }
+
+    /** 내부 LLM 호출용 팩토리 설정 (LayerManager에서 주입) */
+    fun setLlmClientFactory(factory: com.hana.orchestrator.llm.factory.LLMClientFactory) {
+        llmClientFactoryRef = factory
     }
 
     private val layerDir: File
@@ -156,6 +168,148 @@ class DevelopLayer(
     suspend fun listLayers(): String {
         val names = listLayerNames()
         return if (names.isEmpty()) "레이어 파일 없음" else names
+    }
+
+    /**
+     * 기존 레이어 소스 코드를 개선된 버전으로 교체한다.
+     *
+     * 워크플로우: readLayerExample(layerName) → [LLM이 개선 코드 작성] → developLayer(layerName, 개선된소스)
+     *
+     * sourceCode 작성 규칙:
+     * - 반드시 `package com.hana.orchestrator.layer`로 시작
+     * - 순수 Kotlin 소스만 허용 (마크다운, 설명 텍스트 금지)
+     * - 기존 클래스명·`@Layer`·`CommonLayerInterface` 구조 유지
+     * - 개선 후 자동으로 백업 생성
+     *
+     * 저장 완료 후 build.compileKotlin → develop.reloadLayer(name) 순서로 실행.
+     *
+     * @param layerName 개선할 레이어 이름 (예: "Echo", "TextTransformer"). "Layer" 접미사 불필요.
+     * @param sourceCode 개선된 Kotlin 소스 전체
+     * @return 저장 결과 또는 오류 메시지
+     */
+    @LayerFunction
+    suspend fun developLayer(layerName: String, sourceCode: String): String {
+        val trimmed = sourceCode.trimStart()
+            .let { if (it.startsWith("```")) it.lines().drop(1).joinToString("\n") else it }
+            .trimEnd()
+            .let { if (it.endsWith("```")) it.dropLast(3).trimEnd() else it }
+
+        if (!trimmed.trimStart().startsWith("package ")) {
+            return "ERROR: sourceCode가 'package' 선언으로 시작하지 않습니다. 순수 Kotlin 소스만 허용됩니다."
+        }
+        return writeLayerCode(layerName, trimmed)
+    }
+
+    /**
+     * ⭐ "레이어 개선" 요청이 오면 이 함수를 즉시 호출하세요. 인자 없이 호출 가능.
+     *
+     * layerName 비워두면 레이어 자동 선택 — 목록 조회·파일 읽기 불필요.
+     * 내부에서 읽기 → LLM 분석 → 저장 → 컴파일 → 리로드 전부 처리.
+     * 이 함수 하나로 전체 개선 파이프라인 완료.
+     *
+     * @param layerName 개선할 레이어 이름 (예: "Echo", "Git"). 비워두면 자동 선택.
+     * @param goal 개선 목표. 기본값: "코드 품질 및 가독성 개선"
+     * @return "SUCCESS: XxxLayer 개선·컴파일 완료" 또는 "ERROR: ..."
+     */
+    @LayerFunction
+    suspend fun improveLayer(layerName: String = "", goal: String = "코드 품질 및 가독성 개선"): String {
+        val factory = llmClientFactoryRef ?: return "ERROR: LLMClientFactory가 주입되지 않았습니다."
+
+        val resolvedName = if (layerName.isBlank()) {
+            // 생성자 파라미터 없는 레이어만 자동 선택 (생성자 파라미터 있으면 핫리로드 불가 → 안전)
+            val candidates = layerDir.listFiles { f ->
+                f.name.endsWith("Layer.kt") &&
+                f.name != "DevelopLayer.kt" &&
+                !f.name.endsWith(".bak")
+            }?.filter { f ->
+                val classLine = f.readLines().firstOrNull { it.trimStart().startsWith("class ") } ?: ""
+                // "class XxxLayer :" 또는 "class XxxLayer(" 에서 () 안이 비어있는지 확인
+                val parenContent = classLine.substringAfter("(", "").substringBefore(")", "").trim()
+                parenContent.isEmpty() // no-arg constructor만 선택
+            }?.map { it.nameWithoutExtension.removeSuffix("Layer") } ?: emptyList()
+            if (candidates.isEmpty()) return "ERROR: 개선할 레이어 파일이 없습니다 (no-arg constructor 레이어 없음)."
+            candidates.random()
+        } else layerName
+
+        val source = readLayerExample(resolvedName)
+        if (source.startsWith("ERROR")) return source
+
+        // 원본 클래스 선언 추출 (생성자 보존 검증용)
+        val originalClassDecl = source.lines().firstOrNull { it.trimStart().startsWith("class ") }?.trim() ?: ""
+
+        val prompt = """아래 Kotlin 소스 코드를 분석하고 개선된 버전을 작성하세요.
+
+개선 목표: $goal
+
+현재 소스:
+$source
+
+[절대 준수 규칙]
+1. 출력은 순수 Kotlin 소스만. 마크다운 코드펜스(```) 금지. 설명 텍스트 금지.
+2. 반드시 `package com.hana.orchestrator.layer` 로 시작.
+3. 클래스 선언 "$originalClassDecl" 을 정확히 그대로 유지. 생성자 시그니처 변경 금지.
+4. @Layer 어노테이션, CommonLayerInterface 구현, describe(), execute() 구조 그대로 유지.
+5. 기존 함수 시그니처(@LayerFunction 포함) 유지. 구현 내용만 개선.
+6. 개선 사항이 없으면 package 선언 다음 줄에 `// 개선 없음: (이유)` 주석 후 원본 그대로 출력."""
+
+        val llmClient = factory.createMediumClient()
+        val improved = try {
+            llmClient.generateDirectAnswer(prompt)
+        } catch (e: Exception) {
+            return "ERROR: LLM 호출 실패: ${e.message}"
+        } finally {
+            try { llmClient.close() } catch (_: Exception) {}
+        }
+
+        val extracted = extractKotlinCode(improved)
+        val writeResult = developLayer(resolvedName, extracted)
+        if (!writeResult.startsWith("SUCCESS")) return writeResult
+
+        // 컴파일 (내부 실행 — 별도 레이어 호출 불필요)
+        val compileResult = runGradleTask("compileKotlin")
+        if (compileResult.contains("BUILD FAILED") || compileResult.startsWith("ERROR")) {
+            return "ERROR: 개선 코드 컴파일 실패 — 백업(.bak)에서 복구 필요\n$compileResult"
+        }
+
+        // 리로드 시도 (no-arg constructor 없는 레이어는 컴파일만으로 완료)
+        val reloadRaw = try { reloadLayer(resolvedName) } catch (e: Exception) { e.message ?: "skip" }
+        val reloadSummary = when {
+            reloadRaw.startsWith("SUCCESS") -> reloadRaw
+            reloadRaw.contains("no-arg") || reloadRaw.contains("기본 생성자") ->
+                "컴파일 완료 — 서버 재시작 시 자동 적용"
+            else -> "컴파일 완료 (리로드: $reloadRaw)"
+        }
+
+        return "SUCCESS: ${resolvedName}Layer 개선·컴파일 완료. $reloadSummary ← 목표 달성. finish 선택."
+    }
+
+    /**
+     * Gradle 태스크 내부 실행 (improveLayer 전용 — LLM에게 노출 안 됨)
+     */
+    private fun runGradleTask(task: String): String {
+        val isWindows = System.getProperty("os.name").lowercase().contains("win")
+        val gradlew = if (isWindows) "gradlew.bat" else "./gradlew"
+        return try {
+            val process = ProcessBuilder(gradlew, task, "--no-daemon")
+                .directory(projectRoot)
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().readText()
+            val exitCode = process.waitFor()
+            if (exitCode == 0) "BUILD SUCCESSFUL" else "BUILD FAILED\n$output"
+        } catch (e: Exception) {
+            "ERROR: Gradle 실행 실패: ${e.message}"
+        }
+    }
+
+    /**
+     * LLM 응답에서 순수 Kotlin 코드 추출.
+     * ```kotlin ... ``` 블록이 있으면 내용만 추출, 없으면 원본 반환.
+     */
+    private fun extractKotlinCode(text: String): String {
+        val trimmed = text.trim()
+        val codeBlockRegex = Regex("```(?:kotlin)?\\s*\\n(.*?)\\n?```", RegexOption.DOT_MATCHES_ALL)
+        return codeBlockRegex.find(trimmed)?.groupValues?.get(1)?.trim() ?: trimmed
     }
 
     /**
@@ -650,7 +804,17 @@ $functionBlocks
                 val name = args["name"] as? String ?: ""
                 listCandidates(name)
             }
-            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad, reloadLayer, readDefaultStrategy, createStrategyCandidate, hotLoadStrategy, promoteCandidateToCore, rollbackStrategy, promote, listCandidates"
+            "developLayer" -> {
+                val layerName = args["layerName"] as? String ?: return "ERROR: layerName 필수"
+                val sourceCode = args["sourceCode"] as? String ?: return "ERROR: sourceCode 필수"
+                developLayer(layerName, sourceCode)
+            }
+            "improveLayer" -> {
+                val layerName = args["layerName"] as? String ?: ""
+                val goal = args["goal"] as? String ?: "코드 품질 및 가독성 개선"
+                improveLayer(layerName, goal)
+            }
+            else -> "Unknown function: $function. Available: readLayerExample, readLayerInterface, readLayerFactory, listLayers, createLayer, hotLoad, reloadLayer, readDefaultStrategy, createStrategyCandidate, hotLoadStrategy, promoteCandidateToCore, rollbackStrategy, promote, listCandidates, developLayer, improveLayer"
         }
     }
 }

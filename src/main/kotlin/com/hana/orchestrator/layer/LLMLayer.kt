@@ -20,11 +20,11 @@ import com.hana.orchestrator.llm.useSuspend
 class LLMLayer(
     private val modelSelectionStrategy: ModelSelectionStrategy
 ) : CommonLayerInterface {
-    
+
     /**
      * 사용자 요청에 대해 LLM이 직접 답변을 생성합니다.
      * 레이어로 실행할 수 없는 일반 지식 질문이나 설명 요청에 사용됩니다.
-     * 
+     *
      * @param query 사용자 요청
      * @return LLM이 생성한 답변
      */
@@ -35,7 +35,7 @@ class LLMLayer(
                 client.generateDirectAnswer(query)
             }
     }
-    
+
     /**
      * 컨텍스트를 바탕으로 LLM이 분석·생성·코드 작성을 수행합니다.
      * 다른 레이어의 결과(파일 내용, 커밋 로그 등)를 받아 처리하거나, 소스코드를 생성·수정할 때 사용합니다.
@@ -50,12 +50,12 @@ class LLMLayer(
         val combinedQuery = """
             컨텍스트:
             $context
-            
+
             요청: $query
-            
+
             위 컨텍스트를 바탕으로 요청에 답변해주세요.
         """.trimIndent()
-        
+
         return modelSelectionStrategy.selectClientForGenerateDirectAnswer()
             .useSuspend { client ->
                 client.generateDirectAnswer(combinedQuery)
@@ -65,7 +65,7 @@ class LLMLayer(
     override suspend fun describe(): LayerDescription {
         return LLMLayer_Description.layerDescription
     }
-    
+
     override suspend fun execute(function: String, args: Map<String, Any>): String {
         return when (function) {
             "answerDirectly" -> {

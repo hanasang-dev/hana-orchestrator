@@ -40,14 +40,14 @@ class ClarificationGate {
 
     /**
      * 질문 요청: 사용자가 answer()를 호출할 때까지 suspend됨
-     * scheduledBypass=true면 즉시 빈 문자열 반환 (무인 실행 — LLM이 스스로 진행)
+     * scheduledBypass=true면 즉시 자율 실행 안내 메시지 반환 (무인 실행 — LLM이 스스로 결정)
      * timeoutMs 초과 시 빈 문자열 반환 (기본 5분)
      * @return 사용자 답변 문자열
      */
     suspend fun requestClarification(question: String, timeoutMs: Long = 5 * 60 * 1000L): String {
         if (scheduledBypass) {
-            logger.info("📅 [ClarificationGate] bypass — 질문 자동 통과: $question")
-            return ""
+            logger.info("📅 [ClarificationGate] bypass — 자율 실행 모드: $question")
+            return "[자율 실행] 사용자 확인 없이 자율 실행 중입니다. 스스로 가장 합리적인 선택을 결정하고 즉시 진행하세요. 추가 질문 없이 직접 실행하세요."
         }
         val id = UUID.randomUUID().toString().take(8)
         val request = ClarificationRequest(id = id, question = question)
