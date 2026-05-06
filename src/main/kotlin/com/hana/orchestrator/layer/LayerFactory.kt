@@ -103,10 +103,19 @@ object LayerFactory {
     }
 
     /**
+     * 컨텍스트 저장소 레이어 생성 (대형 콘텐츠 키-값 저장, ReAct 루프 stepHistory 압축용)
+     */
+    fun createContextLayer(projectRoot: java.io.File? = null): ContextLayer {
+        projectRoot?.let { ContextLayer.populate(it) }
+        return ContextLayer()
+    }
+
+    /**
      * 모든 기본 레이어 생성
      */
     fun createDefaultLayers(
-        modelSelectionStrategy: com.hana.orchestrator.llm.strategy.ModelSelectionStrategy? = null
+        modelSelectionStrategy: com.hana.orchestrator.llm.strategy.ModelSelectionStrategy? = null,
+        projectRoot: java.io.File? = null
     ): List<CommonLayerInterface> {
         val layers = mutableListOf<CommonLayerInterface>(
             createEchoLayer(),
@@ -117,7 +126,8 @@ object LayerFactory {
             createGitLayer(),
             createDevelopLayer(),
             createShellLayer(),
-            createCoreEvaluationLayer()
+            createCoreEvaluationLayer(),
+            createContextLayer(projectRoot)
         )
         
         // LLMLayer는 ModelSelectionStrategy가 필요하므로 선택적으로 추가

@@ -56,7 +56,8 @@ class LayerManager(
             logger.debug("  - 레이어 인스턴스 생성됨: LayerInfoLayer")
             
             // 기본 레이어 등록
-            val defaultLayers = LayerFactory.createDefaultLayers(modelSelectionStrategy)
+            val projectRootForLayers = java.io.File(System.getProperty("user.dir"))
+            val defaultLayers = LayerFactory.createDefaultLayers(modelSelectionStrategy, projectRootForLayers)
             logger.info("🔧 [LayerManager] 기본 레이어 초기화: ${defaultLayers.size}개 레이어 등록")
             defaultLayers.forEach { layer ->
                 logger.debug("  - 레이어 인스턴스 생성됨: ${layer::class.simpleName}")

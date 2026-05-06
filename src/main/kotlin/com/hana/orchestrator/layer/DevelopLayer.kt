@@ -240,11 +240,25 @@ class DevelopLayer(
 
         val originalClassDecl = source.lines().firstOrNull { it.trimStart().startsWith("class ") }?.trim() ?: ""
 
+        // 컨텍스트 번들: 인터페이스 계약 + 레이어 개발 규칙 (구조적 이해 기반 개선)
+        val interfaceSource = File(layerDir, "CommonLayerInterface.kt").takeIf { it.exists() }?.readText() ?: ""
+        val layerRules = File(layerDir, "CLAUDE.md").takeIf { it.exists() }?.readText() ?: ""
+        val contextSection = buildString {
+            if (interfaceSource.isNotBlank()) {
+                appendLine("=== 레이어 인터페이스 계약 (반드시 준수) ===")
+                appendLine(interfaceSource)
+            }
+            if (layerRules.isNotBlank()) {
+                appendLine("=== 레이어 개발 규칙 (반드시 준수) ===")
+                appendLine(layerRules)
+            }
+        }
+
         val prompt = """아래 Kotlin 소스 코드를 분석하고 개선된 버전을 작성하세요.
 
 개선 목표: $goal
 
-현재 소스:
+$contextSection=== 개선 대상 소스 (${resolvedName}Layer.kt) ===
 $source
 
 [절대 준수 규칙]
@@ -253,7 +267,8 @@ $source
 3. 클래스 선언 "$originalClassDecl" 을 정확히 그대로 유지. 생성자 시그니처 변경 금지.
 4. @Layer 어노테이션, CommonLayerInterface 구현, describe(), execute() 구조 그대로 유지.
 5. 기존 함수 시그니처(@LayerFunction 포함) 유지. 구현 내용만 개선.
-6. 개선 사항이 없으면 package 선언 다음 줄에 `// 개선 없음: (이유)` 주석 후 원본 그대로 출력."""
+6. 레이어 격리 규칙: KDoc 및 코드에 타 레이어명·함수명 절대 언급 금지.
+7. 개선 사항이 없으면 package 선언 다음 줄에 `// 개선 없음: (이유)` 주석 후 원본 그대로 출력."""
 
         val llmClient = factory.createMediumClient()
         val improved = try {

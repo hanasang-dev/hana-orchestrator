@@ -47,12 +47,25 @@ class DefaultReActStrategy(
     private val absoluteMaxSteps = 200
     /** 이 횟수만큼 연속으로 ERROR 결과가 나오면 복구 불가 상태로 판단하고 중단 */
     private val maxConsecutiveErrors = 3
+    /** 이 글자 수를 초과하는 스텝 결과는 context store에 저장하고 히스토리엔 키만 남김 */
+    private val compressThreshold = 1500
     private val logger = createOrchestratorLogger(DefaultReActStrategy::class.java, historyManager)
 
-    /** 로그 추가 + WebSocket 즉시 broadcast */
-    private fun logAndEmit(message: String) {
-        historyManager.addLogToCurrent(message)
-        historyManager.getCurrentExecution()?.let { statePublisher.emitExecutionUpdateAsync(it) }
+    /**
+     * 스텝 결과가 크면 context store에 저장. 프롬프트 빌더가 키 참조로 렌더링함.
+     * 실패해도 루프에 영향 없음 (best-effort).
+     */
+    private suspend fun storeStepResult(stepNumber: Int, result: String) {
+        if (result.length > compressThreshold) {
+            try {
+                layerManager.executeOnLayer(
+                    "context", "put",
+                    mapOf("key" to "step:$stepNumber:result", "value" to result)
+                )
+            } catch (e: Exception) {
+                logger.warn("⚠️ [ReAct] context store 저장 실패 (무시): ${e.message}")
+            }
+        }
     }
 
     // ── 인수(args) 포함 노드 식별 키 생성 헬퍼 ──────────────────────────────
@@ -184,7 +197,8 @@ class DefaultReActStrategy(
 
             // 진행률: 스텝마다 5%씩 올라가다 85%에서 수렴 (작업량 불확정이므로 점근)
             val progressPct = minOf(15 + step * 5, 85)
-            logAndEmit("🔄 스텝 #$step — LLM 결정 요청 중...")
+            logger.info("🔄 [ReAct] 스텝 #$step 시작")
+            historyManager.addLogToCurrent("🔄 ReAct 스텝 #$step")
             statePublisher.emitProgress(
                 executionId, ExecutionPhase.TREE_EXECUTION,
                 "🤔 스텝 #$step 결정 중...", progressPct, System.currentTimeMillis() - startTime
@@ -196,7 +210,7 @@ class DefaultReActStrategy(
             val autoStep = stepHistory.lastOrNull()?.result?.let { parseNextStepHint(it, doneFunctionNames) }
             if (autoStep != null) {
                 val (layerName, function) = autoStep
-                logAndEmit("🔜 자동: $layerName.$function")
+                logger.info("🔜 [ReAct] '다음 단계' 자동 실행: $layerName.$function")
                 val autoNode = ExecutionNodeResponse(layerName, function, buildJsonObject {})
                 val autoLlmTree = ExecutionTreeResponse(rootNodes = listOf(autoNode))
                 val autoDomainTree = try {
@@ -218,7 +232,8 @@ class DefaultReActStrategy(
                     ?.filter { it.isSuccess && !it.result.orEmpty().startsWith("ERROR") }
                     ?.map { nodeKey(it.node.layerName, it.node.function, it.node.args) }
                     ?: emptyList()
-                logAndEmit("📋 #$step 자동 결과: ${autoResult.take(80).replace('\n', ' ')}")
+                logger.info("📋 [ReAct] 스텝 #$step (자동) 결과: ${autoResult.take(120)}")
+                storeStepResult(step, autoResult)
                 val autoPresentation = with(PresentationMapper) { autoDomainTree.toResponse() }
                 stepHistory.add(ReActStep(step, "자동 실행: $layerName.$function", autoPresentation, autoResult, autoSuccessful))
                 if (autoResult.startsWith("ERROR")) consecutiveErrors++ else consecutiveErrors = 0
@@ -232,7 +247,7 @@ class DefaultReActStrategy(
                 .firstOrNull()
             if (requiredFollowUp != null) {
                 val (rfLayerName, rfFunction, rfArgs) = requiredFollowUp
-                logAndEmit("🔜 필수후속: $rfLayerName.$rfFunction")
+                logger.info("🔜 [ReAct] '[필수후속]' 자동 실행: $rfLayerName.$rfFunction($rfArgs)")
                 val rfArgsJson = buildJsonObject { rfArgs.forEach { (k, v) -> put(k, JsonPrimitive(v)) } }
                 val rfNode = ExecutionNodeResponse(rfLayerName, rfFunction, rfArgsJson)
                 val rfLlmTree = ExecutionTreeResponse(rootNodes = listOf(rfNode))
@@ -255,7 +270,8 @@ class DefaultReActStrategy(
                     ?.filter { it.isSuccess && !it.result.orEmpty().startsWith("ERROR") }
                     ?.map { nodeKey(it.node.layerName, it.node.function, it.node.args) }
                     ?: emptyList()
-                logAndEmit("📋 #$step 필수후속 결과: ${rfResult.take(80).replace('\n', ' ')}")
+                logger.info("📋 [ReAct] 스텝 #$step ([필수후속] 자동) 결과: ${rfResult.take(120)}")
+                storeStepResult(step, rfResult)
                 val rfPresentation = with(PresentationMapper) { rfDomainTree.toResponse() }
                 stepHistory.add(ReActStep(step, "자동 실행([필수후속]): $rfLayerName.$rfFunction", rfPresentation, rfResult, rfSuccessful))
                 if (rfResult.startsWith("ERROR")) consecutiveErrors++ else consecutiveErrors = 0
@@ -276,7 +292,7 @@ class DefaultReActStrategy(
                 )
             }
 
-            logAndEmit("🤔 #$step → ${decision.action}: ${decision.reasoning.take(80).replace('\n', ' ')}")
+            logger.info("🤔 [ReAct] 스텝 #$step 결정: action=${decision.action}, reasoning=${decision.reasoning.take(80)}")
 
             when (decision.action) {
                 "finish" -> {
@@ -286,7 +302,8 @@ class DefaultReActStrategy(
                     val finalResult = decision.result.ifEmpty { null }
                         ?: lastSuccessResult
                         ?: "작업 완료"
-                    logAndEmit("✅ 완료 (${step}스텝)")
+                    logger.info("✅ [ReAct] 완료 (${step}스텝): ${finalResult.take(100)}")
+                    historyManager.addLogToCurrent("✅ ReAct 완료 (${step}스텝)")
                     statePublisher.emitProgress(
                         executionId, ExecutionPhase.COMPLETED, "✅ 완료", 100,
                         System.currentTimeMillis() - startTime
@@ -311,7 +328,7 @@ class DefaultReActStrategy(
                             val finalResult = stepHistory
                                 .lastOrNull { !it.result.startsWith("ERROR") && !it.result.startsWith("Unknown function") && !it.result.startsWith("정보 부족") }
                                 ?.result ?: stepHistory.lastOrNull()?.result ?: "작업 완료"
-                            logAndEmit("🔁 중복 루프 감지 → 강제 종료")
+                            logger.info("🔁 [ReAct] 중복 루프 감지 → 강제 finish (이미 완료: $proposed)")
                             return ExecutionResult(result = finalResult, stepHistory = stepHistory.toList())
                         }
                     }
@@ -341,7 +358,8 @@ class DefaultReActStrategy(
                     }
 
                     val treeDesc = domainTree.rootNodes.joinToString(", ") { "${it.layerName}.${it.function}" }
-                    logAndEmit("🌳 실행: [$treeDesc]")
+                    logger.info("🌳 [ReAct] 스텝 #$step 미니트리 실행: [$treeDesc]")
+                    historyManager.addLogToCurrent("🌳 미니트리: [$treeDesc]")
 
                     val treeExecResult = try {
                         val currentHistory = historyManager.getCurrentExecution()!!
@@ -357,33 +375,13 @@ class DefaultReActStrategy(
                         ?.map { nodeKey(it.node.layerName, it.node.function, it.node.args) }
                         ?: emptyList()
 
-                    logAndEmit("📋 #$step 결과: ${stepResult.take(80).replace('\n', ' ')}")
+                    logger.info("📋 [ReAct] 스텝 #$step 결과: ${stepResult.take(120)}")
+                    historyManager.addLogToCurrent("📋 결과: ${stepResult.take(60)}")
+                    storeStepResult(step, stepResult)
 
                     val presentationTree = with(PresentationMapper) { domainTree.toResponse() }
                     stepHistory.add(ReActStep(step, decision.reasoning, presentationTree, stepResult, successfulFunctions))
                     if (stepResult.startsWith("ERROR")) consecutiveErrors++ else consecutiveErrors = 0
-                }
-
-                "ask" -> {
-                    val question = decision.question.ifEmpty { decision.reasoning }
-                    if (clarificationGate == null) {
-                        logger.warn("⚠️ [ReAct] ask 요청이지만 ClarificationGate 없음: $question")
-                        stepHistory.add(ReActStep(step, "사용자 질문(미처리): $question", null, "[정보 부족] $question"))
-                        consecutiveErrors = 0
-                    } else {
-                        logAndEmit("❓ 질문: $question")
-                        statePublisher.emitProgress(executionId, ExecutionPhase.TREE_EXECUTION, "❓ 사용자 답변 대기 중...", progressPct, System.currentTimeMillis() - startTime)
-                        val answer = clarificationGate.requestClarification(question)
-                        logAndEmit("💬 답변: ${answer.take(60)}")
-                        if (answer.contains("[자율 실행]")) {
-                            // 자율 실행 bypass — 질문/답변 대신 원래 목표를 상기시켜 컨텍스트 오염 방지
-                            stepHistory.add(ReActStep(step, "자율 실행 모드 — 추가 정보 없이 계속", null,
-                                "[자율 실행] 원래 목표: \"$query\" — 사용 가능한 레이어와 함수를 이용해 즉시 실행하세요."))
-                        } else {
-                            stepHistory.add(ReActStep(step, "사용자 질문: $question", null, "[사용자 답변] $answer"))
-                        }
-                        consecutiveErrors = 0
-                    }
                 }
 
                 else -> {
