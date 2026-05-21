@@ -62,14 +62,15 @@ class ExecutionStatePublisher {
     /**
      * 진행 상태 업데이트 emit
      */
-    suspend fun emitProgress(executionId: String, phase: ExecutionPhase, message: String, progress: Int, elapsedMs: Long) {
+    suspend fun emitProgress(executionId: String, phase: ExecutionPhase, message: String, progress: Int, elapsedMs: Long, query: String? = null) {
         _progressUpdates.emit(
             ProgressUpdate(
                 executionId = executionId,
                 phase = phase,
                 message = message,
                 progress = progress,
-                elapsedMs = elapsedMs
+                elapsedMs = elapsedMs,
+                query = query
             )
         )
     }
@@ -77,9 +78,9 @@ class ExecutionStatePublisher {
     /**
      * 비동기로 진행 상태 업데이트
      */
-    fun emitProgressAsync(executionId: String, phase: ExecutionPhase, message: String, progress: Int, elapsedMs: Long) {
+    fun emitProgressAsync(executionId: String, phase: ExecutionPhase, message: String, progress: Int, elapsedMs: Long, query: String? = null) {
         CoroutineScope(Dispatchers.Default).launch {
-            emitProgress(executionId, phase, message, progress, elapsedMs)
+            emitProgress(executionId, phase, message, progress, elapsedMs, query)
         }
     }
 }

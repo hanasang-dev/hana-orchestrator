@@ -50,7 +50,7 @@ object CandidateRegistry {
     /**
      * 소스 파일 스냅샷을 저장하고 레지스트리에 등록한다.
      *
-     * @param name          후보 이름 (예: "DefaultReActStrategy", "GreeterLayer")
+     * @param name          후보 이름 (예: "DefaultReActStrategy", "EchoLayer")
      * @param stage         단계 (beta / alpha / rc)
      * @param sourceFile    스냅샷을 뜰 원본 파일 경로
      * @param description   변경 내용 요약

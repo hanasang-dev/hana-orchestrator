@@ -41,6 +41,10 @@ class ExecutionTreeValidator(
             )
         }
         
+        // 전체 DAG 사이클 감지 (트리 엣지 + {{nodeId:X}} 크로스 참조 포함)
+        val cycleErrors = detectDagCycles(tree)
+        errors.addAll(cycleErrors)
+
         // 각 루트 노드 검증 및 수정
         val fixedRootNodes = tree.rootNodes.mapIndexed { index, rootNode ->
             // 트리 깊이 검증
@@ -48,13 +52,7 @@ class ExecutionTreeValidator(
             if (depth > MAX_TREE_DEPTH) {
                 errors.add("루트 노드 #${index + 1}의 트리 깊이($depth)가 최대값($MAX_TREE_DEPTH)을 초과합니다.")
             }
-            
-            // 순환 참조 검증
-            val cycleDetected = detectCycle(rootNode)
-            if (cycleDetected) {
-                errors.add("루트 노드 #${index + 1}의 트리 구조에 순환 참조가 감지되었습니다.")
-            }
-            
+
             // 노드 검증 및 수정
             validateAndFixNode(rootNode, userQuery, errors, warnings, depth = 0)
         }
@@ -87,22 +85,41 @@ class ExecutionTreeValidator(
     }
 
     /**
-     * 순환 참조 감지
+     * DAG 전체 사이클 감지.
+     * 트리 엣지(부모→자식)와 {{nodeId:X}} 크로스 참조 엣지를 모두 포함한 의존성 그래프에서 DFS로 감지.
+     * 엣지 방향: "이 노드가 저 노드에 의존" (저 노드가 먼저 완료되어야 이 노드 실행 가능)
      */
-    private fun detectCycle(node: ExecutionNode, visited: MutableSet<String> = mutableSetOf()): Boolean {
-        val nodeKey = node.id
-        if (visited.contains(nodeKey)) {
-            return true
-        }
-        visited.add(nodeKey)
+    private fun detectDagCycles(tree: ExecutionTree): List<String> {
+        val nodeIdRegex = Regex("""\{\{nodeId:([^}]+)\}\}""")
 
-        for (child in node.children) {
-            if (detectCycle(child, visited.toMutableSet())) {
-                return true
+        // 의존성 그래프 구축: deps[id] = 이 노드가 의존하는 노드 ID 집합
+        val deps = mutableMapOf<String, MutableSet<String>>()
+
+        fun collectDeps(node: ExecutionNode, parentId: String?) {
+            val myDeps = deps.getOrPut(node.id) { mutableSetOf() }
+            if (parentId != null) myDeps.add(parentId)
+            node.args.values.filterIsInstance<String>().forEach { v ->
+                nodeIdRegex.findAll(v).forEach { mr -> myDeps.add(mr.groupValues[1].trim()) }
             }
+            node.children.forEach { collectDeps(it, node.id) }
         }
+        tree.rootNodes.forEach { collectDeps(it, null) }
 
-        return false
+        // DFS 사이클 감지
+        val visited = mutableSetOf<String>()
+        val inStack = mutableSetOf<String>()
+        val errors = mutableListOf<String>()
+
+        fun dfs(id: String) {
+            visited += id; inStack += id
+            for (dep in deps[id] ?: emptySet()) {
+                if (dep in inStack) errors.add("순환 참조 감지: $id → $dep (사이클)")
+                else if (dep !in visited) dfs(dep)
+            }
+            inStack -= id
+        }
+        deps.keys.filter { it !in visited }.forEach { dfs(it) }
+        return errors
     }
 
     companion object {
@@ -175,6 +192,19 @@ class ExecutionTreeValidator(
             )
         }
 
+        // {{parent}}.propName 패턴 거부 — {{parent}}는 raw text string
+        // property accessor 형태로 쓰면 경로가 깨짐: "M src/....propName" 형태로 치환됨
+        val parentPropPattern = Regex("""{{parent}}\.\w+""")
+        node.args.values.filterIsInstance<String>().forEach { v ->
+            if (parentPropPattern.containsMatchIn(v)) {
+                errors.add(
+                    "노드 ${node.layerName}.${node.function} args에 '{{parent}}.property' 패턴 사용 불가. " +
+                    "{{parent}}는 raw text이므로 property 접근자(.)를 붙일 수 없습니다. " +
+                    "parent 결과를 직접 사용하거나 별도 파싱 단계를 추가하세요."
+                )
+            }
+        }
+
         // args는 그대로 사용 (query는 더 이상 필수가 아님)
         val fixedArgs = node.args
 
@@ -194,7 +224,6 @@ class ExecutionTreeValidator(
             args = fixedArgs,
             children = fixedChildren,
             parallel = node.parallel,
-            autoApprove = node.autoApprove,
             id = node.id
         )
     }

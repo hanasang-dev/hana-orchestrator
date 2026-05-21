@@ -7,8 +7,9 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 enum class ApprovalKind {
-    FILE,       // 파일 읽기·쓰기 작업
-    EXECUTION   // 셸·빌드 등 일반 실행 작업
+    FILE,       // 파일 쓰기·수정 작업
+    EXECUTION,  // 셸·빌드 등 일반 실행 작업
+    READ_ONLY   // 읽기 전용 — 승인 게이트 스킵
 }
 
 /**

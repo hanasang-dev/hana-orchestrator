@@ -52,7 +52,7 @@ class LLMProcessor(
             .filterIsInstance<KSFunctionDeclaration>()
             .filter { func ->
                 func.annotations.any { annotation ->
-                    annotation.shortName.asString() == "LLMTask"
+                    annotation.shortName.asString() == "LLMTier"
                 }
             }
             .filter { it.validate() }
@@ -67,8 +67,8 @@ class LLMProcessor(
         
         // 각 메서드의 복잡도 추출
         val methodComplexities = annotatedSymbols.mapNotNull { func ->
-            val annotation = func.annotations.firstOrNull { 
-                it.shortName.asString() == "LLMTask" 
+            val annotation = func.annotations.firstOrNull {
+                it.shortName.asString() == "LLMTier"
             } ?: return@mapNotNull null
             
             // complexity 인자 추출

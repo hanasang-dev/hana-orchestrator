@@ -5,6 +5,7 @@ import com.hana.orchestrator.orchestrator.core.ReactiveExecutor
 import com.hana.orchestrator.orchestrator.core.StrategyContext
 import com.hana.orchestrator.orchestrator.core.TreeExecutor
 import com.hana.orchestrator.layer.CommonLayerInterface
+import com.hana.orchestrator.layer.ContextLayer
 import com.hana.orchestrator.layer.LayerDescription
 import com.hana.orchestrator.domain.entity.ExecutionResult
 import com.hana.orchestrator.domain.entity.ExecutionHistory
@@ -49,8 +50,8 @@ class Orchestrator(
     /** ReAct 루프를 독립 코루틴으로 실행하는 스코프 (취소 지원) */
     private val orchestratorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** 현재 실행 중인 ReAct Job (취소용) */
-    @Volatile private var currentJob: Deferred<com.hana.orchestrator.domain.entity.ExecutionResult>? = null
+    /** 실행 중인 ReAct Job 맵 (executionId → Deferred, 취소용) */
+    private val runningJobs = java.util.concurrent.ConcurrentHashMap<String, Deferred<com.hana.orchestrator.domain.entity.ExecutionResult>>()
 
     /** 파일 쓰기 승인 게이트 (WebSocket 컨트롤러에서 구독, ApprovalController에서 응답) */
     val approvalGate = ApprovalGate()
@@ -113,12 +114,15 @@ class Orchestrator(
      * 현재 실행 중인 ReAct 루프를 취소한다.
      * @return 취소 요청이 전달되면 true, 실행 중이 아니면 false
      */
-    fun cancelCurrentExecution(): Boolean {
-        val job = currentJob ?: return false
-        return if (job.isActive) {
-            job.cancel()
-            true
-        } else false
+    fun cancelCurrentExecution(executionId: String? = null): Boolean {
+        if (executionId != null) {
+            val job = runningJobs[executionId] ?: return false
+            return if (job.isActive) { job.cancel(); true } else false
+        }
+        // executionId 없으면 전체 취소
+        val active = runningJobs.values.filter { it.isActive }
+        active.forEach { it.cancel() }
+        return active.isNotEmpty()
     }
 
     fun getCurrentExecution(): ExecutionHistory? {
@@ -146,32 +150,36 @@ class Orchestrator(
     /**
      * 오케스트레이션 실행 — ReAct 루프
      */
-    suspend fun executeOrchestration(chatDto: ChatDto): ExecutionResult {
+    suspend fun executeOrchestration(
+        chatDto: ChatDto,
+        isScheduled: Boolean = false,
+        onStart: ((String) -> Unit)? = null
+    ): ExecutionResult {
         val query = chatDto.message
         appContextService.updateVolatileFromRequest(chatDto.context)
         appContextService.ensureVolatileServerWorkingDirectory()
 
         val executionId = java.util.UUID.randomUUID().toString()
+        onStart?.invoke(executionId)
         val startTime = System.currentTimeMillis()
 
         val runningHistory = ExecutionHistory.createRunning(executionId, query, startTime)
         historyManager.setCurrentExecution(runningHistory)
-        historyManager.addLogToCurrent("🚀 [Reactive] 실행 시작: $query")
+        logger.info("🚀 [Orchestrator] 실행 시작 executionId=$executionId query=$query")
+        historyManager.addLogTo(executionId, "🚀 [Reactive] 실행 시작: $query")
         statePublisher.emitExecutionUpdate(runningHistory)
-        statePublisher.emitProgressAsync(executionId, ExecutionPhase.STARTING, "🚀 ReAct 시작", 0, 0)
+        statePublisher.emitProgressAsync(executionId, ExecutionPhase.STARTING, "🚀 ReAct 시작", 0, 0, query)
 
         val volatileCtx = appContextService.getVolatileStore().snapshot()
         val workingDir = volatileCtx["workingDirectory"] ?: System.getProperty("user.dir") ?: "."
-        val kotlinFileIndex = buildKotlinFileIndex(workingDir)
         val projectContext = buildMap {
             put("workingDirectory", workingDir)
-            if (kotlinFileIndex.isNotEmpty()) put("kotlinFileIndex", kotlinFileIndex)
         }
 
         val deferred = orchestratorScope.async {
-            reactiveExecutor.execute(query, executionId, startTime, projectContext)
+            reactiveExecutor.execute(query, executionId, startTime, projectContext, isScheduled)
         }
-        currentJob = deferred
+        runningJobs[executionId] = deferred
 
         return try {
             val result = deferred.await()
@@ -185,18 +193,26 @@ class Orchestrator(
             val reactTree = ReActTreeConverter.convert(result.stepHistory)
             val history = if (result.error != null && result.result.isEmpty()) {
                 ExecutionHistory.createFailed(
-                    executionId, query, result.error, startTime, logs = historyManager.getCurrentLogs()
+                    executionId, query, result.error, startTime, logs = historyManager.getLogs(executionId)
                 )
             } else {
                 ExecutionHistory.createCompleted(
                     executionId, query, result, startTime,
-                    logs = historyManager.getCurrentLogs(),
+                    logs = historyManager.getLogs(executionId),
                     executionTree = reactTree
                 )
             }
             historyManager.addHistory(history)
             statePublisher.emitExecutionUpdate(history)
-            historyManager.clearCurrentExecution()
+            ContextLayer.clearExecution(executionId)
+            historyManager.clearCurrentExecution(executionId)
+            // 세션에 실행 추가 (best-effort)
+            try {
+                layerManager.executeOnLayerInternal("session", "addExecution",
+                    mapOf("executionId" to executionId, "query" to query))
+            } catch (e: Exception) {
+                logger.warn("⚠️ [Orchestrator] 세션 추가 실패 (무시): ${e.message}")
+            }
             result
         } catch (e: CancellationException) {
             // deferred가 취소됐지만 현재 코루틴(Ktor 핸들러)은 살아있는 경우 → 사용자 취소
@@ -204,24 +220,26 @@ class Orchestrator(
             val elapsed = System.currentTimeMillis() - startTime
             statePublisher.emitProgress(executionId, ExecutionPhase.CANCELLED, "🚫 취소됨", 100, elapsed)
             val cancelledHistory = ExecutionHistory.createCancelled(
-                executionId, query, startTime, logs = historyManager.getCurrentLogs()
+                executionId, query, startTime, logs = historyManager.getLogs(executionId)
             )
             historyManager.addHistory(cancelledHistory)
             statePublisher.emitExecutionUpdate(cancelledHistory)
-            historyManager.clearCurrentExecution()
+            ContextLayer.clearExecution(executionId)
+            historyManager.clearCurrentExecution(executionId)
             ExecutionResult(result = "", error = "사용자가 실행을 취소했습니다")
         } catch (e: Exception) {
             val elapsed = System.currentTimeMillis() - startTime
             statePublisher.emitProgress(executionId, ExecutionPhase.FAILED, "❌ 실패", 100, elapsed)
             val failedHistory = ExecutionHistory.createFailed(
-                executionId, query, e.message ?: "실행 실패", startTime, logs = historyManager.getCurrentLogs()
+                executionId, query, e.message ?: "실행 실패", startTime, logs = historyManager.getLogs(executionId)
             )
             historyManager.addHistory(failedHistory)
             statePublisher.emitExecutionUpdate(failedHistory)
-            historyManager.clearCurrentExecution()
+            ContextLayer.clearExecution(executionId)
+            historyManager.clearCurrentExecution(executionId)
             ExecutionResult(result = "", error = e.message)
         } finally {
-            currentJob = null
+            runningJobs.remove(executionId)
         }
     }
 
@@ -248,25 +266,27 @@ class Orchestrator(
 
         val runningHistory = ExecutionHistory.createRunning(executionId, query, startTime)
         historyManager.setCurrentExecution(runningHistory)
-        historyManager.addLogToCurrent("🚀 커스텀 트리 실행 시작: $query")
+        historyManager.addLogTo(executionId, "🚀 커스텀 트리 실행 시작: $query")
         statePublisher.emitExecutionUpdate(runningHistory)
-        statePublisher.emitProgressAsync(executionId, ExecutionPhase.TREE_EXECUTION, "⚡ 사용자 트리 실행 중...", 60, 0)
+        statePublisher.emitProgressAsync(executionId, ExecutionPhase.TREE_EXECUTION, "⚡ 사용자 트리 실행 중...", 60, 0, query)
 
         return try {
             val result = validateAndExecuteTree(tree, query, allDescriptions, executionId, startTime)
             val history = ExecutionHistory.createCompleted(
                 executionId, query, result, startTime,
-                logs = historyManager.getCurrentLogs(),
+                logs = historyManager.getLogs(executionId),
                 executionTree = result.executionTree?.let { with(ExecutionTreeMapper) { it.toResponse() } }
             )
             historyManager.addHistory(history)
             statePublisher.emitExecutionUpdate(history)
             statePublisher.emitProgress(executionId, ExecutionPhase.COMPLETED, "✅ 완료", 100, System.currentTimeMillis() - startTime)
-            historyManager.clearCurrentExecution()
+            ContextLayer.clearExecution(executionId)
+            historyManager.clearCurrentExecution(executionId)
             result
         } catch (e: Exception) {
             saveAndEmitFailedHistory(executionId, query, e.message ?: "실행 실패", startTime)
-            historyManager.clearCurrentExecution()
+            ContextLayer.clearExecution(executionId)
+            historyManager.clearCurrentExecution(executionId)
             ExecutionResult(result = "", error = e.message)
         }
     }
@@ -295,13 +315,8 @@ class Orchestrator(
         }
 
         val allDescriptions = layerManager.getAllLayerDescriptions()
-        val targetLayer = layerManager.findLayerByName(function)
-        return if (targetLayer != null) {
-            executeOnLayer(function, "process", args)
-        } else {
-            val allFunctions = allDescriptions.flatMap { it.functions }
-            "Unknown function: $function. Available: ${allFunctions.joinToString(", ")}"
-        }
+        val allFunctions = allDescriptions.flatMap { it.functions }
+        return "Unknown function: $function. Available: ${allFunctions.joinToString(", ")}"
     }
 
     suspend fun close() {
@@ -344,7 +359,7 @@ class Orchestrator(
         logger.info("🚀 [Orchestrator] 트리 실행 시작...")
         statePublisher.emitProgressAsync(executionId, ExecutionPhase.TREE_EXECUTION, "⚡ 작업 실행 중...", 60, System.currentTimeMillis() - startTime)
 
-        val executionContext = historyManager.getCurrentExecution()!!
+        val executionContext = historyManager.getCurrentExecution(executionId)!!
         val result = treeExecutor.executeTree(treeToExecute, executionContext)
 
         logger.info("✅ [Orchestrator] 트리 실행 완료")
@@ -359,7 +374,7 @@ class Orchestrator(
     ): ExecutionHistory {
         val failedHistory = ExecutionHistory.createFailed(
             executionId, query, error, startTime,
-            logs = historyManager.getCurrentLogs()
+            logs = historyManager.getLogs(executionId)
         )
         historyManager.addHistory(failedHistory)
         statePublisher.emitExecutionUpdate(failedHistory)
@@ -371,16 +386,3 @@ class Orchestrator(
  * src/main/kotlin 아래 .kt 파일을 스캔하여 "ClassName -> relative/path/to/ClassName.kt" 인덱스를 반환.
  * LLM이 경로를 추측하지 않아도 되도록 projectContext에 주입.
  */
-private fun buildKotlinFileIndex(workingDir: String): String {
-    val root = java.io.File(workingDir, "src/main/kotlin")
-    if (!root.exists()) return ""
-    return root.walkTopDown()
-        .filter { it.isFile && it.extension == "kt" }
-        .map { file ->
-            val rel = file.relativeTo(java.io.File(workingDir)).path
-            "${file.nameWithoutExtension}:$rel"
-        }
-        .sorted()
-        .take(60)
-        .joinToString(", ")
-}

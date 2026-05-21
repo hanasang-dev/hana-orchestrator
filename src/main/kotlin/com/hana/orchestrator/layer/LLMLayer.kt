@@ -28,6 +28,7 @@ class LLMLayer(
      * @param query 사용자 요청
      * @return LLM이 생성한 답변
      */
+    @Shared
     @LayerFunction
     suspend fun answerDirectly(query: String): String {
         return modelSelectionStrategy.selectClientForGenerateDirectAnswer()
@@ -45,6 +46,7 @@ class LLMLayer(
      * @param query 수행할 작업 (요약, 번역, 함수 추가, 코드 생성 등)
      * @return LLM이 생성한 결과 (텍스트 또는 소스코드)
      */
+    @Shared
     @LayerFunction
     suspend fun analyze(context: String, query: String): String {
         val combinedQuery = """
@@ -62,6 +64,11 @@ class LLMLayer(
             }
     }
 
+    override suspend fun approvalPreview(function: String, args: Map<String, Any>): ApprovalPreview {
+        // analyze / answerDirectly 는 외부 상태를 변경하지 않으므로 승인 불필요
+        return ApprovalPreview(path = function, oldContent = null, newContent = "", kind = ApprovalKind.READ_ONLY)
+    }
+
     override suspend fun describe(): LayerDescription {
         return LLMLayer_Description.layerDescription
     }
@@ -77,7 +84,7 @@ class LLMLayer(
                 val query = (args["query"] as? String) ?: (args["message"] as? String) ?: ""
                 analyze(context, query)
             }
-            else -> "Unknown function: $function. Available: answerDirectly, analyze"
+            else -> throw IllegalArgumentException("Unknown function: $function. Available: answerDirectly, analyze")
         }
     }
 }

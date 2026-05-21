@@ -11,10 +11,12 @@ import com.hana.orchestrator.orchestrator.JobRepository
 import com.hana.orchestrator.orchestrator.JobScheduler
 import com.hana.orchestrator.presentation.controller.HealthController
 import com.hana.orchestrator.presentation.controller.LayerController
+import com.hana.orchestrator.presentation.controller.McpController
 import com.hana.orchestrator.presentation.controller.MetricsController
 import com.hana.orchestrator.presentation.controller.ServiceController
 import com.hana.orchestrator.presentation.controller.ExecutionWebSocketController
 import com.hana.orchestrator.orchestrator.TreeRepository
+import com.hana.orchestrator.presentation.controller.SessionController
 import com.hana.orchestrator.presentation.controller.TreeController
 import com.hana.orchestrator.service.ServiceInfo
 import io.ktor.serialization.kotlinx.json.*
@@ -87,6 +89,8 @@ class ServerConfigurator(
                 ApprovalController(orchestrator.approvalGate).configureRoutes(this)
                 ClarificationController(orchestrator.clarificationGate).configureRoutes(this)
                 MetricsController(orchestrator).configureRoutes(this)
+                SessionController(orchestrator).configureRoutes(this)
+                McpController(orchestrator, jobRepository, jobScheduler).configureRoutes(this)
             }
         }
     }

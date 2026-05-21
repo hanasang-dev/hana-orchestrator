@@ -5,6 +5,8 @@ import com.hana.orchestrator.llm.LLMProvider
 import com.hana.orchestrator.llm.OllamaLLMClient
 import com.hana.orchestrator.llm.config.LLMConfig
 import com.hana.orchestrator.llm.LLMTaskComplexity
+import com.hana.orchestrator.llm.embedding.EmbeddingClient
+import com.hana.orchestrator.llm.embedding.LayerEmbeddingIndex
 
 /**
  * LLM 클라이언트 팩토리
@@ -20,26 +22,27 @@ import com.hana.orchestrator.llm.LLMTaskComplexity
 interface LLMClientFactory {
     /**
      * 복잡도에 따라 적절한 LLM 클라이언트를 생성
-     * 
+     *
      * @param complexity 작업 복잡도
      * @return 새로 생성된 LLM 클라이언트 인스턴스
      */
     fun createClient(complexity: LLMTaskComplexity): LLMClient
-    
+
     /**
      * 간단한 작업용 클라이언트 생성
      */
     fun createSimpleClient(): LLMClient
-    
+
     /**
      * 중간 작업용 클라이언트 생성
      */
     fun createMediumClient(): LLMClient
-    
+
     /**
      * 복잡한 작업용 클라이언트 생성
      */
     fun createComplexClient(): LLMClient
+
 }
 
 /**
@@ -52,6 +55,11 @@ interface LLMClientFactory {
 class DefaultLLMClientFactory(
     private val config: LLMConfig
 ) : LLMClientFactory {
+
+    // 임베딩 인덱스 — 싱글톤 공유 (클라이언트는 매 요청마다 새로 생성, 인덱스만 공유)
+    private val embeddingClient = EmbeddingClient(baseUrl = config.mediumModelBaseUrl)
+    private val embeddingIndex = LayerEmbeddingIndex(embeddingClient, topK = 5)
+
     
     override fun createClient(complexity: LLMTaskComplexity): LLMClient {
         return when (complexity) {
@@ -73,14 +81,25 @@ class DefaultLLMClientFactory(
     }
     
     override fun createMediumClient(): LLMClient {
-        return createClientByProvider(
-            provider = config.mediumProvider,
-            modelId = config.mediumModelId,
-            contextLength = config.mediumModelContextLength,
-            baseUrl = config.mediumModelBaseUrl,
-            apiKey = config.mediumApiKey,
-            complexityName = "MEDIUM"
-        )
+        // 매 요청마다 새 클라이언트 생성 (koog OllamaClient 코루틴 스코프 격리)
+        // 임베딩 인덱스는 싱글톤 공유 — 첫 decideNextAction 호출 시 자동 빌드 후 재사용
+        return if (config.mediumProvider == LLMProvider.OLLAMA) {
+            OllamaLLMClient(
+                config = config,
+                modelId = config.mediumModelId,
+                contextLength = config.mediumModelContextLength,
+                baseUrl = config.mediumModelBaseUrl
+            ).also { it.setEmbeddingIndex(embeddingIndex) }
+        } else {
+            createClientByProvider(
+                provider = config.mediumProvider,
+                modelId = config.mediumModelId,
+                contextLength = config.mediumModelContextLength,
+                baseUrl = config.mediumModelBaseUrl,
+                apiKey = config.mediumApiKey,
+                complexityName = "MEDIUM"
+            )
+        }
     }
     
     override fun createComplexClient(): LLMClient {

@@ -1,6 +1,7 @@
 package com.hana.orchestrator.layer
 
 import com.hana.orchestrator.orchestrator.CandidateRegistry
+import kotlinx.coroutines.CancellationException
 import java.io.File
 
 /**
@@ -63,17 +64,20 @@ class CoreEvaluationLayer : CommonLayerInterface {
         val executionId = java.util.UUID.randomUUID().toString()
         val startTime = System.currentTimeMillis()
 
-        // DefaultReActStrategy 내부에서 getCurrentExecution()!! 을 사용하므로
+        // DefaultReActStrategy 내부에서 getCurrentExecution(executionId)!! 을 사용하므로
         // execute() 호출 전에 반드시 currentExecution을 세팅해야 함
         val runningHistory = com.hana.orchestrator.domain.entity.ExecutionHistory.createRunning(executionId, query, startTime)
         ctx.historyManager.setCurrentExecution(runningHistory)
 
         val result = try {
             executor.execute(query, executionId, startTime)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return "ERROR: 시나리오 실행 실패: ${e.message}"
         } finally {
-            ctx.historyManager.clearCurrentExecution()
+            ContextLayer.clearExecution(executionId)
+            ctx.historyManager.clearCurrentExecution(executionId)
         }
 
         val durationMs = System.currentTimeMillis() - startTime
@@ -165,7 +169,7 @@ class CoreEvaluationLayer : CommonLayerInterface {
      *
      * 각 스냅샷 파일의 라인 수, 주요 함수 목록, 최신 rc와의 diff 요약을 출력.
      *
-     * @param name 평가할 대상 이름 (예: "DefaultReActStrategy", "GreeterLayer")
+     * @param name 평가할 대상 이름 (예: "DefaultReActStrategy", "EchoLayer")
      * @return 마크다운 형식의 평가 보고서
      */
     @LayerFunction
@@ -229,7 +233,7 @@ class CoreEvaluationLayer : CommonLayerInterface {
      *
      * 적용 후 컴파일 확인 → 런타임 레이어 교체 순으로 진행하세요.
      *
-     * @param name         대상 이름 (예: "DefaultReActStrategy", "GreeterLayer")
+     * @param name         대상 이름 (예: "DefaultReActStrategy", "EchoLayer")
      * @param snapshotFile 반영할 스냅샷 파일 경로 (.hana/candidates/... 경로)
      * @return 성공 메시지 또는 에러
      */
@@ -255,7 +259,7 @@ class CoreEvaluationLayer : CommonLayerInterface {
 원본 백업: ${backup.path}
 적용 파일: ${targetFile.path}
 
-[필수후속] 소스 반영 완료 — 컴파일 후 레이어 교체 필수. finish 불가."""
+다음 단계: 컴파일 후 레이어 교체 필수."""
     }
 
     // ── 내부 헬퍼 ────────────────────────────────────────────────────────────
@@ -312,7 +316,7 @@ class CoreEvaluationLayer : CommonLayerInterface {
                 val snapshotFile = args["snapshotFile"] as? String ?: return "ERROR: snapshotFile 필수"
                 applyCandidate(name, snapshotFile)
             }
-            else -> "Unknown function: $function. Available: runScenario, listScenarioResults, compareScenarioResults, listRcCandidates, evaluateReport, applyCandidate"
+            else -> throw IllegalArgumentException("Unknown function: $function. Available: runScenario, listScenarioResults, compareScenarioResults, listRcCandidates, evaluateReport, applyCandidate")
         }
     }
 }

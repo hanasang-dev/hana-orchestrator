@@ -1,6 +1,5 @@
 package com.hana.orchestrator.orchestrator.core
 
-import com.hana.orchestrator.data.mapper.ExecutionTreeMapper
 import com.hana.orchestrator.data.model.response.ExecutionNodeResponse
 import com.hana.orchestrator.data.model.response.ExecutionTreeResponse
 import com.hana.orchestrator.domain.entity.ExecutionResult
@@ -14,7 +13,6 @@ import com.hana.orchestrator.llm.strategy.ModelSelectionStrategy
 import com.hana.orchestrator.llm.useSuspend
 import com.hana.orchestrator.presentation.mapper.ExecutionTreeMapper as PresentationMapper
 import com.hana.orchestrator.presentation.model.execution.ExecutionPhase
-import com.hana.orchestrator.presentation.model.execution.ExecutionTreeNodeResponse
 import com.hana.orchestrator.orchestrator.ExecutionHistoryManager
 import com.hana.orchestrator.orchestrator.ExecutionStatePublisher
 import com.hana.orchestrator.orchestrator.createOrchestratorLogger
@@ -30,9 +28,8 @@ import com.hana.orchestrator.orchestrator.createOrchestratorLogger
  * 종료 조건 (우선순위 순):
  * 1. LLM이 finish 반환 → 정상 완료
  * 2. 중복 루프 감지 → 이미 완료한 작업을 또 제안
- * 3. 에러 후 동일 트리 반복 → 에러 재시도 루프
- * 4. 연속 에러 N회 → 근본적인 실패 상태
- * 5. absoluteMaxSteps 도달 → runaway 안전망 (마지막 수단)
+ * 3. 연속 에러 N회 → 근본적인 실패 상태 (에러 후 재시도 루프도 이로 처리)
+ * 4. absoluteMaxSteps 도달 → runaway 안전망 (마지막 수단)
  */
 class DefaultReActStrategy(
     private val layerManager: LayerManager,
@@ -47,24 +44,72 @@ class DefaultReActStrategy(
     private val absoluteMaxSteps = 200
     /** 이 횟수만큼 연속으로 ERROR 결과가 나오면 복구 불가 상태로 판단하고 중단 */
     private val maxConsecutiveErrors = 3
-    /** 이 글자 수를 초과하는 스텝 결과는 context store에 저장하고 히스토리엔 키만 남김 */
-    private val compressThreshold = 1500
+    /** finish 가드 — 이 횟수까지만 LLM 충족 판정으로 차단. 초과 시 정상 finish 허용 (무한루프 방지) */
+    private val maxFinishBlocks = 2
+    /**
+     * 전체 stepHistory 추정 문자 수가 이 값 초과 시 오래된 스텝을 요약 압축.
+     * 4자 ≈ 1토큰 기준, 모델 contextLength(32768토큰)의 약 40% = 13,000자로 여유 확보.
+     * 이 값은 contextLength에 비례해야 하므로, 모델 변경 시 함께 조정.
+     */
+    private val historyCompressThresholdChars = 13_000
     private val logger = createOrchestratorLogger(DefaultReActStrategy::class.java, historyManager)
+
+    /**
+     * stepHistory 총 문자 수 추정 (토큰 오버플로 감지용)
+     */
+    private fun estimateHistoryChars(stepHistory: List<ReActStep>): Int =
+        stepHistory.sumOf { s ->
+            (s.tree?.rootNodes?.joinToString(", ") { "${it.layerName}.${it.function}" }?.length ?: 0) +
+            s.result.length + s.reasoning.length + 40
+        }
+
+    /**
+     * 오래된 스텝을 LLM 요약으로 압축.
+     * 최신 keepRecent 개 스텝은 원본 유지, 나머지를 단일 요약 스텝으로 대체.
+     * best-effort: 실패 시 원본 유지.
+     */
+    private suspend fun compressHistory(
+        stepHistory: MutableList<ReActStep>,
+        keepRecent: Int = 5
+    ) {
+        if (stepHistory.size <= keepRecent) return
+        val toCompress = stepHistory.dropLast(keepRecent)
+        val kept = stepHistory.takeLast(keepRecent)
+        try {
+            val client = modelSelectionStrategy.selectClientForSummarizeHistory()
+            val summary = client.useSuspend { it.summarizeHistory(toCompress) }
+            val summaryStep = ReActStep(
+                stepNumber = toCompress.first().stepNumber,
+                reasoning = "[압축 요약] 스텝 ${toCompress.first().stepNumber}~${toCompress.last().stepNumber}",
+                tree = null,
+                result = summary,
+                successfulFunctions = toCompress.flatMap { it.successfulFunctions }.distinct()
+            )
+            stepHistory.clear()
+            stepHistory.add(summaryStep)
+            stepHistory.addAll(kept)
+            logger.info("🗜️ [ReAct] 히스토리 압축: ${toCompress.size}개 스텝 → 요약 1개 + 최근 ${kept.size}개 유지")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e  // 코루틴 취소 전파
+        } catch (e: Exception) {
+            logger.warn("⚠️ [ReAct] 히스토리 압축 실패 (원본 유지): ${e.message}")
+        }
+    }
 
     /**
      * 스텝 결과가 크면 context store에 저장. 프롬프트 빌더가 키 참조로 렌더링함.
      * 실패해도 루프에 영향 없음 (best-effort).
      */
-    private suspend fun storeStepResult(stepNumber: Int, result: String) {
-        if (result.length > compressThreshold) {
-            try {
-                layerManager.executeOnLayer(
-                    "context", "put",
-                    mapOf("key" to "step:$stepNumber:result", "value" to result)
-                )
-            } catch (e: Exception) {
-                logger.warn("⚠️ [ReAct] context store 저장 실패 (무시): ${e.message}")
-            }
+    private suspend fun storeStepResult(executionId: String, stepNumber: Int, result: String) {
+        try {
+            layerManager.executeOnLayerInternal(
+                "context", "put",
+                mapOf("key" to "step_${executionId}_${stepNumber}_result", "value" to result)
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("⚠️ [ReAct] context store 저장 실패 (무시): ${e.message}")
         }
     }
 
@@ -99,16 +144,6 @@ class DefaultReActStrategy(
         is JsonPrimitive -> e.content  // JsonNull도 JsonPrimitive의 서브클래스
     }
 
-    /** 프레젠테이션 트리 노드에서 args 포함 식별 키 목록 수집 (루트 + children 재귀) */
-    private fun collectAllNodeFunctions(nodes: List<ExecutionTreeNodeResponse>?): List<String> {
-        if (nodes == null) return emptyList()
-        return nodes.flatMap { node ->
-            val argsStr = node.args.entries.sortedBy { it.key }
-                .joinToString(",") { (k, v) -> "$k=$v" }
-            listOf("${node.layerName}.${node.function}($argsStr)") + collectAllNodeFunctions(node.children)
-        }
-    }
-
     /** LLM 데이터 트리 노드에서 args 포함 식별 키 목록 수집 (루트 + children 재귀) */
     private fun collectLLMNodeFunctions(nodes: List<ExecutionNodeResponse>): List<String> {
         return nodes.flatMap { node ->
@@ -117,54 +152,44 @@ class DefaultReActStrategy(
     }
 
     /**
-     * 스텝 결과에서 "다음 단계:" 힌트 파싱
-     * 형식: layerName="X", function="Y"
-     * 이미 실행된 함수는 제외 (doneFunctions)
-     */
-    private fun parseNextStepHint(result: String, doneFunctions: Set<String>): Pair<String, String>? {
-        val match = Regex("""다음 단계: layerName="([^"]+)", function="([^"]+)"""").find(result) ?: return null
-        val layerName = match.groupValues[1]
-        val function = match.groupValues[2]
-        val key = "$layerName.$function"
-        return if (key !in doneFunctions) Pair(layerName, function) else null
-    }
-
-    /**
-     * 스텝 결과에서 "[필수후속]" 힌트 파싱 → 미실행 필수 후속 단계 반환
-     * 형식: [필수후속] ... layerName.function(key="value") ...
-     * 이미 실행된 함수는 제외 (doneFunctions)
-     */
-    private fun parseRequiredFollowUpHint(
-        result: String,
-        doneFunctions: Set<String>
-    ): Triple<String, String, Map<String, String>>? {
-        if (!result.contains("[필수후속]")) return null
-        val match = Regex("""\[필수후속\][^\n]*?(\w+)\.(\w+)\(([^)]*)\)""").find(result) ?: return null
-        val layerName = match.groupValues[1]
-        val function = match.groupValues[2]
-        val argsRaw = match.groupValues[3]
-        val fnKey = "$layerName.$function"
-        if (fnKey in doneFunctions) return null
-        val args = mutableMapOf<String, String>()
-        Regex("""(\w+)="([^"]*)"""").findAll(argsRaw).forEach { m ->
-            args[m.groupValues[1]] = m.groupValues[2]
-        }
-        return Triple(layerName, function, args)
-    }
-
-    /**
      * ReAct 루프 실행.
      * 종료는 의미적 감지에 맡기고, absoluteMaxSteps는 runaway 안전망으로만 사용.
+     *
+     * HTN B2: primary entry — Task 기반. CompoundTask 의 query 를 LLM 프롬프트로 사용.
+     * PrimitiveTask 단독으로 들어오면 description 을 query 로 취급 (예외 경로, 일반적이지 X).
      */
     override suspend fun execute(
-        query: String,
+        task: com.hana.orchestrator.orchestrator.core.task.Task,
         executionId: String,
         startTime: Long,
-        projectContext: Map<String, String>
+        projectContext: Map<String, String>,
+        isScheduled: Boolean
     ): ExecutionResult {
+        val query: String = when (task) {
+            is com.hana.orchestrator.orchestrator.core.task.CompoundTask -> task.query
+            is com.hana.orchestrator.orchestrator.core.task.PrimitiveTask -> task.description
+        }
         val stepHistory = mutableListOf<ReActStep>()
         var step = 0
         var consecutiveErrors = 0
+
+        // 세션 컨텍스트 조회 (best-effort — 없어도 동작)
+        val sessionContext = try {
+            layerManager.executeOnLayerInternal("session", "currentContext")
+                .takeIf { it.isNotBlank() && !it.startsWith("ERROR") } ?: ""
+        } catch (e: Exception) { "" }
+        val enrichedProjectContext = if (sessionContext.isNotBlank())
+            projectContext + mapOf("_sessionContext" to sessionContext)
+        else projectContext
+        // 필수후속 시도 추적 — REJECTED/실패 포함. doneFunctionNames에 합산하여 무한 재시도 방지
+        val attemptedFollowUps = mutableSetOf<String>()
+        // 병렬 요청 시 historyManager 공유 상태 충돌 방지 — 실행 시작 시 한 번만 캡처
+        val currentExecution = historyManager.getCurrentExecution(executionId)
+            ?: return ExecutionResult(
+                result = "",
+                error = "No active execution context — concurrent request may have overwritten state",
+                stepHistory = emptyList()
+            )
 
         while (true) {
             // 매 스텝마다 갱신 — hotLoad로 추가된 레이어도 즉시 반영
@@ -198,90 +223,88 @@ class DefaultReActStrategy(
             // 진행률: 스텝마다 5%씩 올라가다 85%에서 수렴 (작업량 불확정이므로 점근)
             val progressPct = minOf(15 + step * 5, 85)
             logger.info("🔄 [ReAct] 스텝 #$step 시작")
-            historyManager.addLogToCurrent("🔄 ReAct 스텝 #$step")
+            historyManager.addLogTo(executionId, "🔄 ReAct 스텝 #$step")
             statePublisher.emitProgress(
                 executionId, ExecutionPhase.TREE_EXECUTION,
                 "🤔 스텝 #$step 결정 중...", progressPct, System.currentTimeMillis() - startTime
             )
 
-            // 직전 스텝 결과의 "다음 단계:" 힌트 → LLM 없이 자동 실행
+            // @RequiresSelfAction 어노테이션 기반 후속 액션 감지 — 도메인 불변조건 보호
+            // 성공한 함수 중 @RequiresSelfAction 어노테이션이 있고 아직 후속 미실행인 경우 자동 실행
             val doneFunctionNames = stepHistory.flatMap { it.successfulFunctions }
-                .map { it.substringBefore("(") }.toSet()
-            val autoStep = stepHistory.lastOrNull()?.result?.let { parseNextStepHint(it, doneFunctionNames) }
-            if (autoStep != null) {
-                val (layerName, function) = autoStep
-                logger.info("🔜 [ReAct] '다음 단계' 자동 실행: $layerName.$function")
-                val autoNode = ExecutionNodeResponse(layerName, function, buildJsonObject {})
-                val autoLlmTree = ExecutionTreeResponse(rootNodes = listOf(autoNode))
-                val autoDomainTree = try {
-                    ExecutionTreeMapper.toExecutionTree(autoLlmTree)
+                .map { it.substringBefore("(") }.toSet() + attemptedFollowUps
+            val pendingSelfAction = stepHistory
+                .asSequence()
+                .flatMap { it.successfulFunctions.asSequence() }
+                .mapNotNull { funcKey ->
+                    val layerName = funcKey.substringBefore(".")
+                    val functionName = funcKey.substringAfter(".").substringBefore("(")
+                    val requiredFn = layerManager.findRequiredSelfAction(layerName, functionName)
+                        ?: return@mapNotNull null
+                    val selfActionKey = "$layerName.$requiredFn"
+                    if (selfActionKey in doneFunctionNames) return@mapNotNull null
+                    Pair(layerName, requiredFn)
+                }
+                .firstOrNull()
+            if (pendingSelfAction != null) {
+                val (saLayerName, saFunction) = pendingSelfAction
+                attemptedFollowUps.add("$saLayerName.$saFunction")
+                logger.info("🔜 [ReAct] @RequiresSelfAction 자동 실행: $saLayerName.$saFunction")
+                val saTask = com.hana.orchestrator.orchestrator.core.task.CompoundTask(
+                    description = "auto-selfaction $saLayerName.$saFunction",
+                    query = query,
+                    subtasks = listOf(
+                        com.hana.orchestrator.orchestrator.core.task.PrimitiveTask(
+                            description = "$saLayerName.$saFunction",
+                            layerName = saLayerName,
+                            function = saFunction
+                        )
+                    )
+                )
+                val saDomainTree = try {
+                    com.hana.orchestrator.orchestrator.core.task.TaskTreeMapper.toExecutionTree(saTask)
                 } catch (e: Exception) {
-                    logger.warn("⚠️ [ReAct] '다음 단계' 트리 변환 실패: ${e.message}")
-                    stepHistory.add(ReActStep(step, "auto:$layerName.$function", null, "ERROR(auto-next): ${e.message}"))
+                    logger.warn("⚠️ [ReAct] @RequiresSelfAction 트리 변환 실패: ${e.message}")
+                    stepHistory.add(ReActStep(step, "auto-selfaction:$saLayerName.$saFunction", null, "ERROR(self-action): ${e.message}"))
                     consecutiveErrors++
                     continue
                 }
-                val autoExecResult = try {
-                    treeExecutor.executeTree(autoDomainTree, historyManager.getCurrentExecution()!!)
+                val saExecResult = try {
+                    treeExecutor.executeTask(saTask, currentExecution)
                 } catch (e: Exception) {
-                    logger.warn("⚠️ [ReAct] '다음 단계' 실행 실패: ${e.message}")
+                    logger.warn("⚠️ [ReAct] @RequiresSelfAction 실행 실패: ${e.message}")
                     null
                 }
-                val autoResult = autoExecResult?.result ?: "ERROR(auto-next): 실행 실패"
-                val autoSuccessful = autoExecResult?.context?.completedNodes
-                    ?.filter { it.isSuccess && !it.result.orEmpty().startsWith("ERROR") }
+                val saResult = saExecResult?.result ?: "ERROR(self-action): 실행 실패"
+                val saSuccessful = saExecResult?.context?.completedNodes
+                    ?.filter { it.isSuccess }
                     ?.map { nodeKey(it.node.layerName, it.node.function, it.node.args) }
                     ?: emptyList()
-                logger.info("📋 [ReAct] 스텝 #$step (자동) 결과: ${autoResult.take(120)}")
-                storeStepResult(step, autoResult)
-                val autoPresentation = with(PresentationMapper) { autoDomainTree.toResponse() }
-                stepHistory.add(ReActStep(step, "자동 실행: $layerName.$function", autoPresentation, autoResult, autoSuccessful))
-                if (autoResult.startsWith("ERROR")) consecutiveErrors++ else consecutiveErrors = 0
+                logger.info("📋 [ReAct] 스텝 #$step (@RequiresSelfAction) 결과: ${saResult.take(120)}")
+                storeStepResult(executionId, step, saResult)
+                val saPresentation = with(PresentationMapper) { saDomainTree.toResponse() }
+                stepHistory.add(ReActStep(step, "자동 실행(@RequiresSelfAction): $saLayerName.$saFunction", saPresentation, saResult, saSuccessful))
+                if (saExecResult == null || saExecResult.context?.failedNodes?.isNotEmpty() == true) consecutiveErrors++ else consecutiveErrors = 0
                 continue
             }
 
-            // 히스토리 전체에서 [필수후속] 힌트 파싱 → 미실행 필수 후속 단계 자동 실행
-            val requiredFollowUp = stepHistory
-                .asSequence()
-                .mapNotNull { parseRequiredFollowUpHint(it.result, doneFunctionNames) }
-                .firstOrNull()
-            if (requiredFollowUp != null) {
-                val (rfLayerName, rfFunction, rfArgs) = requiredFollowUp
-                logger.info("🔜 [ReAct] '[필수후속]' 자동 실행: $rfLayerName.$rfFunction($rfArgs)")
-                val rfArgsJson = buildJsonObject { rfArgs.forEach { (k, v) -> put(k, JsonPrimitive(v)) } }
-                val rfNode = ExecutionNodeResponse(rfLayerName, rfFunction, rfArgsJson)
-                val rfLlmTree = ExecutionTreeResponse(rootNodes = listOf(rfNode))
-                val rfDomainTree = try {
-                    ExecutionTreeMapper.toExecutionTree(rfLlmTree)
-                } catch (e: Exception) {
-                    logger.warn("⚠️ [ReAct] '[필수후속]' 트리 변환 실패: ${e.message}")
-                    stepHistory.add(ReActStep(step, "auto:[필수후속]:$rfLayerName.$rfFunction", null, "ERROR(required-followup): ${e.message}"))
-                    consecutiveErrors++
-                    continue
-                }
-                val rfExecResult = try {
-                    treeExecutor.executeTree(rfDomainTree, historyManager.getCurrentExecution()!!)
-                } catch (e: Exception) {
-                    logger.warn("⚠️ [ReAct] '[필수후속]' 실행 실패: ${e.message}")
-                    null
-                }
-                val rfResult = rfExecResult?.result ?: "ERROR(required-followup): 실행 실패"
-                val rfSuccessful = rfExecResult?.context?.completedNodes
-                    ?.filter { it.isSuccess && !it.result.orEmpty().startsWith("ERROR") }
-                    ?.map { nodeKey(it.node.layerName, it.node.function, it.node.args) }
-                    ?: emptyList()
-                logger.info("📋 [ReAct] 스텝 #$step ([필수후속] 자동) 결과: ${rfResult.take(120)}")
-                storeStepResult(step, rfResult)
-                val rfPresentation = with(PresentationMapper) { rfDomainTree.toResponse() }
-                stepHistory.add(ReActStep(step, "자동 실행([필수후속]): $rfLayerName.$rfFunction", rfPresentation, rfResult, rfSuccessful))
-                if (rfResult.startsWith("ERROR")) consecutiveErrors++ else consecutiveErrors = 0
-                continue
+            // 컨텍스트 한계 근접 시 오래된 스텝 압축 (LLM 호출 전)
+            if (estimateHistoryChars(stepHistory) > historyCompressThresholdChars) {
+                logger.info("🗜️ [ReAct] 히스토리 압축 트리거 (추정 ${estimateHistoryChars(stepHistory)}자 > ${historyCompressThresholdChars}자)")
+                compressHistory(stepHistory)
             }
 
             // LLM이 다음 액션 결정
             val decision = try {
                 modelSelectionStrategy.selectClientForReActDecision()
-                    .useSuspend { client -> client.decideNextAction(query, stepHistory, allDescriptions, projectContext) }
+                    .useSuspend { client ->
+                        client.decideNextAction(
+                            query, stepHistory, allDescriptions, enrichedProjectContext,
+                            executionId = executionId, stepNumber = step
+                        )
+                    }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e  // 코루틴 취소 전파 — Orchestrator.catch(CancellationException)이 처리
             } catch (e: Exception) {
                 logger.error("❌ [ReAct] LLM 결정 실패: ${e.message}")
                 val fallback = stepHistory.lastOrNull()?.result ?: ""
@@ -296,14 +319,50 @@ class DefaultReActStrategy(
 
             when (decision.action) {
                 "finish" -> {
+                    // step 0에서 result가 비어있으면 거부 (아무것도 안 한 채 빈 답변)
+                    // result가 있으면 허용 — LLM이 프롬프트 컨텍스트만으로 충분히 답변 가능한 경우
+                    if (stepHistory.isEmpty() && decision.result.isBlank()) {
+                        logger.warn("⚠️ [ReAct] step 0 finish 거부 — 빈 result")
+                        stepHistory.add(ReActStep(step, decision.reasoning, null,
+                            "답변 내용이 없습니다. 필요한 레이어를 실행하거나 result에 답변을 포함해 finish하세요."))
+                        continue
+                    }
                     val lastSuccessResult = stepHistory.lastOrNull { s ->
                         !s.result.startsWith("ERROR") && !s.result.startsWith("Unknown function")
                     }?.result
                     val finalResult = decision.result.ifEmpty { null }
                         ?: lastSuccessResult
                         ?: "작업 완료"
+
+                    // ── finish 가드: 원래 query 충족 여부 LLM 판정 ─────────────────────
+                    // 차단 횟수 한도 도달 전까지 satisfied=false 면 재시도 강제
+                    val finishBlocks = stepHistory.count { it.reasoning.startsWith("[finish-blocked") }
+                    if (finishBlocks < maxFinishBlocks) {
+                        val outcome = try {
+                            modelSelectionStrategy.selectClientForJudgeFinish()
+                                .useSuspend { it.judgeFinish(query, finalResult, stepHistory.toList()) }
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            logger.warn("⚠️ [ReAct] finish 판정 실패 (통과 처리): ${e.message}")
+                            null
+                        }
+                        if (outcome != null && !outcome.satisfied) {
+                            val blockNo = finishBlocks + 1
+                            logger.info("🚧 [ReAct] finish 차단 #$blockNo — missing=${outcome.missing.take(80)}")
+                            historyManager.addLogTo(executionId, "🚧 finish 차단 #$blockNo — ${outcome.missing.take(60)}")
+                            stepHistory.add(ReActStep(
+                                step,
+                                "[finish-blocked #$blockNo] ${outcome.reasoning}",
+                                null,
+                                "FINISH BLOCKED: 원래 query 미충족. 부족: ${outcome.missing}. 다른 접근으로 재시도하거나 정당화 후 finish."
+                            ))
+                            continue
+                        }
+                    }
+
                     logger.info("✅ [ReAct] 완료 (${step}스텝): ${finalResult.take(100)}")
-                    historyManager.addLogToCurrent("✅ ReAct 완료 (${step}스텝)")
+                    historyManager.addLogTo(executionId, "✅ ReAct 완료 (${step}스텝)")
                     statePublisher.emitProgress(
                         executionId, ExecutionPhase.COMPLETED, "✅ 완료", 100,
                         System.currentTimeMillis() - startTime
@@ -313,57 +372,50 @@ class DefaultReActStrategy(
 
                 "execute_tree" -> {
                     val llmTree = decision.tree
-                    if (llmTree == null) {
-                        logger.warn("⚠️ [ReAct] execute_tree: tree is null, 스킵")
-                        stepHistory.add(ReActStep(step, decision.reasoning, null, "ERROR(tree-null): tree is null"))
-                        consecutiveErrors++
+                    if (llmTree == null || llmTree.getActualRootNodes().isEmpty()) {
+                        logger.warn("⚠️ [ReAct] execute_tree: tree is null or empty, 스킵")
+                        stepHistory.add(ReActStep(step, decision.reasoning, null,
+                            "[재시도 필요] execute_tree를 선택했으나 tree.rootNodes가 비어 있습니다. " +
+                            "layerName(레이어명), function(함수명), args(파라미터)를 반드시 채워서 다시 시도하세요. " +
+                            "사용 가능한 레이어와 함수 목록을 확인하고 rootNodes에 최소 1개 이상의 노드를 포함하세요."))
+                        // consecutiveErrors 증가 안 함 — 포맷 오류는 실제 실행 에러가 아님
                         continue
                     }
 
-                    // 중복 루프 감지 1: 제안된 함수들이 전부 이미 성공 완료된 경우 강제 finish
-                    if (stepHistory.isNotEmpty()) {
-                        val doneFunctions = stepHistory.flatMap { it.successfulFunctions }.toSet()
-                        val proposed = collectLLMNodeFunctions(llmTree.getActualRootNodes()).toSet()
-                        if (proposed.isNotEmpty() && doneFunctions.containsAll(proposed)) {
-                            val finalResult = stepHistory
-                                .lastOrNull { !it.result.startsWith("ERROR") && !it.result.startsWith("Unknown function") && !it.result.startsWith("정보 부족") }
-                                ?.result ?: stepHistory.lastOrNull()?.result ?: "작업 완료"
-                            logger.info("🔁 [ReAct] 중복 루프 감지 → 강제 finish (이미 완료: $proposed)")
-                            return ExecutionResult(result = finalResult, stepHistory = stepHistory.toList())
-                        }
-                    }
-
-                    // 중복 루프 감지 2: 직전 스텝이 에러인데 동일 트리를 또 제안하는 경우 강제 finish
+                    // 중복 루프 감지: 직전 스텝과 동일한 루트 노드 제안 시 강제 finish
+                    // 누적 전체 history 비교는 오탐률 높음 — 직전 스텝만 비교 (연속 루프만 차단)
+                    // 자식 노드는 {{parent}} 치환 전/후 key가 달라 매칭 불가 → 루트만 검사
                     val lastStep = stepHistory.lastOrNull()
-                    if (lastStep?.result?.startsWith("ERROR") == true) {
-                        val lastFunctions = lastStep.tree?.rootNodes?.let { collectAllNodeFunctions(it) }?.toSet()
-                        val proposed = collectLLMNodeFunctions(llmTree.getActualRootNodes()).toSet()
-                        if (lastFunctions != null && lastFunctions == proposed) {
-                            val finalResult = stepHistory
-                                .lastOrNull { !it.result.startsWith("ERROR") }
-                                ?.result ?: "실행 실패"
-                            logger.info("🔁 [ReAct] 에러 후 동일 액션 반복 감지 → 강제 finish (반복: $proposed)")
-                            return ExecutionResult(result = finalResult, error = "에러 후 동일 액션 반복으로 중단", stepHistory = stepHistory.toList())
+                    if (lastStep != null) {
+                        val prevFunctions = lastStep.successfulFunctions.toSet()
+                        val proposed = llmTree.getActualRootNodes().map { llmNodeKey(it) }.toSet()
+                        if (proposed.isNotEmpty() && prevFunctions.containsAll(proposed)) {
+                            val lastData = lastStep.result
+                                .takeIf { !it.startsWith("ERROR") && !it.startsWith("Unknown function") }
+                                ?: stepHistory.lastOrNull { !it.result.startsWith("ERROR") }?.result
+                                ?: "작업 완료"
+                            logger.info("🔁 [ReAct] 중복 루프 감지 (직전 스텝 동일) → 마지막 결과 반환 (이미 완료: $proposed)")
+                            return ExecutionResult(result = lastData, stepHistory = stepHistory.toList())
                         }
                     }
 
-                    // LLM 트리(data layer) → 도메인 트리 변환
-                    val domainTree = try {
-                        ExecutionTreeMapper.toExecutionTree(llmTree)
+                    // LLM 응답 → Task (B4). ExecutionTree 는 TreeExecutor 내부에서 매핑.
+                    val task = try {
+                        com.hana.orchestrator.orchestrator.core.task.TaskTreeMapper.fromLLMResponse(llmTree, query)
                     } catch (e: Exception) {
-                        logger.warn("⚠️ [ReAct] 미니트리 변환 실패: ${e.message}")
-                        stepHistory.add(ReActStep(step, decision.reasoning, null, "ERROR(tree-convert): ${e.message}"))
+                        logger.warn("⚠️ [ReAct] LLM 응답 → Task 변환 실패: ${e.message}")
+                        stepHistory.add(ReActStep(step, decision.reasoning, null, "ERROR(task-convert): ${e.message}"))
                         consecutiveErrors++
                         continue
                     }
+                    val domainTree = com.hana.orchestrator.orchestrator.core.task.TaskTreeMapper.toExecutionTree(task)
 
                     val treeDesc = domainTree.rootNodes.joinToString(", ") { "${it.layerName}.${it.function}" }
                     logger.info("🌳 [ReAct] 스텝 #$step 미니트리 실행: [$treeDesc]")
-                    historyManager.addLogToCurrent("🌳 미니트리: [$treeDesc]")
+                    historyManager.addLogTo(executionId, "🌳 미니트리: [$treeDesc]")
 
                     val treeExecResult = try {
-                        val currentHistory = historyManager.getCurrentExecution()!!
-                        treeExecutor.executeTree(domainTree, currentHistory)
+                        treeExecutor.executeTask(task, currentExecution)
                     } catch (e: Exception) {
                         val errMsg = "ERROR(mini-tree): ${e.message}"
                         logger.warn("⚠️ [ReAct] 스텝 #$step 미니트리 오류: $errMsg")
@@ -371,17 +423,35 @@ class DefaultReActStrategy(
                     }
                     val stepResult = treeExecResult?.result ?: "ERROR(mini-tree): 실행 실패"
                     val successfulFunctions = treeExecResult?.context?.completedNodes
-                        ?.filter { it.isSuccess && !it.result.orEmpty().startsWith("ERROR") }
+                        ?.filter { it.isSuccess }
                         ?.map { nodeKey(it.node.layerName, it.node.function, it.node.args) }
                         ?: emptyList()
 
                     logger.info("📋 [ReAct] 스텝 #$step 결과: ${stepResult.take(120)}")
-                    historyManager.addLogToCurrent("📋 결과: ${stepResult.take(60)}")
-                    storeStepResult(step, stepResult)
+                    historyManager.addLogTo(executionId, "📋 결과: ${stepResult.take(60)}")
+                    storeStepResult(executionId, step, stepResult)
 
                     val presentationTree = with(PresentationMapper) { domainTree.toResponse() }
                     stepHistory.add(ReActStep(step, decision.reasoning, presentationTree, stepResult, successfulFunctions))
-                    if (stepResult.startsWith("ERROR")) consecutiveErrors++ else consecutiveErrors = 0
+                    if (treeExecResult == null || treeExecResult.context?.failedNodes?.isNotEmpty() == true) consecutiveErrors++ else consecutiveErrors = 0
+
+                    // 자동 완료 제거: 항상 LLM에게 다음 결정 요청
+                    // 이유: 자동 finish는 multi-step 작업을 조기 종료시킴
+                    // LLM이 결과를 보고 finish/execute_tree/ask 스스로 결정
+                }
+
+                "ask" -> {
+                    val question = decision.question.ifEmpty { decision.reasoning }
+                    logger.info("❓ [ReAct] 사용자 질문: $question")
+                    historyManager.addLogTo(executionId, "❓ 질문: ${question.take(60)}")
+                    val answer = if (isScheduled) {
+                        "[자율 실행] 사용자 확인 없이 자율 실행 중입니다. 스스로 가장 합리적인 선택을 결정하고 즉시 진행하세요. 추가 질문 없이 직접 실행하세요."
+                    } else {
+                        clarificationGate?.requestClarification(question) ?: ""
+                    }
+                    logger.info("💬 [ReAct] 답변: ${answer.take(80)}")
+                    stepHistory.add(ReActStep(step, decision.reasoning, null, "Q: $question\nA: $answer"))
+                    consecutiveErrors = 0
                 }
 
                 else -> {

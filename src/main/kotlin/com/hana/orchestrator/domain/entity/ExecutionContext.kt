@@ -1,9 +1,11 @@
 package com.hana.orchestrator.domain.entity
 
+import kotlinx.coroutines.CompletableDeferred
+
 /**
  * 실행 컨텍스트 - 전체 실행 상태 추적
  * SRP: 노드 실행 상태 추적 및 조회만 담당
- * 
+ *
  * OOP 원칙:
  * - 캡슐화: nodeResults는 private으로 보호
  * - SRP: 상태 추적과 조회만 담당
@@ -11,6 +13,23 @@ package com.hana.orchestrator.domain.entity
  */
 class ExecutionContext {
     private val nodeResults = mutableMapOf<String, NodeExecutionResult>()
+
+    /** {{nodeId:X}} 대기 지원 — 노드 완료 시 결과 전달 */
+    private val nodeDeferreds = mutableMapOf<String, CompletableDeferred<String>>()
+
+    /** 실행 전 모든 노드 ID 등록. {{nodeId:X}} 참조 노드가 완료될 때까지 대기 가능 */
+    fun registerNodes(nodeIds: Iterable<String>) {
+        nodeIds.forEach { id -> nodeDeferreds.getOrPut(id) { CompletableDeferred() } }
+    }
+
+    /** 노드 완료(성공/실패/스킵) 시 호출 — 대기 중인 참조자에게 결과 전달 */
+    fun completeNodeDeferred(nodeId: String, result: String) {
+        nodeDeferreds[nodeId]?.complete(result)
+    }
+
+    /** {{nodeId:X}} 치환 시 X가 완료될 때까지 코루틴 대기. 미등록 ID면 즉시 빈 문자열 반환 */
+    suspend fun awaitNodeResult(nodeId: String): String =
+        nodeDeferreds[nodeId]?.await() ?: ""
     
     // 캐싱된 계산 프로퍼티들
     private var _completedNodes: List<NodeExecutionResult>? = null

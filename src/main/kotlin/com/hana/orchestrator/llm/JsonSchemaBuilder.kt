@@ -191,14 +191,15 @@ internal object JsonSchemaBuilder {
      */
     fun buildReActDecisionSchema(availableLayerNames: List<String>): JsonObject {
         return createObjectSchema(
-            required = listOf("action", "reasoning"),
+            required = listOf("action", "reasoning", "result"),
             properties = mapOf(
                 "action" to createStringProperty(
-                    description = "수행할 액션: execute_tree(미니트리 실행) 또는 finish(완료)",
-                    enum = listOf("execute_tree", "finish")
+                    description = "수행할 액션: execute_tree(미니트리 실행), finish(완료), ask(사용자에게 추가 정보 요청)",
+                    enum = listOf("execute_tree", "finish", "ask")
                 ),
                 "tree" to buildExecutionTreeSchema(availableLayerNames),
-                "result" to createStringProperty("finish 시 최종 결과"),
+                "result" to createStringProperty("finish 시 최종 결과 (execute_tree/ask일 때는 빈 문자열)"),
+                "question" to createStringProperty("ask 시 사용자에게 할 구체적인 질문"),
                 "reasoning" to createStringProperty("이 결정의 이유")
             )
         )

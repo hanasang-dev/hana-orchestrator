@@ -59,6 +59,9 @@ class TextValidatorLayer : CommonLayerInterface {
         return "Valid: text='$text'"
     }
 
+    override suspend fun approvalPreview(function: String, args: Map<String, Any>): ApprovalPreview =
+        ApprovalPreview(path = "text-validator.$function", oldContent = null, newContent = "", kind = ApprovalKind.READ_ONLY)
+
     override suspend fun describe(): LayerDescription {
         return TextValidatorLayer_Description.layerDescription
     }
@@ -90,7 +93,7 @@ class TextValidatorLayer : CommonLayerInterface {
                 val failIf = (args["failIf"] as? Boolean) ?: false
                 conditionalValidate(text, failIf)
             }
-            else -> "Unknown function: $function. Available: validateLength, validatePattern, validateNotEmpty, validateContains, conditionalValidate"
+            else -> throw IllegalArgumentException("Unknown function: $function. Available: validateLength, validatePattern, validateNotEmpty, validateContains, conditionalValidate")
         }
     }
 }

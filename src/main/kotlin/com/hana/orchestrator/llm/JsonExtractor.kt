@@ -53,8 +53,8 @@ internal object JsonExtractor {
             throw IllegalArgumentException("LLM 응답에서 유효한 JSON을 찾을 수 없습니다. 응답: ${trimmed.take(200)}")
         }
 
-        // JS 스타일 주석 제거 → 잘못된 이스케이프 수정 → 유니코드 이스케이프 정규화
-        return normalizeUnicodeEscapes(sanitizeJsonEscapes(stripJsComments(extractedJson!!)))
+        // 불균형 ] 제거 → 깨진 키 수정 → JS 주석 제거 → 이스케이프 수정 → 유니코드 정규화
+        return normalizeUnicodeEscapes(sanitizeJsonEscapes(stripJsComments(fixBrokenKeys(fixUnbalancedBrackets(extractedJson!!)))))
     }
     
     /**
@@ -80,6 +80,67 @@ internal object JsonExtractor {
             }
         }
         return null
+    }
+
+    /**
+     * 배열 괄호 불균형 수정: `]` 과잉 시 끝에서부터 제거
+     * 예: `...]}]}` → `...]}` (rootNodes+outer 닫기만 남김)
+     * exaone3.5가 구조 끝에 여분의 `]` 를 추가하는 패턴을 수정
+     */
+    private fun fixUnbalancedBrackets(json: String): String {
+        // 문자열 리터럴 외부에서 [ 와 ] 균형 계산
+        var inString = false; var escaped = false; var arrBalance = 0
+        for (c in json) {
+            if (escaped) { escaped = false; continue }
+            if (c == '\\' && inString) { escaped = true; continue }
+            if (c == '"') { inString = !inString; continue }
+            if (inString) continue
+            when (c) { '[' -> arrBalance++; ']' -> arrBalance-- }
+        }
+        if (arrBalance >= 0) return json // 균형 맞음 또는 [ 과잉
+
+        // ] 이 [ 보다 많음: 끝에서부터 과잉 ] 제거
+        var toRemove = -arrBalance
+        val result = StringBuilder(json)
+        var i = result.length - 1
+        while (toRemove > 0 && i >= 0) {
+            if (result[i] == ']') { result.deleteCharAt(i); toRemove-- }
+            i--
+        }
+        return result.toString()
+    }
+
+    /**
+     * exaone3.5 등이 생성하는 깨진 JSON 패턴 수정
+     *
+     * 패턴 1: `" "key"` → `"key"` (키 앞에 공백+따옴표 붙는 현상)
+     * 패턴 2: `"key: ` → `"key": ` (키 닫는 따옴표 누락)
+     *   - 원리: 올바른 키 `"key":` 는 identifier 뒤에 `"` 가 와서 `:` 에 도달 못함
+     *          깨진 키 `"key:` 는 identifier 뒤에 바로 `:` 가 와서 매치됨
+     * 패턴 3: `} "key"` → `}, "key"` (닫힌 brace/bracket 뒤 콤마 누락)
+     */
+    private fun fixBrokenKeys(json: String): String {
+        var result = json
+
+        // 패턴 1: " "key" → "key"
+        result = result.replace(Regex("""(?<=[{,\n\r]\s*)" "([^"]+)""""), "\"$1")
+
+        // 패턴 2: "identifierKey: → "identifierKey":
+        // [a-zA-Z_$][a-zA-Z0-9_$]* 는 " 를 포함하지 않으므로, 올바른 "key": 는 매치 안 됨
+        result = result.replace(Regex(""""([a-zA-Z_${'$'}][a-zA-Z0-9_${'$'}]*)(\s*):""")) { mr ->
+            val key = mr.groupValues[1]
+            val spaces = mr.groupValues[2]
+            // 이미 올바른 닫힌 따옴표가 있는 경우 (key 앞에 " 가 없는 경우만 변환)
+            // extractBalanced 이후에 호출되므로 키 위치에서만 발생
+            "\"$key\"$spaces:"
+        }
+
+        // 패턴 3: } "key" 또는 ]\n  "key" → }, "key" (콤마 누락, 같은 줄/다음 줄 모두)
+        result = result.replace(Regex("""([}\]])([ \t]*\r?\n[ \t]*|[ \t]+)"([a-zA-Z])""")) { mr ->
+            "${mr.groupValues[1]},${mr.groupValues[2]}\"${mr.groupValues[3]}"
+        }
+
+        return result
     }
 
     /**

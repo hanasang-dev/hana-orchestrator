@@ -71,6 +71,9 @@ class TextTransformerLayer : CommonLayerInterface {
         }
     }
 
+    override suspend fun approvalPreview(function: String, args: Map<String, Any>): ApprovalPreview =
+        ApprovalPreview(path = "text-transformer.$function", oldContent = null, newContent = "", kind = ApprovalKind.READ_ONLY)
+
     override suspend fun describe(): LayerDescription {
         return TextTransformerLayer_Description.layerDescription
     }
@@ -111,7 +114,7 @@ class TextTransformerLayer : CommonLayerInterface {
                 val replacement = (args["replacement"] as? String) ?: (args["replace"] as? String) ?: ""
                 replace(text, search, replacement)
             }
-            else -> "Unknown function: $function. Available: toUpperCase, toLowerCase, reverse, addPrefix, addSuffix, truncate, replace"
+            else -> throw IllegalArgumentException("Unknown function: $function. Available: toUpperCase, toLowerCase, reverse, addPrefix, addSuffix, truncate, replace")
         }
     }
 }

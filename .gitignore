@@ -76,3 +76,6 @@ src/main/kotlin/com/hana/orchestrator/orchestrator/core/candidates/
 .hana/restart.sh
 .hana/trees/
 layer-registry.json
+
+# Claude Code worktrees
+.claude/worktrees/

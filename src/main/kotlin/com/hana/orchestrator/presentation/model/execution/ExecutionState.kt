@@ -39,7 +39,8 @@ data class ProgressUpdate(
     val phase: ExecutionPhase,
     val message: String,
     val progress: Int = 0,  // 0-100
-    val elapsedMs: Long = 0
+    val elapsedMs: Long = 0,
+    val query: String? = null
 )
 
 @Serializable

@@ -6,7 +6,7 @@ import com.hana.orchestrator.llm.LLMClient
  * 모델 선택 전략 인터페이스
  * 작업 복잡도에 따라 적절한 LLM 클라이언트를 선택
  *
- * KSP 프로세서가 LLMClient 인터페이스의 @LLMTask 어노테이션을 읽어서
+ * KSP 프로세서가 LLMClient 인터페이스의 @LLMTier 어노테이션을 읽어서
  * 이 인터페이스의 구현체를 자동 생성함
  */
 interface ModelSelectionStrategy {
@@ -19,6 +19,16 @@ interface ModelSelectionStrategy {
      * reviewTree 작업용 클라이언트 선택
      */
     fun selectClientForReviewTree(): LLMClient
+
+    /**
+     * judgeFinish (finish 시점 골 충족 판정) 작업용 클라이언트 선택
+     */
+    fun selectClientForJudgeFinish(): LLMClient
+
+    /**
+     * summarizeHistory (ReAct stepHistory 압축 요약) 작업용 클라이언트 선택
+     */
+    fun selectClientForSummarizeHistory(): LLMClient
 
     /**
      * decideNextAction (ReAct) 작업용 클라이언트 선택

@@ -86,8 +86,8 @@ class ApplicationBootstrap {
         
         // 명령줄 인자 파싱
         val cliPort = portManager.parsePort(args)
-        val skipCleanup = args.contains("--skip-cleanup")
-        
+        val doCleanup = args.contains("--cleanup")
+
         // 로컬 Ollama 인스턴스 확인 및 준비
         // 확장성: OLLAMA provider만 확인, 향후 클라우드 API는 확인 불필요
         val ollamaUrls = mutableListOf<String>()
@@ -119,8 +119,8 @@ class ApplicationBootstrap {
             logger.info("ℹ️ Ollama provider를 사용하지 않습니다 (클라우드 API 사용 중)")
         }
         
-        // 기존 서비스 정리
-        if (!skipCleanup) {
+        // 기존 서비스 정리 (--cleanup 플래그 명시 시에만)
+        if (doCleanup) {
             logger.info("🧹 Checking for existing Hana services...")
             val cleanupResult = PortAllocator.cleanupHanaPorts()
             logger.info("✅ Cleanup completed: ${cleanupResult.successfulShutdowns}/${cleanupResult.foundServices} services stopped")

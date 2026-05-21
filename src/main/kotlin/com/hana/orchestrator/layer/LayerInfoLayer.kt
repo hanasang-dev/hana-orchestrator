@@ -96,6 +96,9 @@ class LayerInfoLayer : CommonLayerInterface {
         return result.toString().trim()
     }
 
+    override suspend fun approvalPreview(function: String, args: Map<String, Any>): ApprovalPreview =
+        ApprovalPreview(path = "layer-info.$function", oldContent = null, newContent = "", kind = ApprovalKind.READ_ONLY)
+
     override suspend fun describe(): LayerDescription {
         return LayerInfoLayer_Description.layerDescription
     }
@@ -107,7 +110,7 @@ class LayerInfoLayer : CommonLayerInterface {
                 val layerName = (args["layerName"] as? String) ?: ""
                 getLayerInfo(layerName)
             }
-            else -> "Unknown function: $function. Available: listLayers, getLayerInfo"
+            else -> throw IllegalArgumentException("Unknown function: $function. Available: listLayers, getLayerInfo")
         }
     }
 }

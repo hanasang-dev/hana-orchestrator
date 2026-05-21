@@ -950,78 +950,92 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
 
 let wsConnection = null;
 
-// 진행 타이머 (FIX 5: 서버 메시지 사이에도 실시간 증가)
-let progressLiveTimer = null;
+// 실행별 라이브 타이머 맵 (executionId → intervalId)
+const progressTimers = {};
 
-function startProgressLiveTimer(startMs) {
-    stopProgressLiveTimer();
-    progressLiveTimer = setInterval(() => {
-        const el = document.getElementById('progressTime');
-        if (el) el.textContent = ((Date.now() - startMs) / 1000).toFixed(1) + '초';
-    }, 100);
-}
+const PHASE_COLORS = {
+    'STARTING':        'linear-gradient(90deg, #667eea 0%, #764ba2 100%)',
+    'TREE_VALIDATION': 'linear-gradient(90deg, #4facfe 0%, #00f2fe 100%)',
+    'TREE_EXECUTION':  'linear-gradient(90deg, #43e97b 0%, #38f9d7 100%)',
+    'COMPLETED':       'linear-gradient(90deg, #30cfd0 0%, #330867 100%)',
+    'FAILED':          'linear-gradient(90deg, #eb3349 0%, #f45c43 100%)',
+    'CANCELLED':       'linear-gradient(90deg, #f7971e 0%, #ffd200 100%)'
+};
 
-function stopProgressLiveTimer() {
-    if (progressLiveTimer !== null) {
-        clearInterval(progressLiveTimer);
-        progressLiveTimer = null;
+function getOrCreateProgressCard(executionId) {
+    const list = document.getElementById('progressList');
+    if (!list) return null;
+    let card = document.getElementById('progress-' + executionId);
+    if (!card) {
+        card = document.createElement('div');
+        card.className = 'progress-card';
+        card.id = 'progress-' + executionId;
+        card.innerHTML = `
+            <span class="progress-query"></span>
+            <span class="progress-message">준비 중...</span>
+            <div class="progress-bar-track"><div class="progress-bar"></div></div>
+            <span class="progress-time">0.0초</span>
+            <button class="cancel-btn" onclick="cancelExecution('${executionId}')" title="실행 취소">✕</button>
+        `;
+        list.appendChild(card);
     }
+    return card;
 }
 
-// 진행 상태 UI 업데이트
+// 진행 상태 UI 업데이트 (executionId별)
 function updateProgressUI(progress) {
-    const progressContainer = document.getElementById('progressContainer');
-    const progressBar = document.getElementById('progressBar');
-    const progressMessage = document.getElementById('progressMessage');
-    const progressTime = document.getElementById('progressTime');
+    const { executionId, phase, message, progress: pct, elapsedMs, query } = progress;
+    if (!executionId) return;
 
-    if (!progressContainer || !progressBar || !progressMessage || !progressTime) {
-        return;
+    const card = getOrCreateProgressCard(executionId);
+    if (!card) return;
+
+    const bar      = card.querySelector('.progress-bar');
+    const msg      = card.querySelector('.progress-message');
+    const queryEl  = card.querySelector('.progress-query');
+    const timeEl   = card.querySelector('.progress-time');
+    const btn      = card.querySelector('.cancel-btn');
+
+    if (query && queryEl && !queryEl.textContent) {
+        queryEl.textContent = query.length > 20 ? query.slice(0, 20) + '…' : query;
     }
+    msg.textContent = message || '';
+    bar.style.width = (pct || 0) + '%';
+    bar.style.background = PHASE_COLORS[phase] || PHASE_COLORS['STARTING'];
 
-    // 진행 중일 때만 표시
-    const isDone = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(progress.phase);
+    const isDone = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(phase);
     if (isDone) {
-        // 완료/실패/취소 시 라이브 타이머 중단 후 잠시 표시 후 숨김 (FIX 5)
-        stopProgressLiveTimer();
-        progressTime.textContent = (progress.elapsedMs / 1000).toFixed(1) + '초';
-        setTimeout(() => {
-            progressContainer.classList.remove('active');
-        }, 2000);
+        if (progressTimers[executionId]) {
+            clearInterval(progressTimers[executionId]);
+            delete progressTimers[executionId];
+        }
+        timeEl.textContent = (elapsedMs / 1000).toFixed(1) + '초';
+        if (btn) btn.style.display = 'none';
+        setTimeout(() => card.remove(), 2000);
     } else {
-        progressContainer.classList.add('active');
-        // 라이브 타이머: 서버 메시지 없는 구간에도 계속 증가 (FIX 5)
-        const startMs = Date.now() - progress.elapsedMs;
-        startProgressLiveTimer(startMs);
+        const startMs = Date.now() - elapsedMs;
+        if (!progressTimers[executionId]) {
+            progressTimers[executionId] = setInterval(() => {
+                timeEl.textContent = ((Date.now() - startMs) / 1000).toFixed(1) + '초';
+            }, 100);
+        }
     }
-
-    // 진행률 업데이트
-    progressBar.style.width = progress.progress + '%';
-
-    // 메시지 업데이트
-    progressMessage.textContent = progress.message;
-
-    // 페이즈별 색상 변경
-    const colors = {
-        'STARTING':        'linear-gradient(90deg, #667eea 0%, #764ba2 100%)',
-        'TREE_VALIDATION': 'linear-gradient(90deg, #4facfe 0%, #00f2fe 100%)',
-        'TREE_EXECUTION':  'linear-gradient(90deg, #43e97b 0%, #38f9d7 100%)',
-        'COMPLETED':       'linear-gradient(90deg, #30cfd0 0%, #330867 100%)',
-        'FAILED':          'linear-gradient(90deg, #eb3349 0%, #f45c43 100%)',
-        'CANCELLED':       'linear-gradient(90deg, #f7971e 0%, #ffd200 100%)'
-    };
-    progressBar.style.background = colors[progress.phase] || colors['STARTING'];
 }
 
-// 실행 취소
-async function cancelExecution() {
-    const btn = document.getElementById('cancelBtn');
+// 실행 취소 (executionId 지정 시 단일, 없으면 전체)
+async function cancelExecution(executionId) {
+    const card = executionId ? document.getElementById('progress-' + executionId) : null;
+    const btn = card ? card.querySelector('.cancel-btn') : null;
     if (btn) { btn.disabled = true; btn.textContent = '...'; }
     try {
-        await fetch('/execution/current/cancel', { method: 'POST' });
+        const body = executionId ? JSON.stringify({ executionId }) : undefined;
+        await fetch('/execution/current/cancel', {
+            method: 'POST',
+            headers: body ? { 'Content-Type': 'application/json' } : {},
+            body
+        });
     } catch (e) {
         console.error('취소 요청 실패:', e);
-    } finally {
         if (btn) { btn.disabled = false; btn.textContent = '✕'; }
     }
 }
@@ -1560,47 +1574,46 @@ function updateExecutionLogs(execId, logs) {
 
 // 섹션 리사이저 기능
 function initSectionResizers() {
-    const registerCard = document.getElementById('registerCard');
-    const layersCard = document.getElementById('layersCard');
+    const registerCard  = document.getElementById('registerCard');
+    const layersCard    = document.getElementById('layersCard');
     const executionsCard = document.getElementById('executionsCard');
+    const schedulerCard = document.getElementById('schedulerCard');
     const handle1 = document.getElementById('resizeHandle1');
+    const handle2 = document.getElementById('resizeHandle2');
     if (!registerCard || !layersCard || !executionsCard || !handle1) return;
-    
+
     let currentHandle = null;
     let isResizing = false;
     let startY = 0;
-    let startRegisterHeight = 0;
-    let startLayersHeight = 0;
-    
-    function startResize(handle, e) {
+    let startAHeight = 0;
+    let startBHeight = 0;
+
+    function startResize(handle, cardA, cardB, e) {
         isResizing = true;
         currentHandle = handle;
         startY = e.clientY;
-        startRegisterHeight = registerCard.offsetHeight;
-        startLayersHeight = layersCard.offsetHeight;
+        startAHeight = cardA.offsetHeight;
+        startBHeight = cardB.offsetHeight;
+        handle._cardA = cardA;
+        handle._cardB = cardB;
         handle.classList.add('resizing');
         document.body.style.cursor = 'ns-resize';
         document.body.style.userSelect = 'none';
         e.preventDefault();
     }
-    
+
     function handleMouseMove(e) {
         if (!isResizing || !currentHandle) return;
-        
-        const deltaY = e.clientY - startY;
-        const container = document.querySelector('.container');
-        const header = document.querySelector('.header');
-        if (currentHandle === handle1) {
-            const newRegisterHeight = startRegisterHeight + deltaY;
-            const newLayersHeight = startLayersHeight - deltaY;
-            const minHeight = 100;
-            if (newRegisterHeight >= minHeight && newLayersHeight >= minHeight) {
-                registerCard.style.flex = `0 0 ${newRegisterHeight}px`;
-                layersCard.style.flex = `1 1 ${newLayersHeight}px`;
-            }
+        const delta = e.clientY - startY;
+        const newA = startAHeight + delta;
+        const newB = startBHeight - delta;
+        const min = 80;
+        if (newA >= min && newB >= min) {
+            currentHandle._cardA.style.flex = `0 0 ${newA}px`;
+            currentHandle._cardB.style.flex = `0 0 ${newB}px`;
         }
     }
-    
+
     function stopResize() {
         if (isResizing && currentHandle) {
             isResizing = false;
@@ -1610,15 +1623,25 @@ function initSectionResizers() {
             document.body.style.userSelect = '';
         }
     }
-    
-    handle1.addEventListener('mousedown', (e) => startResize(handle1, e));
+
+    handle1.addEventListener('mousedown', (e) => startResize(handle1, layersCard, registerCard, e));
+    if (handle2 && schedulerCard) {
+        handle2.addEventListener('mousedown', (e) => startResize(handle2, executionsCard, schedulerCard, e));
+    }
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', stopResize);
-    
-    // 초기 높이 설정
-    registerCard.style.flex = '0 0 auto';
-    layersCard.style.flex = '1 1 0';
-    executionsCard.style.flex = '1 1 0';
+
+    // 초기 높이: 좌측 레이어 60% / 원격등록 40%, 우측 실행이력 60% / 스케줄러 40%
+    const panelH = document.querySelector('.right-panel')?.offsetHeight || window.innerHeight - 50;
+    const leftH  = document.querySelector('.left-panel')?.offsetHeight  || panelH;
+    const chatH  = document.getElementById('chatCard')?.offsetHeight || 160;
+
+    const leftRemain = leftH - chatH - 30; // resize handles
+    layersCard.style.flex    = `0 0 ${Math.round(leftRemain * 0.6)}px`;
+    registerCard.style.flex  = `0 0 ${Math.round(leftRemain * 0.4)}px`;
+
+    executionsCard.style.flex = `0 0 ${Math.round(panelH * 0.6)}px`;
+    if (schedulerCard) schedulerCard.style.flex = `0 0 ${Math.round(panelH * 0.4)}px`;
 }
 
 /** 실행이력 카드 표시 이름: 쿼리 없으면 루트노드명 → "(직접 실행)" (FIX 2) */
@@ -2169,6 +2192,57 @@ async function saveJob() {
     }
     closeJobForm();
     loadJobs();
+}
+
+// ─────────────────────────────────────────────
+// 세션 관리
+// ─────────────────────────────────────────────
+
+async function loadSessions() {
+    const res = await fetch('/sessions');
+    const data = await res.json();
+    const el = document.getElementById('sessionsList');
+    if (!el) return;
+    const raw = data.sessions || '';
+    if (raw === '세션 없음') {
+        el.innerHTML = '<div style="color:var(--text-2);font-size:12px;padding:8px 0;">세션 없음</div>';
+        return;
+    }
+    const lines = raw.split('\n').filter(Boolean);
+    el.innerHTML = lines.map(line => {
+        const isActive = line.includes('← 활성');
+        // "- ses_1234567 ← 활성" → id 추출
+        const id = line.replace(/^-\s*/, '').replace(/\s*←.*$/, '').trim();
+        return `<div class="session-item${isActive ? ' session-active' : ''}">
+            <span class="session-id" title="${escapeHtml(id)}">${escapeHtml(id)}</span>
+            ${isActive ? '<span class="session-badge">활성</span>' : `<button class="refresh-btn" onclick="activateSession('${escapeHtml(id)}')">활성화</button>`}
+            <button class="refresh-btn" onclick="clearSession('${escapeHtml(id)}')">초기화</button>
+            <button class="refresh-btn session-del-btn" onclick="deleteSession('${escapeHtml(id)}')">삭제</button>
+        </div>`;
+    }).join('');
+}
+
+async function createSession() {
+    const res = await fetch('/sessions', { method: 'POST' });
+    const data = await res.json();
+    await loadSessions();
+}
+
+async function activateSession(id) {
+    await fetch(`/sessions/${encodeURIComponent(id)}/activate`, { method: 'POST' });
+    await loadSessions();
+}
+
+async function clearSession(id) {
+    if (!confirm(`세션 "${id}" 의 작업 이력을 초기화할까요?`)) return;
+    await fetch(`/sessions/${encodeURIComponent(id)}/clear`, { method: 'DELETE' });
+    await loadSessions();
+}
+
+async function deleteSession(id) {
+    if (!confirm(`세션 "${id}" 를 삭제할까요?`)) return;
+    await fetch(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await loadSessions();
 }
 
 // 다른 곳 클릭 시 열려 있는 스와이프 닫기

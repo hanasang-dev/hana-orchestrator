@@ -14,6 +14,18 @@ data class TreeReview(
 )
 
 /**
+ * finish 시점 결과가 원래 query 요구를 충족했는지 LLM 판단.
+ *
+ * satisfied=false 면 ReAct 루프가 finish 를 차단하고 missing 을 stepHistory 에 박아 재시도.
+ */
+@Serializable
+data class VerifyOutcome(
+    val satisfied: Boolean,
+    val missing: String = "",
+    val reasoning: String = ""
+)
+
+/**
  * ReAct 루프의 단일 스텝 히스토리
  * tree: 이 스텝에서 실행한 미니트리 (presentation 포맷 — id 포함, UI 표시/저장용)
  */
@@ -34,9 +46,9 @@ data class ReActStep(
  */
 @Serializable
 data class ReActDecision(
-    val action: String,                        // "execute_tree" | "finish" | "ask"
-    val tree: LLMTreeResponse? = null,         // execute_tree 전용 미니트리 (LLM JSON 파싱용)
-    val result: String = "",                   // finish 전용 최종 결과
+    val action: String,                              // "execute_tree" | "finish" | "ask"
+    val tree: LLMTreeResponse? = null,               // execute_tree 전용 미니트리 (LLM JSON 파싱용)
+    val result: String = "",                         // finish 전용 최종 결과
     val reasoning: String = "",
-    val question: String = ""                  // ask 전용: 사용자에게 할 질문
+    val question: String = ""                        // ask 전용: 사용자에게 할 질문
 )

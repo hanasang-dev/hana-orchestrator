@@ -8,20 +8,20 @@ import com.hana.orchestrator.layer.LayerDescription
  * SRP: LLM 호출 책임만 정의
  *
  * 다양한 LLM 제공자(Ollama, OpenAI, Anthropic 등)를 통합하기 위한 추상화
- * 각 메서드는 @LLMTask 어노테이션으로 복잡도가 표시됨
+ * 각 메서드는 @LLMTier 어노테이션으로 복잡도가 표시됨
  */
 interface LLMClient {
     /**
      * LLM이 직접 답변 생성 (레이어 없이)
      * 중간 작업: 일반적인 질문에 대한 답변 생성
      */
-    @LLMTask(complexity = LLMTaskComplexity.MEDIUM)
+    @LLMTier(complexity = LLMTaskComplexity.MEDIUM)
     suspend fun generateDirectAnswer(userQuery: String): String
 
     /**
      * 사용자가 수정한 실행 트리를 검토하여 원래 요구사항에 부합하는지 판단
      */
-    @LLMTask(complexity = LLMTaskComplexity.SIMPLE)
+    @LLMTier(complexity = LLMTaskComplexity.SIMPLE)
     suspend fun reviewTree(
         userQuery: String,
         tree: ExecutionTree,
@@ -29,15 +29,35 @@ interface LLMClient {
     ): TreeReview
 
     /**
+     * ReAct stepHistory 압축 요약 — 컨텍스트 한계 근접 시 오래된 스텝을 단일 요약으로 대체.
+     * 요약은 단순 작업이라 SIMPLE tier 충분.
+     */
+    @LLMTier(complexity = LLMTaskComplexity.SIMPLE)
+    suspend fun summarizeHistory(steps: List<ReActStep>): String
+
+    /**
      * ReAct 루프에서 다음 스텝 결정 (관찰 → 사고 → 행동)
-     * @LLMTask 미적용 — ModelSelectionStrategy의 default 메서드로 클라이언트 선택
+     * @LLMTier 미적용 — ModelSelectionStrategy의 default 메서드로 클라이언트 선택
      */
     suspend fun decideNextAction(
         query: String,
         stepHistory: List<ReActStep>,
         layerDescriptions: List<LayerDescription>,
-        projectContext: Map<String, String> = emptyMap()
+        projectContext: Map<String, String> = emptyMap(),
+        executionId: String? = null,
+        stepNumber: Int? = null
     ): ReActDecision
+
+    /**
+     * finish 시점 — 후보 결과가 원래 query 의 요구를 충족했는지 판단.
+     * satisfied=false 면 ReAct 가 finish 를 차단하고 stepHistory 에 missing 을 박아 재시도한다.
+     */
+    @LLMTier(complexity = LLMTaskComplexity.SIMPLE)
+    suspend fun judgeFinish(
+        query: String,
+        candidateResult: String,
+        stepHistory: List<ReActStep>
+    ): VerifyOutcome
 
     /**
      * 리소스 정리

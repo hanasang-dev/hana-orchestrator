@@ -50,12 +50,18 @@ data class LLMConfig(
 ) {
     companion object {
         // 기본값 상수 (DRY: 중복 제거 및 일관성 유지)
-        private const val DEFAULT_SIMPLE_MODEL = "gemma2:2b"
-        private const val DEFAULT_MEDIUM_MODEL = "gemma2:2b"
-        private const val DEFAULT_COMPLEX_MODEL = "gemma2:2b"
+        // Tier 차등 — D2 멀티모델 활용 정착:
+        //  - SIMPLE  : exaone3.5:2.4b  (2.7B, Korean 강, 빠름)   — summarize·reviewTree·judgeFinish
+        //  - MEDIUM  : exaone3.5:7.8b  (7.8B, Korean 강, 중속)   — decideNextAction·generateDirectAnswer
+        //  - COMPLEX : qwen3:14b       (14.8B, 코드·추론 강)     — improveLayer 코드 생성·복잡 분석
+        // 선택 사유: 프로젝트가 Korean 쿼리 위주. EXAONE 가 Korean 학습 강. COMPLEX 만 qwen3 (코드)
+        // env var (LLM_SIMPLE_MODEL 등) 으로 오버라이드 가능
+        private const val DEFAULT_SIMPLE_MODEL = "exaone3.5:2.4b"
+        private const val DEFAULT_MEDIUM_MODEL = "exaone3.5:7.8b"
+        private const val DEFAULT_COMPLEX_MODEL = "qwen3:14b"
         private const val DEFAULT_SIMPLE_CONTEXT_LENGTH = 8_192L
-        private const val DEFAULT_MEDIUM_CONTEXT_LENGTH = 8_192L
-        private const val DEFAULT_COMPLEX_CONTEXT_LENGTH = 8_192L
+        private const val DEFAULT_MEDIUM_CONTEXT_LENGTH = 16_384L
+        private const val DEFAULT_COMPLEX_CONTEXT_LENGTH = 40_960L
         private const val DEFAULT_BASE_URL = "http://localhost:11434"
         private const val DEFAULT_TIMEOUT_MS = 120_000L
         

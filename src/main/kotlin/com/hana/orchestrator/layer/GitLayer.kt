@@ -8,11 +8,16 @@ import java.util.concurrent.TimeUnit
 /**
  * Git 레이어
  *
- * 목적: 자기 개선 루프의 안전망. 코드 수정 전 브랜치 생성, 실패 시 롤백, 성공 시 커밋.
+ * 목적: git 저장소 조회·관리. 상태 확인, 브랜치 정보, 커밋, 로그 조회 등 모든 git 작업.
+ *
+ * 사용 예시:
+ * - "현재 브랜치 알려줘", "git 상태 확인해줘" → status(), currentBranch()
+ * - "최근 커밋 보여줘", "변경 이력 확인" → log()
+ * - "변경된 내용 diff 보여줘" → diff()
+ * - 새 브랜치 생성, 체크아웃, 커밋, stash 저장/복원
  *
  * - 표준 git 명령만 사용 (git이 PATH에 있어야 함)
  * - 모든 작업은 projectRoot 기준으로 실행
- * - 자기 개선 트리 패턴: createBranch → (수정) → build → commit 또는 stash/checkout으로 롤백
  */
 @Layer
 class GitLayer(
@@ -86,6 +91,15 @@ class GitLayer(
     suspend fun log(count: Int = 5): String =
         runGit("log", "--oneline", "-$count")
 
+    override suspend fun approvalPreview(function: String, args: Map<String, Any>): ApprovalPreview {
+        val kind = when (function) {
+            "log", "diff", "status", "currentBranch" -> ApprovalKind.READ_ONLY
+            else -> ApprovalKind.EXECUTION  // commit, push, createBranch, checkout, stash, stashPop
+        }
+        val preview = args.entries.joinToString("\n") { "${it.key}: ${it.value}" }
+        return ApprovalPreview(path = "git.$function", oldContent = null, newContent = preview, kind = kind)
+    }
+
     private suspend fun runGit(vararg args: String): String = withContext(Dispatchers.IO) {
         val command = listOf("git") + args.toList()
         try {
@@ -123,7 +137,7 @@ class GitLayer(
             "stashPop" -> stashPop()
             "currentBranch" -> currentBranch()
             "log" -> log((args["count"] as? String)?.toIntOrNull() ?: (args["count"] as? Int) ?: 5)
-            else -> "Unknown function: $function. Available: status, diff, createBranch, checkout, commit, stash, stashPop, currentBranch, log"
+            else -> throw IllegalArgumentException("Unknown function: $function. Available: status, diff, createBranch, checkout, commit, stash, stashPop, currentBranch, log")
         }
     }
 }

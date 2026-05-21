@@ -4,21 +4,20 @@ import java.io.File
 import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.Paths
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 파일 시스템 레이어
  *
  * 목적: 소스 코드·설정 등 파일을 읽고, 내용을 수정·추가할 수 있는 기능 제공.
- * (예: 변수·코드 추가, 기존 라인 수정, 새 파일 쓰기. readFile → 내용 생성/변경 → writeFile)
  *
- * ⭐ 파일 경로를 정확히 알고 있으면 바로 readFile(path="상대경로") 사용.
- *    kotlinFileIndex 컨텍스트에 "파일명:경로" 형태로 경로가 있으면 그 경로를 그대로 사용하세요.
- *    예: kotlinFileIndex에 "EchoLayer:src/main/kotlin/.../EchoLayer.kt" 가 있으면
- *        readFile(path="src/main/kotlin/.../EchoLayer.kt") 로 바로 읽으세요.
+ * ⚠️ 파일의 실제 내용은 반드시 readFile로 가져와야 함.
+ *    특정 파일의 코드·함수·로직에 대한 질문은 readFile 없이 답할 수 없음.
  *
- * ⭐ 경로를 모를 때: findFiles(pattern="**\/EchoLayer.kt") 로 먼저 경로를 찾은 후 readFile.
- *
- * 예: 파일 읽기 → 분석 → 수정 → 다시 읽기 → 검증
+ * 경로 결정:
+ *   - 클래스명·파일명을 알 때 → findFile(className="클래스명") 으로 경로 조회 후 readFile
+ *   - 경로를 모를 때 → findFiles(pattern="**\/파일명.kt") 로 먼저 탐색 후 readFile
  */
 @Layer
 class FileSystemLayer : CommonLayerInterface {
@@ -107,9 +106,7 @@ class FileSystemLayer : CommonLayerInterface {
             val resolvedPath = resolveWritePath(path)
 
             // 2. 보호된 파일 확인
-            if (!validateChanges(resolvedPath, content)) {
-                return "ERROR: 파일 수정 실패 - 보호된 파일입니다: $resolvedPath"
-            }
+            protectionReason(resolvedPath)?.let { return "ERROR: 파일 수정 실패 — $it" }
 
             val file = File(resolvedPath)
 
@@ -141,14 +138,19 @@ class FileSystemLayer : CommonLayerInterface {
      * writeFile은 파일 diff를 미리보기로 제공
      */
     override suspend fun approvalPreview(function: String, args: Map<String, Any>): ApprovalPreview {
-        if (function == "writeFile") {
-            val path = args["path"] as? String ?: ""
-            val content = args["content"] as? String ?: ""
-            val resolvedPath = resolveWritePath(path)
-            val oldContent = try { File(resolvedPath).takeIf { it.exists() }?.readText() } catch (e: Exception) { null }
-            return ApprovalPreview(path = resolvedPath, oldContent = oldContent, newContent = content, kind = ApprovalKind.FILE)
+        return when (function) {
+            "writeFile" -> {
+                val path = args["path"] as? String ?: ""
+                val content = args["content"] as? String ?: ""
+                val resolvedPath = resolveWritePath(path)
+                val oldContent = try { File(resolvedPath).takeIf { it.exists() }?.readText() } catch (e: Exception) { null }
+                ApprovalPreview(path = resolvedPath, oldContent = oldContent, newContent = content, kind = ApprovalKind.FILE)
+            }
+            // 읽기 전용 — 승인 불필요
+            "readFile", "listDirectory", "findFile", "findFiles", "searchContent", "findRelevantFiles" ->
+                ApprovalPreview(path = function, oldContent = null, newContent = "", kind = ApprovalKind.READ_ONLY)
+            else -> super.approvalPreview(function, args)
         }
-        return super.approvalPreview(function, args)
     }
     
     /**
@@ -180,6 +182,37 @@ class FileSystemLayer : CommonLayerInterface {
     }
     
     /**
+     * 클래스명 또는 파일명으로 경로 조회 (확장자 불필요).
+     * 파일 경로를 모를 때 readFile 전 이 함수로 경로를 먼저 확인하세요.
+     *
+     * @param className 클래스명 또는 파일명 (확장자 제외 가능, 예: "OllamaLLMClient", "build.gradle")
+     * @param rootPath 검색 시작 경로 (기본값: ".", 상대 경로 사용 필수)
+     * @return 찾은 파일 경로 (없으면 INFO 메시지)
+     */
+    @LayerFunction
+    suspend fun findFile(className: String, rootPath: String = "."): String {
+        val root = Paths.get(rootPath).toAbsolutePath().normalize()
+        if (!Files.exists(root)) throw IllegalArgumentException("검색 경로가 존재하지 않습니다: $rootPath")
+
+        // 정확한 파일명 매칭 (확장자 포함 or 제외 모두 지원)
+        val matches = Files.walk(root)
+            .filter { Files.isRegularFile(it) }
+            .filter { path ->
+                val name = path.fileName.toString()
+                name == className || name.substringBeforeLast('.') == className
+            }
+            .map { root.relativize(it).toString() }
+            .sorted()
+            .toList()
+
+        return when {
+            matches.isEmpty() -> throw java.io.FileNotFoundException("'$className' 파일을 찾지 못했습니다 (경로: $rootPath)")
+            matches.size == 1 -> matches.first()
+            else -> "여러 파일 발견:\n${matches.joinToString("\n")}"
+        }
+    }
+
+    /**
      * 파일 검색 (glob 패턴 지원, ** 재귀 포함)
      *
      * @param pattern glob 패턴 (예: "*.kt", "**∕*.kt", "src∕**∕*Test.kt")
@@ -191,27 +224,19 @@ class FileSystemLayer : CommonLayerInterface {
      */
     @LayerFunction
     suspend fun findFiles(pattern: String, rootPath: String = "."): String {
-        return try {
-            val root = Paths.get(rootPath).toAbsolutePath().normalize()
-            if (!Files.exists(root)) {
-                return "ERROR: 검색 경로가 존재하지 않습니다: $rootPath"
-            }
-            val matcher = FileSystems.getDefault().getPathMatcher("glob:$pattern")
-            val matches = Files.walk(root)
-                .filter { Files.isRegularFile(it) }
-                .filter { matcher.matches(root.relativize(it)) }
-                .map { root.relativize(it).toString() }
-                .sorted()
-                .toList()
+        val root = Paths.get(rootPath).toAbsolutePath().normalize()
+        if (!Files.exists(root)) throw IllegalArgumentException("검색 경로가 존재하지 않습니다: $rootPath")
 
-            if (matches.isEmpty()) {
-                "INFO: 패턴 '$pattern'에 맞는 파일을 찾지 못했습니다"
-            } else {
-                matches.joinToString("\n")
-            }
-        } catch (e: Exception) {
-            "ERROR: 파일 검색 실패: ${e.message}"
-        }
+        val matcher = FileSystems.getDefault().getPathMatcher("glob:$pattern")
+        val matches = Files.walk(root)
+            .filter { Files.isRegularFile(it) }
+            .filter { matcher.matches(root.relativize(it)) || matcher.matches(it) || matcher.matches(it.fileName) }
+            .map { root.relativize(it).toString() }
+            .sorted()
+            .toList()
+
+        if (matches.isEmpty()) throw java.io.FileNotFoundException("패턴 '$pattern'에 맞는 파일을 찾지 못했습니다")
+        return matches.joinToString("\n")
     }
     
     /**
@@ -235,7 +260,7 @@ class FileSystemLayer : CommonLayerInterface {
                 listOf(root)
             } else {
                 Files.walk(root)
-                    .filter { Files.isRegularFile(it) && globMatcher.matches(it.fileName) }
+                    .filter { Files.isRegularFile(it) && (globMatcher.matches(it) || globMatcher.matches(it.fileName)) }
                     .toList()
             }
 
@@ -360,34 +385,112 @@ class FileSystemLayer : CommonLayerInterface {
      * 보호된 파일·디렉토리 목록 확인
      * @param content 향후 내용 기반 검증용. 현재는 경로만 검사.
      */
-    @Suppress("UNUSED_PARAMETER")
-    private suspend fun validateChanges(path: String, content: String): Boolean {
+    /**
+     * 보호된 경로 분류 — null 이면 통과, 문자열이면 차단 사유 (LLM·UX 메시지로 노출됨).
+     * 단일 정의로 모든 mutation 진입점이 동일 규칙·동일 메시지 사용.
+     */
+    private fun protectionReason(path: String): String? {
+        val normalized = path.replace("\\", "/")
+
+        // 보호된 파일 — 부트스트랩·빌드 정의
         val protectedFiles = listOf(
             "build.gradle.kts",
             "Application.kt",
             "ApplicationBootstrap.kt",
             "ApplicationLifecycleManager.kt"
         )
+        if (protectedFiles.any { path.contains(it) })
+            return "보호된 파일 (부트스트랩·빌드 정의): $path"
 
-        // 보호된 디렉토리 — 하위 경로 전체 차단
-        val protectedDirs = listOf(
-            "orchestrator/core"
-        )
+        // 보호된 디렉토리 — orchestrator 코어
+        if (normalized.contains("orchestrator/core"))
+            return "보호된 디렉토리 (orchestrator/core 하위): $path"
 
-        // 보호된 파일명이 경로에 포함되어 있는지 확인
-        if (protectedFiles.any { path.contains(it) }) return false
+        // 레이어 소스 — develop.applyLayerCandidate 만 변경 가능 (Two-Phase Commit 가드)
+        // LLM 이 writeFile 로 직접 swap 시도하면 .bak 가 오염돼 PR1 rollback 불변식 깨짐
+        if (normalized.contains("/com/hana/orchestrator/layer/") && normalized.endsWith("Layer.kt"))
+            return "레이어 소스($path)는 develop.applyLayerCandidate 만 변경 가능 (Two-Phase Commit 가드)"
 
-        // 보호된 디렉토리 하위 경로 차단
-        val normalized = path.replace("\\", "/")
-        if (protectedDirs.any { normalized.contains(it) }) return false
-
-        return true
+        return null
     }
+
+    @Suppress("UNUSED_PARAMETER")
+    private suspend fun validateChanges(path: String, content: String): Boolean =
+        protectionReason(path) == null
     
+    /**
+     * 대상 파일의 프로젝트 내부 import를 분석하여 관련 소스 파일을 수집하고 내용을 반환.
+     * 코드 분석·개선·리팩토링 등 구조적 작업 전 컨텍스트 수집에 활용하세요.
+     *
+     * @param path 분석할 파일 경로 (상대 경로)
+     * @param layerName 레이어 이름 (path 대신 사용 가능, 예: "OllamaLLMClient")
+     * @param scope 탐색 루트 디렉토리 (상대 경로). 기본값: 프로젝트 전체. 예: "src/main/kotlin/com/hana/orchestrator/layer"
+     * @return 관련 파일 목록 + 내용 번들
+     */
+    @Shared
+    @LayerFunction
+    suspend fun findRelevantFiles(path: String = "", layerName: String = "", scope: String = ""): String {
+        val targetPath = when {
+            path.isNotBlank() -> path
+            layerName.isNotBlank() -> {
+                val normalized = layerName.removeSuffix("Layer")
+                val candidates = listOf(
+                    "src/main/kotlin/com/hana/orchestrator/layer/${normalized}Layer.kt",
+                    "src/main/kotlin/com/hana/orchestrator/llm/${normalized}.kt",
+                    "src/main/kotlin/com/hana/orchestrator/llm/${normalized}LLMClient.kt"
+                )
+                candidates.firstOrNull { File(it).exists() }
+                    ?: run {
+                        val found = findFiles("**/${normalized}.kt")
+                        if (found.startsWith("ERROR") || found.startsWith("INFO")) return "INFO: $normalized 파일을 찾을 수 없음"
+                        found.lines().firstOrNull()?.trim() ?: return "INFO: $normalized 파일을 찾을 수 없음"
+                    }
+            }
+            else -> return "ERROR: path 또는 layerName 파라미터가 필요합니다"
+        }
+
+        val targetFile = File(targetPath)
+        if (!targetFile.exists()) return "ERROR: 파일 없음: $targetPath"
+
+        return withContext(Dispatchers.IO) {
+            val content = targetFile.readText()
+            val relatedFiles = mutableListOf<File>()
+            val seen = mutableSetOf(targetFile.canonicalPath)
+
+            // 1회 인덱스 빌드: 클래스명 → 파일 경로
+            // scope 미지정 시 build/.gradle/.git 등 무거운 디렉토리 제외하고 전체 탐색
+            val projectRoot = File(System.getProperty("user.dir"))
+            val searchRoot = if (scope.isNotBlank()) File(projectRoot, scope) else projectRoot
+            val excluded = setOf("build", ".gradle", ".git", ".idea", "node_modules", ".hana")
+            val ktIndex: Map<String, File> = searchRoot.walk()
+                .onEnter { dir -> dir.name !in excluded }
+                .filter { it.isFile && it.extension == "kt" }
+                .associateBy { it.nameWithoutExtension }
+
+            // 프로젝트 내부 import 파싱 (com.hana.orchestrator.*) → Map 조회 O(1)
+            val importRegex = Regex("""^import (com\.hana\.orchestrator\.[.\w]+)""", RegexOption.MULTILINE)
+            importRegex.findAll(content).forEach { match ->
+                val className = match.groupValues[1].substringAfterLast('.')
+                val f = ktIndex[className] ?: return@forEach
+                if (seen.add(f.canonicalPath)) relatedFiles.add(f)
+            }
+
+            if (relatedFiles.isEmpty()) return@withContext "INFO: ${targetFile.name}의 관련 프로젝트 파일 없음"
+
+            buildString {
+                appendLine("=== ${targetFile.name} 관련 파일 (${relatedFiles.size}개) ===")
+                relatedFiles.forEach { f ->
+                    appendLine("\n--- ${f.path} ---")
+                    append(f.readText())
+                }
+            }
+        }
+    }
+
     override suspend fun describe(): LayerDescription {
         return FileSystemLayer_Description.layerDescription
     }
-    
+
     override suspend fun execute(function: String, args: Map<String, Any>): String {
         return when (function) {
             "readFile" -> {
@@ -406,6 +509,11 @@ class FileSystemLayer : CommonLayerInterface {
             "backupFile" -> {
                 val path = (args["path"] as? String) ?: ""
                 backupFile(path)
+            }
+            "findFile" -> {
+                val className = (args["className"] as? String) ?: return "ERROR: className 파라미터 필수"
+                val rootPath = (args["rootPath"] as? String) ?: "."
+                findFile(className, rootPath)
             }
             "findFiles" -> {
                 val pattern = (args["pattern"] as? String) ?: "*"
@@ -427,7 +535,13 @@ class FileSystemLayer : CommonLayerInterface {
                 val glob = (args["glob"] as? String) ?: "*"
                 searchContent(pattern, path, glob)
             }
-            else -> "Unknown function: $function. Available: readFile, writeFile, listDirectory, backupFile, findFiles, searchContent, deleteFile, moveFile"
+            "findRelevantFiles" -> {
+                val p = (args["path"] as? String) ?: ""
+                val ln = (args["layerName"] as? String) ?: ""
+                val sc = (args["scope"] as? String) ?: ""
+                findRelevantFiles(p, ln, sc)
+            }
+            else -> throw IllegalArgumentException("Unknown function: $function. Available: readFile, writeFile, listDirectory, backupFile, findFile, findFiles, searchContent, deleteFile, moveFile, findRelevantFiles")
         }
     }
 }

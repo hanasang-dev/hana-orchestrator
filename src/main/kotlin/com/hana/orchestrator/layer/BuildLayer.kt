@@ -231,7 +231,7 @@ class BuildLayer(
                 runBuild(exe, list)
             }
             "restart" -> restart()
-            else -> "Unknown function: $function. Available: compileKotlin, build, clean, runBuild, restart"
+            else -> throw IllegalArgumentException("Unknown function: $function. Available: compileKotlin, build, clean, runBuild, restart")
         }
     }
 }

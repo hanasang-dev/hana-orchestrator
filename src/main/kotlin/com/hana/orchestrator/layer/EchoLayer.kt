@@ -21,35 +21,39 @@ class EchoLayer : CommonLayerInterface {
      * 잘못된 예: echo(message="파일을 읽어서 분석합니다") → 분석 안 함, 그 문장이 그대로 반환될 뿐
      */
     @LayerFunction
-    suspend fun echo(message: String): String {
-        return message
-    }
+    suspend fun echo(message: String): String = message
 
     /**
      * message 문자열을 times회 반복하여 반환합니다.
+     * times가 0 이하인 경우 빈 문자열을 반환합니다.
      */
     @LayerFunction
     suspend fun repeat(message: String, times: Int = 1): String {
+        if (times <= 0) return ""
         return message.repeat(times)
     }
 
-    // KSP 프로세서가 자동 생성한 describe() 사용
-    override suspend fun describe(): LayerDescription {
-        return EchoLayer_Description.layerDescription
-    }
-    
+    override suspend fun approvalPreview(function: String, args: Map<String, Any>): ApprovalPreview =
+        ApprovalPreview(path = "echo.$function", oldContent = null, newContent = "", kind = ApprovalKind.READ_ONLY)
+
+    override suspend fun describe(): LayerDescription = EchoLayer_Description.layerDescription
+
     override suspend fun execute(function: String, args: Map<String, Any>): String {
+        val message = when (val msg = args["message"] as? String ?: args["query"] as? String) {
+            null -> ""
+            else -> msg
+        }
         return when (function) {
-            "echo" -> {
-                val message = args.getOrDefault("message", "") as? String ?: args.getOrDefault("query", "") as? String ?: ""
-                echo(message)
-            }
+            "echo" -> echo(message)
             "repeat" -> {
-                val message = args.getOrDefault("message", "") as? String ?: args.getOrDefault("query", "") as? String ?: ""
-                val times = (args.getOrDefault("times", 1) as? String)?.toIntOrNull() ?: (args.getOrDefault("times", 1) as? Int) ?: 1
+                val times = when (val arg = args["times"]) {
+                    is Number -> arg.toInt()
+                    is String -> arg.toIntOrNull() ?: 1
+                    else -> 1
+                }
                 repeat(message, times)
             }
-            else -> "Unknown function: $function. Available: echo, repeat"
+            else -> throw IllegalArgumentException("Unknown function: $function. Available: echo, repeat")
         }
     }
 }

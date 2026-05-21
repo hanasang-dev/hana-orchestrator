@@ -20,13 +20,8 @@
         <div class="header-sep"></div>
         <p>AI Agent Dashboard</p>
         <div class="header-sep"></div>
-        <!-- 진행 상태 (헤더 인라인) -->
-        <div id="progressContainer">
-            <span id="progressMessage">준비 중...</span>
-            <div id="progressBarTrack"><div id="progressBar"></div></div>
-            <span id="progressTime">0.0초</span>
-            <button id="cancelBtn" onclick="cancelExecution()" title="실행 취소">✕</button>
-        </div>
+        <!-- 진행 상태 (실행별 카드 리스트) -->
+        <div id="progressList"></div>
 
         <div class="header-spacer"></div>
         <div id="llmStatus"><span id="llmStatusText">LLM 상태 확인 중...</span></div>
@@ -83,6 +78,19 @@
 
             <div class="section-resize-handle" id="resizeHandle1"></div>
 
+            <!-- 세션 관리 (기본 접힘) -->
+            <div class="card card-collapsible collapsed" id="sessionCard">
+                <h2 onclick="toggleCard('sessionCard')">
+                    🗂 세션
+                    <button class="refresh-btn" onclick="event.stopPropagation(); loadSessions()">새로고침</button>
+                    <button class="refresh-btn" onclick="event.stopPropagation(); createSession()">＋ 새 세션</button>
+                    <span class="collapse-arrow">▸</span>
+                </h2>
+                <div class="card-content">
+                    <div id="sessionsList"></div>
+                </div>
+            </div>
+
             <!-- 원격 레이어 등록 (기본 접힘) -->
             <div class="card card-collapsible collapsed" id="registerCard">
                 <h2 onclick="toggleCard('registerCard')">
@@ -118,6 +126,8 @@
                     <div id="executionsList"></div>
                 </div>
             </div>
+
+            <div class="section-resize-handle" id="resizeHandle2"></div>
 
             <!-- 스케줄러 -->
             <div class="card card-collapsible collapsed" id="schedulerCard">

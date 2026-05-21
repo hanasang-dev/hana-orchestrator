@@ -2,6 +2,7 @@ package com.hana.orchestrator.llm
 
 import ai.koog.prompt.executor.ollama.client.OllamaClient
 import ai.koog.prompt.executor.clients.ConnectionTimeoutConfig
+import ai.koog.prompt.executor.ollama.client.ContextWindowStrategy
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
@@ -10,9 +11,15 @@ import ai.koog.prompt.message.Message
 import com.hana.orchestrator.domain.entity.ExecutionTree
 import com.hana.orchestrator.llm.config.LLMConfig
 import com.hana.orchestrator.layer.LayerDescription
+import com.hana.orchestrator.llm.embedding.LayerEmbeddingIndex
 import com.hana.orchestrator.orchestrator.createOrchestratorLogger
 import ai.koog.prompt.params.LLMParams
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 
@@ -60,11 +67,19 @@ class OllamaLLMClient(
             connectTimeoutMillis = 5_000L,
             requestTimeoutMillis = timeoutMs,
             socketTimeoutMillis = timeoutMs
-        )
+        ),
+        contextWindowStrategy = ContextWindowStrategy.Companion.Fixed(contextLength)
     )
 
     // 프롬프트 생성기 (SRP: 프롬프트 생성 책임 분리)
     private val promptBuilder = LLMPromptBuilder()
+
+    // 임베딩 기반 레이어 선택 인덱스 (선택적 — null이면 전체 레이어 사용)
+    private var embeddingIndex: LayerEmbeddingIndex? = null
+
+    fun setEmbeddingIndex(index: LayerEmbeddingIndex) {
+        embeddingIndex = index
+    }
 
     /**
      * LLM 응답에서 텍스트 추출
@@ -105,12 +120,27 @@ class OllamaLLMClient(
         schema: JsonObject? = null,
         timeoutMs: Long = this.timeoutMs,
         maxRetries: Int = 2,
-        logRawJson: Boolean = false
+        logRawJson: Boolean = false,
+        /**
+         * 호출 결과를 외부에 전달 — ReasoningTraceRecorder 캡처용.
+         * 성공·실패 모두 한 번씩 호출. error가 null이면 성공.
+         */
+        traceSink: ((sentPrompt: String, rawResponse: String, jsonText: String, error: String?) -> Unit)? = null
     ): T {
         var lastError: Exception? = null
         var lastJsonText: String? = null
+        var lastSentPrompt: String = prompt
+        var lastRawResponse: String = ""
 
         repeat(maxRetries + 1) { attempt ->
+            // watchdog — withTimeout 이 koog 내부 blocking IO 를 cancel 못 하므로
+            // timeoutMs 후 ollamaClient.close() 로 HTTP 연결 강제 종료.
+            // generateDirectAnswer 와 동일 패턴. 17K+ 자 프롬프트 + 14B 모델 stuck 방지.
+            val watchdog = CoroutineScope(Dispatchers.Default).launch {
+                delay(timeoutMs)
+                logger.warn("⏰ [LLM] callLLM 타임아웃 (${timeoutMs}ms) — HTTP 연결 강제 종료 (attempt ${attempt + 1})")
+                kotlin.runCatching { ollamaClient.close() }
+            }
             try {
                 val model = createLLMModel()
                 val enhancedPrompt = if (attempt > 0 && lastError != null) {
@@ -126,6 +156,7 @@ class OllamaLLMClient(
                 } else {
                     prompt
                 }
+                lastSentPrompt = enhancedPrompt
 
                 val promptDsl = Prompt.build(id = "llm-call") {
                     user(enhancedPrompt)
@@ -144,6 +175,7 @@ class OllamaLLMClient(
                 }
 
                 val responseText = extractResponseText(responses)
+                lastRawResponse = responseText
                 val jsonText = JsonExtractor.extract(responseText)
                 lastJsonText = jsonText
                 if (logRawJson) {
@@ -151,14 +183,24 @@ class OllamaLLMClient(
                     logger.info("📋 [EXTRACTED jsonText (${jsonText.length}chars)]: $jsonText")
                 }
 
-                return responseParser(jsonText)
+                val parsed = responseParser(jsonText)
+                runCatching { traceSink?.invoke(lastSentPrompt, lastRawResponse, jsonText, null) }
+                return parsed
             } catch (e: Exception) {
+                // CancellationException (withTimeout 포함)은 재시도 없이 즉시 전파
+                if (e is CancellationException) throw e
                 lastError = e
                 if (attempt < maxRetries) {
                     kotlinx.coroutines.delay(500)
                 } else {
-                    throw Exception("LLM 응답 파싱 실패 (${maxRetries + 1}회 시도): ${e.message}", e)
+                    val finalMsg = "LLM 응답 파싱 실패 (${maxRetries + 1}회 시도): ${e.message}"
+                    runCatching {
+                        traceSink?.invoke(lastSentPrompt, lastRawResponse, lastJsonText ?: "", finalMsg)
+                    }
+                    throw Exception(finalMsg, e)
                 }
+            } finally {
+                watchdog.cancel()
             }
         }
 
@@ -167,24 +209,37 @@ class OllamaLLMClient(
 
     /**
      * LLM이 직접 답변 생성 (레이어 없이)
+     *
+     * withTimeout만으로는 koog OllamaClient 내부의 non-cancellable 스트리밍을 중단 불가.
+     * watchdog 코루틴이 timeoutMs 후 HTTP 연결을 강제 종료하여 블로킹 IO를 인터럽트.
      */
     override suspend fun generateDirectAnswer(userQuery: String): String {
         val prompt = promptBuilder.buildDirectAnswerPrompt(userQuery)
-
         val model = createLLMModel()
         val promptDsl = Prompt.build(id = "direct-answer") {
             user(prompt)
         }
 
-        val responses = withTimeout(timeoutMs) {
-            ollamaClient.execute(
+        val watchdog = CoroutineScope(Dispatchers.Default).launch {
+            delay(timeoutMs)
+            logger.warn("⏰ [LLM] generateDirectAnswer 타임아웃 (${timeoutMs}ms) — 연결 강제 종료")
+            kotlin.runCatching { ollamaClient.close() }
+        }
+
+        return try {
+            val responses = ollamaClient.execute(
                 prompt = promptDsl,
                 model = model,
                 tools = emptyList()
             )
+            extractResponseText(responses).trim()
+        } catch (e: CancellationException) {
+            throw e  // 코루틴 취소 전파
+        } catch (e: Exception) {
+            throw Exception("LLM generateDirectAnswer 실패: ${e.message}", e)
+        } finally {
+            watchdog.cancel()
         }
-
-        return extractResponseText(responses).trim()
     }
 
     override suspend fun reviewTree(
@@ -198,6 +253,41 @@ class OllamaLLMClient(
         })
     }
 
+    override suspend fun judgeFinish(
+        query: String,
+        candidateResult: String,
+        stepHistory: List<ReActStep>
+    ): VerifyOutcome {
+        val prompt = promptBuilder.buildFinishJudgePrompt(query, candidateResult, stepHistory)
+        return callLLM(prompt, { json ->
+            jsonConfig.decodeFromString<VerifyOutcome>(json)
+        })
+    }
+
+    /**
+     * 오래된 ReAct stepHistory를 단일 요약 문장으로 압축
+     * 컨텍스트 한계 근접 시 DefaultReActStrategy가 호출
+     */
+    override suspend fun summarizeHistory(steps: List<ReActStep>): String {
+        val historyText = steps.joinToString("\n") { s ->
+            val treeDesc = s.tree?.rootNodes?.joinToString(", ") { "${it.layerName}.${it.function}" } ?: "(알 수 없음)"
+            "스텝 ${s.stepNumber}: [$treeDesc] → ${s.result.take(200)}"
+        }
+        val prompt = """다음 ReAct 실행 히스토리를 3~5문장으로 요약하세요.
+완료된 작업, 주요 결과, 아직 남은 단서만 포함하세요. 불필요한 세부사항은 제외하세요.
+
+히스토리:
+$historyText
+
+요약:"""
+        val model = createLLMModel()
+        val promptDsl = ai.koog.prompt.dsl.Prompt.build(id = "summarize-history") { user(prompt) }
+        val responses = withTimeout(timeoutMs) {
+            ollamaClient.execute(prompt = promptDsl, model = model, tools = emptyList())
+        }
+        return extractResponseText(responses).trim()
+    }
+
     /**
      * ReAct 루프: 다음 액션 결정 (스텝 히스토리 + 레이어 목록 기반)
      * JSON Schema 강제: execute_tree(미니트리) 또는 finish
@@ -206,19 +296,54 @@ class OllamaLLMClient(
         query: String,
         stepHistory: List<ReActStep>,
         layerDescriptions: List<LayerDescription>,
-        projectContext: Map<String, String>
+        projectContext: Map<String, String>,
+        executionId: String?,
+        stepNumber: Int?
     ): ReActDecision {
-        val prompt = promptBuilder.buildReActPrompt(query, stepHistory, layerDescriptions, projectContext)
+        // 첫 호출 시 임베딩 인덱스 구축 (lazy — 레이어 초기화 완료 후 자연스럽게 트리거됨)
+        embeddingIndex?.takeIf { !it.isReady }?.build(layerDescriptions)
+
+        // 임베딩으로 관련 레이어 선택 (null이면 전체 레이어 사용 = fallback)
+        val relevantLayers = embeddingIndex?.takeIf { it.isReady }
+            ?.findRelevant(query, layerDescriptions)
+
+        val prompt = promptBuilder.buildReActPrompt(
+            query = query,
+            stepHistory = stepHistory,
+            allLayerDescriptions = layerDescriptions,
+            projectContext = projectContext,
+            relevantLayerDescriptions = relevantLayers
+        )
         val availableLayerNames = layerDescriptions.map { it.name }
         val schema = JsonSchemaBuilder.buildReActDecisionSchema(availableLayerNames)
-        logger.info("🤔 [ReAct] LLM 결정 요청 (스텝 ${stepHistory.size + 1})")
+        val contextMode = if (relevantLayers != null) "TBox+ABox(${relevantLayers.size})" else "전체(${layerDescriptions.size})"
+        logger.info("🤔 [ReAct] LLM 결정 요청 (스텝 ${stepHistory.size + 1}, 프롬프트 ${prompt.length}자, 컨텍스트: $contextMode)")
+
+        val startNs = System.nanoTime()
+        val sink: ((String, String, String, String?) -> Unit)? = if (executionId != null && stepNumber != null) {
+            { sent, raw, jsonText, error ->
+                ReasoningTraceRecorder.record(
+                    executionId = executionId,
+                    stepNumber = stepNumber,
+                    contextMode = contextMode,
+                    prompt = sent,
+                    rawResponse = raw,
+                    extractedJson = jsonText,
+                    parsedDecision = if (error == null) jsonText else null,
+                    parseError = error,
+                    latencyMs = (System.nanoTime() - startNs) / 1_000_000
+                )
+            }
+        } else null
+
         return callLLM(
             prompt = prompt,
             schema = schema,
             responseParser = { jsonText ->
                 jsonConfig.decodeFromString<ReActDecision>(jsonText)
             },
-            logRawJson = true
+            logRawJson = true,
+            traceSink = sink
         )
     }
 

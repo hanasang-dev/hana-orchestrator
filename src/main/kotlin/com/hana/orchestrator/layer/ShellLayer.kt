@@ -14,6 +14,13 @@ import java.util.concurrent.TimeUnit
  * - 타임아웃(기본 30초) 초과 시 프로세스 강제 종료
  * - 출력 5000자 초과 시 잘라냄
  * - exit code != 0 이면 `ERROR(exit=N):` 접두어로 반환
+ *
+ * 적합한 사용 사례:
+ * - 파일 줄 수 집계: `find src -name "*.kt" | xargs wc -l | sort -n`
+ * - 패턴 검색: `grep -rn "fun " src/ --include="*.kt"`
+ * - 파일 목록 + 크기: `ls -la path/`
+ * - 빌드/테스트 실행: `./gradlew test`
+ * - 텍스트 처리: `cat file.txt | grep "pattern" | wc -l`
  */
 @Layer
 class ShellLayer(
@@ -129,7 +136,7 @@ class ShellLayer(
                         ?: (args["timeoutSeconds"] as? Int) ?: 60
                 )
             }
-            else -> "Unknown function: $function. Available: run, executeScript"
+            else -> throw IllegalArgumentException("Unknown function: $function. Available: run, executeScript")
         }
     }
 }

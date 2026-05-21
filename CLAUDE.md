@@ -48,10 +48,12 @@
 - ReAct 결정은 반드시 `LLMParams.Schema.JSON.Basic`으로 Ollama `format` 필드에 스킴 전달
 - `callLLM`에서 `schema` 파라미터를 드롭하면 안 됨 — `Prompt.withUpdatedParams { this.schema = ... }` 경유
 
-### 컨텍스트 트리 (미구현 — 다음 우선순위)
-- 현재: 파일 하나씩 봄 → 표면적 개선
-- 목표: 관련 파일 묶음을 슬롯 단위로 관리 → 구조적 개선 가능
-- 구현 전까지 루프 품질 한계 있음
+### 컨텍스트 트리 (구현 완료)
+- TBox: 전체 레이어 이름 + 1줄 요약 (마스터 — 항상 프롬프트 포함)
+- ABox: 임베딩 선택 관련 레이어 상세 스펙 (서브슬롯 — 필요한 것만 노출)
+- `{{step:N}}`: 과거 스텝 결과를 ContextLayer 슬롯에서 lazy 조회
+- `storeStepResult`: 대형 결과 자동 슬롯화, 프롬프트엔 키 참조만 포함
+- `compressHistory`: 임계치 초과 시 오래된 스텝 LLM 요약 압축
 
 ## 개발 워크플로우
 - 빌드 가능한 단위로 작업 후 반드시 빌드 확인

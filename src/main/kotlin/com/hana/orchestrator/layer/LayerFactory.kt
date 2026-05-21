@@ -89,6 +89,13 @@ object LayerFactory {
     }
 
     /**
+     * 전략 레이어 생성 (전략 후보 생성·핫로드·승격·롤백)
+     */
+    fun createStrategyLayer(projectRoot: java.io.File? = null): StrategyLayer {
+        return if (projectRoot != null) StrategyLayer(projectRoot) else StrategyLayer()
+    }
+
+    /**
      * 코어 평가 레이어 생성 (rc 후보 비교·평가·적용)
      */
     fun createCoreEvaluationLayer(): CoreEvaluationLayer {
@@ -111,6 +118,18 @@ object LayerFactory {
     }
 
     /**
+     * 공유 레이어 생성 (@Shared 함수 통합 접근점)
+     */
+    fun createSharedLayer(): SharedLayer = SharedLayer()
+
+    /**
+     * 세션 레이어 생성 (쿼리 실행 이력 세션 관리)
+     */
+    fun createSessionLayer(projectRoot: java.io.File? = null): SessionLayer {
+        return if (projectRoot != null) SessionLayer(projectRoot) else SessionLayer()
+    }
+
+    /**
      * 모든 기본 레이어 생성
      */
     fun createDefaultLayers(
@@ -125,16 +144,22 @@ object LayerFactory {
             createBuildLayer(),
             createGitLayer(),
             createDevelopLayer(),
+            createStrategyLayer(projectRoot),
             createShellLayer(),
             createCoreEvaluationLayer(),
-            createContextLayer(projectRoot)
+            createContextLayer(projectRoot),
+            createSharedLayer(),
+            createSessionLayer(projectRoot)
         )
         
         // LLMLayer는 ModelSelectionStrategy가 필요하므로 선택적으로 추가
         modelSelectionStrategy?.let {
             layers.add(createLLMLayer(it))
         }
-        
+
+        // AgentLayer는 항상 추가 (GoalExecutor는 LayerManager에서 주입)
+        layers.add(AgentLayer())
+
         return layers
     }
 }

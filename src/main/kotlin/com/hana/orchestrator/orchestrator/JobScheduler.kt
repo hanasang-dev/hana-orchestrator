@@ -28,8 +28,9 @@ class JobScheduler(
     private val scope: CoroutineScope
 ) {
     private val logger = LoggerFactory.getLogger(JobScheduler::class.java)
-    /** 현재 루프 실행 중인 Job ID — 폴러 중복 기동 방지 */
+    /** 현재 실행 중인 Job ID — 폴러 중복 기동 방지 (Loop 포함 모든 타입) */
     private val runningLoopIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val runningJobIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     fun start() {
         scope.launch {
@@ -41,18 +42,21 @@ class JobScheduler(
         }
     }
 
-    /** 지금 당장 특정 Job 실행 (수동 트리거) */
+    /** 지금 당장 특정 Job 실행 (수동 트리거) — 이미 실행 중이면 무시 */
     fun triggerNow(id: String): Boolean {
         val job = jobRepository.load(id) ?: return false
+        if (!runningJobIds.add(job.id)) return true  // 이미 실행 중
         if (job.schedule is JobSchedule.Loop) {
-            if (runningLoopIds.add(job.id)) {
-                scope.launch {
-                    try { runLoopJob(job) }
-                    finally { runningLoopIds.remove(job.id) }
-                }
-            } // 이미 실행 중이면 무시
+            runningLoopIds.add(job.id)
+            scope.launch {
+                try { runLoopJob(job) }
+                finally { runningLoopIds.remove(job.id); runningJobIds.remove(job.id) }
+            }
         } else {
-            scope.launch { runJob(job) }
+            scope.launch {
+                try { runJob(job) }
+                finally { runningJobIds.remove(job.id) }
+            }
         }
         return true
     }
@@ -68,19 +72,25 @@ class JobScheduler(
     private suspend fun runDueJobs() {
         val now = System.currentTimeMillis()
         jobRepository.list()
-            .filter { it.enabled && (it.nextRunAt ?: 0) <= now && it.id !in runningLoopIds }
+            .filter { it.enabled && (it.nextRunAt ?: 0) <= now && it.id !in runningJobIds }
             .forEach { job ->
-                if (job.schedule is JobSchedule.Loop) {
-                    if (runningLoopIds.add(job.id)) {
-                        logger.info("📅 [JobScheduler] 실행: ${job.name} (id=${job.id})")
+                if (runningJobIds.add(job.id)) {
+                    logger.info("📅 [JobScheduler] 실행: ${job.name} (id=${job.id})")
+                    if (job.schedule is JobSchedule.Loop) {
+                        runningLoopIds.add(job.id)
                         scope.launch {
                             try { runLoopJob(job) }
-                            finally { runningLoopIds.remove(job.id) }
+                            finally {
+                                runningLoopIds.remove(job.id)
+                                runningJobIds.remove(job.id)
+                            }
+                        }
+                    } else {
+                        scope.launch {
+                            try { runJob(job) }
+                            finally { runningJobIds.remove(job.id) }
                         }
                     }
-                } else {
-                    logger.info("📅 [JobScheduler] 실행: ${job.name} (id=${job.id})")
-                    scope.launch { runJob(job) }
                 }
             }
     }
@@ -103,7 +113,6 @@ class JobScheduler(
     private suspend fun runJob(job: ScheduledJob) {
         if (job.autoApprove) {
             orchestrator.approvalGate.scheduledBypass = true
-            orchestrator.clarificationGate.scheduledBypass = true
             logger.info("📅 [JobScheduler] 자동승인 ON: ${job.name}")
         }
         val status = try {
@@ -119,7 +128,6 @@ class JobScheduler(
         } finally {
             if (job.autoApprove) {
                 orchestrator.approvalGate.scheduledBypass = false
-                orchestrator.clarificationGate.scheduledBypass = false
             }
         }
 
@@ -139,7 +147,7 @@ class JobScheduler(
         } else {
             job.query
         }
-        orchestrator.executeOrchestration(ChatDto(message = finalQuery))
+        orchestrator.executeOrchestration(ChatDto(message = finalQuery), isScheduled = job.autoApprove)
     }
 
     private fun buildMetricsContext(metrics: com.hana.orchestrator.presentation.model.metrics.OrchestratorMetrics): String {
